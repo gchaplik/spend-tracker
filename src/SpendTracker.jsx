@@ -107,12 +107,14 @@ function Btn({children,onClick,v,disabled,full,sm,style}){
 function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
   const [open,setOpen]=useState(true);
   const confirmed=mExp.filter(e=>e.confirmed).length;
+  const overdue=mExp.filter(e=>!e.confirmed&&e.expectedDate<today()).length;
   return (
-    <div style={{gridColumn:"1/4",background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"}}>
+    <div style={{gridColumn:"1/-1",background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"}}>
       <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",borderRadius:18}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Expected Income — {ml(month)}</span>
           <span style={{fontSize:11,fontWeight:600,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
+          {overdue>0&&<span style={{fontSize:10,fontWeight:600,background:"#fee2e2",color:"#b91c1c",padding:"1px 8px",borderRadius:20}}>{overdue} overdue</span>}
         </div>
         <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,lineHeight:1}}>{open?"▲":"▼"}</span>
       </button>
@@ -175,124 +177,169 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   const budgetTotal=Object.values(catBudgets).reduce((s,v)=>s+(v||0),0);
   const budgetRemaining=budgetTotal-spending;
   const vacSpendLabel=activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null;
-  // Three-color system: green=income, red=spending, yellow=pending/expected
+  // Month-over-month
+  const prevMonth=(()=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-1);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
+  const ptxns=txns.filter(t=>t.date&&t.date.startsWith(prevMonth));
+  const prevIncome=ptxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+  const prevSpending=ptxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const prevActNet=prevIncome-prevSpending;
+  const delta=(cur,prev)=>{if(prev===0&&cur===0)return null;const d=cur-prev;const pct=prev!==0?Math.round(Math.abs(d)/Math.abs(prev)*100):null;const up=d>=0;return{d,pct,up};};
+  const incomeDelta=delta(actualIncome,prevIncome);
+  const spendDelta=delta(spending,prevSpending);
+  const netDelta=delta(actNet,prevActNet);
+  // Budget alerts
+  const alertCats=catData.filter(d=>d.budget>0&&d.amount/d.budget>=0.8).sort((a,b)=>b.amount/b.budget-a.amount/a.budget);
+  // Annual summary
+  const curYear=month.slice(0,4);
+  const yearData=Array.from({length:12},(_,i)=>{const ym=curYear+"-"+String(i+1).padStart(2,"0");const tx=txns.filter(t=>t.date&&t.date.startsWith(ym));return{name:new Date(ym+"-02").toLocaleString("default",{month:"short"}),Income:+tx.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0).toFixed(2),Expenses:+tx.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0).toFixed(2)};});
+  const yearIncome=yearData.reduce((s,d)=>s+d.Income,0);
+  const yearExpenses=yearData.reduce((s,d)=>s+d.Expenses,0);
   const GREEN="#059669", RED="#dc2626", YELLOW="#d97706";
-  const incomeCards=[
-    {l:"Income Received",v:actualIncome,c:GREEN},
-    {l:"Expected Spend",v:budgetTotal,c:YELLOW,sub:budgetTotal>0?"across "+Object.values(catBudgets).filter(v=>v>0).length+" categories":null},
-  ];
-  const spendCards=[
-    {l:"Spending",v:spending,c:RED,sub:budgetTotal>0?fmt(Math.abs(budgetRemaining))+(budgetRemaining>=0?" remaining":" over budget"):null,subc:budgetTotal>0?(budgetRemaining>=0?GREEN:RED):null},
-    ...(vacSpend>0||activeVacations.length>0?[{l:"Vacation Spend",v:vacSpend,c:RED,sub:vacSpendLabel}]:[]),
-  ];
+  const [chartTab,setChartTab]=useState("6mo");
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
-        <h2 style={{margin:0,fontSize:22,fontWeight:800,letterSpacing:"-0.4px",color:"#1E293B"}}>Dashboard</h2>
-        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500,boxShadow:"0 1px 3px rgba(15,23,42,0.04)"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:10}}>
+        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px",color:"#1E293B"}}>Dashboard</h2>
+        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500}}>
           {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
         </select>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:14}}>
-        {/* Col 1 — income */}
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {incomeCards.map(item=>(
-            <div key={item.l} style={{...CA,padding:"16px 20px",display:"flex",flexDirection:"column",gap:5,borderLeft:`3px solid ${item.c}`}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>{item.l}</div>
-              <div style={{fontSize:20,fontWeight:800,color:item.c,letterSpacing:"-0.5px",lineHeight:1.1}}>{fmt(item.v)}</div>
-              {item.sub&&<div style={{fontSize:11,color:item.subc||"#94a3b8",fontWeight:500}}>{item.sub}</div>}
-            </div>
-          ))}
-          {/* Expected Income mini widget */}
-          <div style={{...CA,padding:"11px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderLeft:`3px solid ${YELLOW}`}}>
-            <div>
-              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:3}}>Expected Income</div>
-              <div style={{fontSize:16,fontWeight:800,color:YELLOW,letterSpacing:"-0.4px"}}>{fmt(totalExp)}</div>
-            </div>
-            {pendingExp>0&&<div style={{fontSize:11,color:YELLOW,fontWeight:600,textAlign:"right"}}>{fmt(pendingExp)}<br/><span style={{fontWeight:400,color:"#94a3b8"}}>pending</span></div>}
+
+      {/* Hero — Net Position */}
+      <div style={{...CA,padding:"28px 32px",marginBottom:14,borderLeft:`4px solid ${actNet>=0?GREEN:RED}`,background:actNet>=0?"linear-gradient(135deg,#f0fdf4 0%,#fff 60%)":"linear-gradient(135deg,#fff1f2 0%,#fff 60%)"}}>
+        <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:10}}>Net Position · {ml(month)}</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:24,flexWrap:"wrap"}}>
+          <div style={{fontSize:48,fontWeight:800,color:actNet>=0?GREEN:RED,letterSpacing:"-2px",lineHeight:1}}>{fmt(actNet)}</div>
+          <div style={{paddingBottom:8,display:"flex",flexDirection:"column",gap:4}}>
+            {netDelta&&<div style={{fontSize:12,fontWeight:600,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
+            {pendingExp>0&&<div style={{fontSize:12,color:"#94a3b8"}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:700}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
           </div>
         </div>
-        {/* Col 2 — spending (combined card) */}
-        <div style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:10,borderLeft:`3px solid ${RED}`}}>
-          <div>
-            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:5}}>Spending</div>
-            <div style={{fontSize:26,fontWeight:800,color:RED,letterSpacing:"-0.6px",lineHeight:1}}>{fmt(spending)}</div>
-            {budgetTotal>0&&<div style={{fontSize:11,fontWeight:500,marginTop:3,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"remaining":"over budget"}</div>}
-          </div>
-          {(vacSpend>0||activeVacations.length>0)&&(
-            <div style={{borderTop:"1px solid #e0f2fe",paddingTop:10}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Vacation Spend</div>
-              <div style={{fontSize:18,fontWeight:800,color:RED,letterSpacing:"-0.4px"}}>{fmt(vacSpend)}</div>
-              {vacSpendLabel&&<div style={{fontSize:11,color:"#94a3b8",fontWeight:500,marginTop:2}}>{vacSpendLabel}</div>}
-            </div>
-          )}
-        </div>
-        {/* Col 3 — net */}
-        <div style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:10,borderLeft:`3px solid ${actNet>=0?GREEN:RED}`}}>
-          <div>
-            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:5}}>Net (Actual)</div>
-            <div style={{fontSize:26,fontWeight:800,color:actNet>=0?GREEN:RED,letterSpacing:"-0.6px",lineHeight:1}}>{fmt(actNet)}</div>
-            <div style={{fontSize:11,color:"#94a3b8",fontWeight:500,marginTop:3}}>income minus spending</div>
-          </div>
-          <div style={{borderTop:"1px solid #e0f2fe",paddingTop:10}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Projected Net</div>
-            <div style={{fontSize:18,fontWeight:800,color:projNet>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(projNet)}</div>
-            <div style={{fontSize:11,color:YELLOW,fontWeight:500,marginTop:2}}>incl. {fmt(pendingExp)} pending</div>
-          </div>
-        </div>
-        {/* Expected Income list — full width, collapsible */}
-        {mExp.length>0&&<ExpectedIncomeWidget mExp={mExp} ml={ml} month={month} GREEN={GREEN} YELLOW={YELLOW} onConfirm={onConfirm} onRevert={onRevert}/>}
       </div>
+
+      {/* Three stat cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
+        <div style={{...CA,padding:"20px 22px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Income</div>
+          <div style={{fontSize:28,fontWeight:800,color:GREEN,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(actualIncome)}</div>
+          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
+        </div>
+        <div style={{...CA,padding:"20px 22px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Spending</div>
+          <div style={{fontSize:28,fontWeight:800,color:RED,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(spending)}</div>
+          {budgetTotal>0&&<div style={{fontSize:11,fontWeight:500,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
+          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
+          {vacSpend>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
+        </div>
+        <div style={{...CA,padding:"20px 22px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Expected Income</div>
+          <div style={{fontSize:28,fontWeight:800,color:YELLOW,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(totalExp)}</div>
+          {pendingExp>0
+            ?<div style={{fontSize:11,color:YELLOW,fontWeight:600,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
+            :mExp.length>0&&<div style={{fontSize:11,color:GREEN,fontWeight:600,marginTop:6}}>All received ✓</div>}
+        </div>
+      </div>
+
+      {/* Expected Income widget */}
+      {mExp.length>0&&<div style={{marginBottom:14}}><ExpectedIncomeWidget mExp={mExp} ml={ml} month={month} GREEN={GREEN} YELLOW={YELLOW} onConfirm={onConfirm} onRevert={onRevert}/></div>}
+
+      {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Spending by Category</div>
-          {catData.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No expenses this month</div>:
-          catData.map((d,i)=>{
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:"#1E293B"}}>Spending by Category</div>
+          {catData.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
             const pct=d.budget>0?Math.min(d.amount/d.budget,1):0;
             const over=d.budget>0&&d.amount>d.budget;
+            const warn=d.budget>0&&!over&&d.amount/d.budget>=0.8;
             return(
-              <div key={d.name} style={{marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:3}}>
-                  <span style={{fontSize:12,fontWeight:500,color:"#1E293B"}}>{d.name}</span>
-                  <span style={{fontSize:11,color:over?"#dc2626":"#6b7280"}}>
-                    {fmt(d.amount)}{d.budget>0?<> / <span style={{color:"#9ca3af"}}>{fmt(d.budget)}</span></>:null}
-                    {over&&<span style={{marginLeft:5,color:"#dc2626",fontWeight:600}}>↑{fmt(d.amount-d.budget)}</span>}
-                  </span>
+              <div key={d.name} style={{marginBottom:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7}}>
+                    <span style={{width:7,height:7,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:12,fontWeight:500,color:"#374151"}}>{d.name}</span>
+                    {over&&<span style={{fontSize:9,fontWeight:700,color:RED,background:"#fee2e2",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>OVER</span>}
+                    {warn&&<span style={{fontSize:9,fontWeight:700,color:YELLOW,background:"#fef3c7",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>NEAR</span>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:5}}>
+                    <span style={{fontSize:12,fontWeight:700,color:over?RED:"#1E293B"}}>{fmt(d.amount)}</span>
+                    {d.budget>0&&<span style={{fontSize:11,color:"#cbd5e1"}}>/ {fmt(d.budget)}</span>}
+                  </div>
                 </div>
-                <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden"}}>
-                  {d.budget>0&&<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?"#f43f5e":COLORS[i%COLORS.length],transition:"width 0.4s ease"}}/>}
-                  {d.budget===0&&<div style={{height:"100%",borderRadius:99,width:"100%",background:COLORS[i%COLORS.length]+"40"}}/>}
+                <div style={{height:4,borderRadius:99,background:"#f1f5f9",overflow:"hidden"}}>
+                  {d.budget>0
+                    ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?"#f59e0b":COLORS[i%COLORS.length],transition:"width 0.4s ease"}}/>
+                    :<div style={{height:"100%",borderRadius:99,width:"100%",background:COLORS[i%COLORS.length]+"55"}}/>}
                 </div>
               </div>
             );
           })}
         </div>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>6-Month Cashflow</div>
-          <ResponsiveContainer width="100%" height={190}>
-            <LineChart data={trend} margin={{left:-12,right:8,top:4,bottom:0}}>
-              <CartesianGrid strokeDasharray="3 3"/>
-              <XAxis dataKey="name" tick={{fontSize:10}}/>
-              <YAxis tick={{fontSize:10}} tickFormatter={v=>"$"+v}/>
-              <Tooltip formatter={v=>fmt(v)}/>
-              <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:11}}/>
-              <Line type="monotone" dataKey="Income" stroke="#059669" strokeWidth={2} dot={false}/>
-              <Line type="monotone" dataKey="Expenses" stroke="#dc2626" strokeWidth={2} dot={false}/>
-              <Line type="monotone" dataKey="Expected" stroke="#0284C7" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
-            </LineChart>
-          </ResponsiveContainer>
-          <div style={{fontSize:11,color:"#9ca3af",marginTop:6}}>Dashed blue = pending expected income</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
+            <div style={{display:"flex",background:"#f1f5f9",borderRadius:8,padding:3,gap:1}}>
+              {[{k:"6mo",l:"6 Mo"},{ k:"year",l:curYear}].map(t=>(
+                <button key={t.k} onClick={()=>setChartTab(t.k)} style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",background:chartTab===t.k?"#fff":"transparent",color:chartTab===t.k?"#1E293B":"#94a3b8",boxShadow:chartTab===t.k?"0 1px 3px rgba(0,0,0,0.08)":"none",transition:"all 0.15s"}}>{t.l}</button>
+              ))}
+            </div>
+          </div>
+          {chartTab==="6mo"?(
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={trend} margin={{left:-12,right:8,top:4,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+                <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
+                <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
+                <Line type="monotone" dataKey="Income" stroke={GREEN} strokeWidth={2.5} dot={false}/>
+                <Line type="monotone" dataKey="Expenses" stroke={RED} strokeWidth={2.5} dot={false}/>
+                <Line type="monotone" dataKey="Expected" stroke="#0284C7" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          ):(
+            <>
+              <div style={{display:"flex",gap:20,marginBottom:12}}>
+                <span style={{fontSize:12,color:GREEN,fontWeight:600}}>Income {fmt(yearIncome)}</span>
+                <span style={{fontSize:12,color:RED,fontWeight:600}}>Expenses {fmt(yearExpenses)}</span>
+                <span style={{fontSize:12,color:yearIncome-yearExpenses>=0?GREEN:RED,fontWeight:700}}>Net {fmt(yearIncome-yearExpenses)}</span>
+              </div>
+              <ResponsiveContainer width="100%" height={196}>
+                <BarChart data={yearData} margin={{left:-12,right:8,top:4,bottom:0}} barSize={8} barGap={2}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
+                  <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
+                  <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
+                  <Bar dataKey="Income" fill={GREEN} radius={[3,3,0,0]}/>
+                  <Bar dataKey="Expenses" fill={RED} radius={[3,3,0,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            </>
+          )}
+          <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
+            {[{c:GREEN,l:"Income"},{c:RED,l:"Expenses"},...(chartTab==="6mo"?[{c:"#0284C7",l:"Expected",dashed:true}]:[])].map(item=>(
+              <span key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#94a3b8"}}>
+                {item.dashed?<span style={{width:14,borderTop:"2px dashed #0284C7",display:"inline-block"}}/>:<span style={{width:8,height:8,borderRadius:"50%",background:item.c,display:"inline-block"}}/>}{item.l}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
+
+      {/* Recent Transactions */}
       <div style={CA}>
-        <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Recent Transactions</div>
-        {recent.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No transactions this month</div>:recent.map(t=>(
-          <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f3f4f6"}}>
-            <div>
-              <div style={{fontSize:13,fontWeight:500}}>{t.merchant||t.source}</div>
-              <div style={{fontSize:11,color:"#9ca3af"}}>{t.date}{t.type==="expense"&&t.category?" · "+t.category:" · Income"}</div>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Recent Transactions</div>
+        {recent.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No transactions this month</div>:recent.map(t=>(
+          <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f8fafc"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{width:36,height:36,borderRadius:10,background:t.type==="income"?"#f0fdf4":"#fafafa",border:"1px solid "+(t.type==="income"?"#bbf7d0":"#f1f5f9"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>
+                {t.type==="income"?"💰":"🧾"}
+              </div>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{t.merchant||t.source}</div>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>{t.date}{t.type==="expense"&&t.category?" · "+t.category:" · Income"}</div>
+              </div>
             </div>
-            <div style={{fontWeight:600,fontSize:13,color:t.type==="income"?"#059669":"#111827"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
+            <div style={{fontWeight:700,fontSize:14,color:t.type==="income"?GREEN:"#374151"}}>{t.type==="income"?"+":"-"}{fmt(t.amount)}</div>
           </div>
         ))}
       </div>
@@ -834,8 +881,9 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
   );
 }
 
-function History({txns,cats,onUpdate,fMonth,setFMonth}){
+function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
   const [fCat,setFCat]=useState("all");
+  const [search,setSearch]=useState("");
   const [editId,setEditId]=useState(null);
   const [ed,setEd]=useState({});
   const [expanded,setExpanded]=useState(new Set());
@@ -844,19 +892,26 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
   const [selectMode,setSelectMode]=useState(false);
   const [selected,setSelected]=useState(new Set());
   const months=[...new Set(txns.map(t=>t.date&&t.date.slice(0,7)).filter(Boolean))].sort().reverse();
+  const sq=search.toLowerCase().trim();
   const filtered=txns.filter(t=>{
     if(fMonth!=="all"&&!(t.date&&t.date.startsWith(fMonth))) return false;
-    if(fCat==="all") return true;
-    if(fCat==="income") return t.type==="income";
-    return t.type==="expense"&&t.category===fCat;
+    if(fCat!=="all"){if(fCat==="income"&&t.type!=="income")return false;if(fCat!=="income"&&(t.type!=="expense"||t.category!==fCat))return false;}
+    if(sq){const hay=((t.merchant||t.source||"")+" "+(t.note||"")+" "+(t.category||"")+" "+String(t.amount||"")).toLowerCase();if(!hay.includes(sq))return false;}
+    return true;
   });
+  const exportCSV=()=>{
+    const rows=[["Date","Type","Merchant","Amount","Category","Note"]];
+    filtered.forEach(t=>rows.push([t.date||"",t.type,t.merchant||t.source||"",t.amount,t.category||"",t.note||""]));
+    const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\n");
+    const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv);a.download="transactions-"+(fMonth==="all"?"all":fMonth)+".csv";a.click();
+  };
   const groupMap={};
   const displayItems=[];
   filtered.forEach(t=>{if(t.groupId){(groupMap[t.groupId]=groupMap[t.groupId]||[]).push(t);}else displayItems.push({kind:"single",t,sortDate:t.date||""});});
   Object.keys(groupMap).forEach(gid=>{const gTxns=[...groupMap[gid]].sort((a,b)=>(a.date||"").localeCompare(b.date||""));displayItems.push({kind:"group",groupId:gid,txns:gTxns,sortDate:gTxns[gTxns.length-1]?gTxns[gTxns.length-1].date||"":""});});
   displayItems.sort((a,b)=>b.sortDate.localeCompare(a.sortDate));
-  const del=id=>onUpdate(txns.filter(t=>t.id!==id));
-  const delGroup=gid=>onUpdate(txns.filter(t=>t.groupId!==gid));
+  const del=id=>{const prev=[...txns];onUpdate(txns.filter(t=>t.id!==id));onToast&&onToast("Transaction deleted",()=>onUpdate(prev));};
+  const delGroup=gid=>{const prev=[...txns];onUpdate(txns.filter(t=>t.groupId!==gid));onToast&&onToast("Recurring group deleted",()=>onUpdate(prev));};
   const startEdit=t=>{setEditId(t.id);setEd({...t});};
   const saveEdit=()=>{onUpdate(txns.map(t=>t.id===editId?{...ed,amount:parseFloat(ed.amount)||0}:t));setEditId(null);};
   const toggleExpand=gid=>setExpanded(prev=>{const n=new Set(prev);n.has(gid)?n.delete(gid):n.add(gid);return n;});
@@ -869,7 +924,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
   const toggleSelect=id=>setSelected(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
   const toggleGroup=(gTxns,allSelected)=>setSelected(prev=>{const n=new Set(prev);gTxns.forEach(t=>allSelected?n.delete(t.id):n.add(t.id));return n;});
   const exitSelect=()=>{setSelectMode(false);setSelected(new Set());};
-  const deleteSelected=()=>{onUpdate(txns.filter(t=>!selected.has(t.id)));exitSelect();};
+  const deleteSelected=()=>{const prev=[...txns];onUpdate(txns.filter(t=>!selected.has(t.id)));onToast&&onToast(`${selected.size} transaction${selected.size!==1?"s":""} deleted`,()=>onUpdate(prev));exitSelect();};
   const selectedIds=[...selected];
   const selectedGroups=[...new Set(selectedIds.map(id=>{const t=txns.find(x=>x.id===id);return t?.groupId;}).filter(Boolean))];
   const canEditGroup=selectedGroups.length===1&&selectedIds.every(id=>{const t=txns.find(x=>x.id===id);return t?.groupId===selectedGroups[0];});
@@ -895,11 +950,15 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
   }
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
         <h2 style={{margin:0,fontSize:19,fontWeight:600,marginRight:"auto"}}>History</h2>
         <select value={fMonth} onChange={e=>setFMonth(e.target.value)} style={ss}><option value="all">All Months</option>{months.map(m=><option key={m} value={m}>{new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"})}</option>)}</select>
         <select value={fCat} onChange={e=>setFCat(e.target.value)} style={ss}><option value="all">All Types</option><option value="income">Income</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select>
         <button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"7px 12px",borderRadius:7,border:"1px solid "+(selectMode?"#0284C7":"#bae6fd"),fontSize:12,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#0284C7":"#1E293B",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>
+        <button onClick={exportCSV} disabled={filtered.length===0} style={{padding:"7px 12px",borderRadius:7,border:"1px solid #bae6fd",fontSize:12,background:"#fff",color:"#0284C7",cursor:filtered.length===0?"not-allowed":"pointer",fontFamily:"inherit",opacity:filtered.length===0?0.4:1}}>Export CSV</button>
+      </div>
+      <div style={{marginBottom:14}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search merchant, category, note, amount…" style={{...IS,borderRadius:10,paddingLeft:13}}/>
       </div>
       {selectMode&&selected.size>0&&(
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#f0f9ff",borderRadius:8,border:"1px solid #7dd3fc",flexWrap:"wrap"}}>
@@ -1208,6 +1267,16 @@ const WHATS_NEW = [
   { icon: "✦", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
 ];
 
+function Toast({msg,undoFn,onClose}){
+  return(
+    <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:300,background:"#1E293B",color:"#fff",borderRadius:12,padding:"12px 20px",display:"flex",alignItems:"center",gap:14,boxShadow:"0 8px 32px rgba(15,23,42,0.25)",fontSize:13,fontWeight:500,minWidth:260,maxWidth:420,whiteSpace:"nowrap"}}>
+      <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis"}}>{msg}</span>
+      {undoFn&&<button onClick={()=>{undoFn();onClose();}} style={{background:"rgba(255,255,255,0.18)",border:"none",cursor:"pointer",padding:"4px 12px",borderRadius:7,color:"#fff",fontSize:12,fontWeight:600,fontFamily:"inherit",flexShrink:0}}>Undo</button>}
+      <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.5)",fontSize:16,padding:0,fontFamily:"inherit",lineHeight:1,flexShrink:0}}>×</button>
+    </div>
+  );
+}
+
 function WhatsNewModal({onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
@@ -1248,6 +1317,10 @@ export default function App(){
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
   const [showWhatsNew,setShowWhatsNew]=useState(false);
+  const [toast,setToast]=useState(null);
+  const toastTimer=useRef(null);
+  const showToast=(msg,undoFn)=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast({msg,undoFn});toastTimer.current=setTimeout(()=>setToast(null),5000);};
+  const dismissToast=()=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast(null);};
 
   useEffect(()=>{
     loadServerData().then(d => {
@@ -1290,10 +1363,11 @@ export default function App(){
   return (
     <div style={{minHeight:"100vh",background:"#f0f9ff",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B"}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
+      {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
       <header style={{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",position:"sticky",top:0,zIndex:20,boxShadow:"0 2px 12px rgba(2,132,199,0.3)"}}>
         <div style={{maxWidth:1140,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:56,gap:16}}>
           <button onClick={()=>setShowWhatsNew(v=>!v)} title="What's New" style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",cursor:"pointer",padding:"4px 10px",borderRadius:20,fontSize:11,color:"#e0f2fe",fontFamily:"inherit",flexShrink:0,display:"flex",alignItems:"center",gap:5,lineHeight:1,fontWeight:500,whiteSpace:"nowrap"}}>✦ <span>What's new</span></button>
-          <span style={{fontWeight:800,fontSize:15,whiteSpace:"nowrap",color:"#fff",letterSpacing:"-0.3px",flexShrink:0}}>SpendTracker</span>
+          <span onClick={()=>setView("dashboard")} style={{fontWeight:800,fontSize:15,whiteSpace:"nowrap",color:"#fff",letterSpacing:"-0.3px",flexShrink:0,cursor:"pointer"}}>SpendTracker</span>
           <nav style={{display:"flex",gap:1,overflowX:"auto",flex:1}}>
             {nav.map(n=>(
               <button key={n.k} onClick={()=>setView(n.k)} style={{padding:"6px 13px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,whiteSpace:"nowrap",background:view===n.k?"#fff":"transparent",color:view===n.k?"#0284C7":"rgba(255,255,255,0.75)",flexShrink:0,fontFamily:"inherit",position:"relative",transition:"background 0.15s,color 0.15s"}}>
@@ -1312,7 +1386,7 @@ export default function App(){
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="manual"&&<RecurringForm title="Add Expense" type="expense" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="income"&&<RecurringForm title="Add Income" type="income" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
-        {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth}/>}
+        {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast}/>}
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
         {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets}/>}
