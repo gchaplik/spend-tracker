@@ -28,6 +28,17 @@ const fpHash = b64 => {
 const loadFPs = () => new Set();
 const saveFPs = () => {};
 
+// IndexedDB helpers for persisting FileSystemDirectoryHandle across page loads
+const _idb = () => new Promise((res, rej) => {
+  const req = indexedDB.open('spend-tracker-fs', 1);
+  req.onupgradeneeded = () => req.result.createObjectStore('handles');
+  req.onsuccess = () => res(req.result);
+  req.onerror = () => rej(req.error);
+});
+const idbPut = async (key, val) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readwrite'); tx.objectStore('handles').put(val,key); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); };
+const idbGet = async (key) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readonly'); const req=tx.objectStore('handles').get(key); req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error); }); };
+const idbDel = async (key) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readwrite'); tx.objectStore('handles').delete(key); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); };
+
 async function loadServerData() {
   const res = await fetch("/api/data");
   _serverData = await res.json();
@@ -316,17 +327,93 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
-  const [dirName, setDirName] = useState(null);
+  const [dirName, setDirName] = useState(()=>localStorage.getItem("folderDirName")||null);
+  const [dirHandle, setDirHandle] = useState(null);
+  const [needsPermission, setNeedsPermission] = useState(false);
   const folderRef = useRef();
   const [processedNames, setProcessedNames] = useState(() => {
     try { return JSON.parse(localStorage.getItem("folderProcessed") || "[]"); } catch { return []; }
   });
 
+  const VALID_EXT = ["jpg","jpeg","png","gif","webp","heic","heif","pdf"];
+
+  const loadFromHandle = async (handle, fps) => {
+    setStatus({ t: "info", m: "Checking for new files…" });
+    setPendingFiles([]);
+    const files = [];
+    for await (const entry of handle.values()) {
+      if (entry.kind !== "file") continue;
+      const file = await entry.getFile();
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!VALID_EXT.includes(ext) && !file.type.startsWith("image/") && file.type !== "application/pdf") continue;
+      const mtype = file.type || (ext === "pdf" ? "application/pdf" : "image/jpeg");
+      files.push({ file, mtype });
+    }
+    if (files.length === 0) {
+      setStatus({ t: "error", m: "No image or PDF files found in this folder." });
+      return;
+    }
+    const checked = await Promise.all(files.map(async ({file, mtype}) => {
+      const b64 = await toB64(file);
+      const fp = fpHash(b64);
+      return { file, mtype, b64, fp, alreadyDone: fps.has(fp) };
+    }));
+    const newFiles = checked.filter(f => !f.alreadyDone);
+    setPendingFiles(newFiles);
+    const skipped = checked.length - newFiles.length;
+    if (newFiles.length === 0) {
+      setStatus({ t: "success", m: `All ${files.length} file${files.length !== 1 ? "s" : ""} already scanned — nothing new to import.` });
+    } else {
+      setStatus({ t: "info", m: `Found ${newFiles.length} new file${newFiles.length !== 1 ? "s" : ""} ready to scan.${skipped > 0 ? ` (${skipped} already imported, skipped)` : ""}` });
+    }
+  };
+
+  // On mount, restore saved handle and auto-load if permission already granted
+  useEffect(() => {
+    if (!("showDirectoryPicker" in window)) return;
+    idbGet("folderHandle").then(async handle => {
+      if (!handle) return;
+      const perm = await handle.queryPermission({ mode: "read" });
+      setDirHandle(handle);
+      setDirName(handle.name);
+      localStorage.setItem("folderDirName", handle.name);
+      if (perm === "granted") {
+        loadFromHandle(handle, receiptFPs);
+      } else {
+        setNeedsPermission(true);
+        setStatus({ t: "info", m: `Click "Restore Access" to reconnect to 📁 ${handle.name}.` });
+      }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickFolder = async () => {
+    if (!("showDirectoryPicker" in window)) { folderRef.current.click(); return; }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "read" });
+      await idbPut("folderHandle", handle);
+      setDirHandle(handle);
+      setDirName(handle.name);
+      localStorage.setItem("folderDirName", handle.name);
+      setNeedsPermission(false);
+      await loadFromHandle(handle, receiptFPs);
+    } catch (e) {
+      if (e.name !== "AbortError") setStatus({ t: "error", m: "Error: " + e.message });
+    }
+  };
+
+  const restoreAccess = async () => {
+    if (!dirHandle) return;
+    try {
+      const perm = await dirHandle.requestPermission({ mode: "read" });
+      if (perm === "granted") { setNeedsPermission(false); await loadFromHandle(dirHandle, receiptFPs); }
+    } catch (e) { setStatus({ t: "error", m: "Could not restore access: " + e.message }); }
+  };
+
+  // Fallback for browsers without showDirectoryPicker
   const handleFolderInput = async (e) => {
     const all = Array.from(e.target.files || []);
     e.target.value = "";
     if (all.length === 0) return;
-    const VALID_EXT = ["jpg","jpeg","png","gif","webp","heic","heif","pdf"];
     const files = all.filter(f => {
       const ext = f.name.split(".").pop().toLowerCase();
       return VALID_EXT.includes(ext) || f.type.startsWith("image/") || f.type === "application/pdf";
@@ -336,27 +423,21 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
       return { file: f, mtype };
     });
     const firstPath = all[0].webkitRelativePath || all[0].name;
-    const folderName = firstPath.includes("/") ? firstPath.split("/")[0] : "Selected files";
-    setDirName(folderName);
+    const name = firstPath.includes("/") ? firstPath.split("/")[0] : "Selected files";
+    setDirName(name);
+    localStorage.setItem("folderDirName", name);
+    if (files.length === 0) { setStatus({ t: "error", m: "No image or PDF files found." }); return; }
     setStatus({ t: "info", m: "Checking for new files…" });
-    if (files.length === 0) {
-      setPendingFiles([]);
-      setStatus({ t: "error", m: "No image or PDF files found in this folder." });
-      return;
-    }
-    // compute content fingerprints at pick time so we never enable the scan button for all-duplicate folders
-    const fps = receiptFPs;
     const checked = await Promise.all(files.map(async ({file, mtype}) => {
       const b64 = await toB64(file);
       const fp = fpHash(b64);
-      const alreadyDone = fps.has(fp) || processedNames.includes(file.name);
-      return { file, mtype, b64, fp, alreadyDone };
+      return { file, mtype, b64, fp, alreadyDone: receiptFPs.has(fp) };
     }));
     const newFiles = checked.filter(f => !f.alreadyDone);
     setPendingFiles(newFiles);
     const skipped = checked.length - newFiles.length;
     if (newFiles.length === 0) {
-      setStatus({ t: "success", m: `All ${files.length} file${files.length !== 1 ? "s" : ""} already scanned — nothing new to import.` });
+      setStatus({ t: "success", m: `All ${files.length} file${files.length !== 1 ? "s" : ""} already scanned.` });
     } else {
       setStatus({ t: "info", m: `Found ${newFiles.length} new file${newFiles.length !== 1 ? "s" : ""} ready to scan.${skipped > 0 ? ` (${skipped} already imported, skipped)` : ""}` });
     }
@@ -418,13 +499,17 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
     setProcessedNames([]);
     setPendingFiles([]);
     setDirName(null);
+    setDirHandle(null);
+    setNeedsPermission(false);
     localStorage.removeItem("folderProcessed");
+    localStorage.removeItem("folderDirName");
+    idbDel("folderHandle").catch(()=>{});
     setStatus({ t: "info", m: "Reset — all files will be re-imported on next scan." });
   };
 
   const steps = [
     "Create a folder anywhere on your computer and drop receipt photos or PDF invoices into it.",
-    "Click \"Pick Folder\" and select that folder in the file browser that opens.",
+    "Click \"Pick Folder\" once. The folder is remembered — on refresh it reconnects automatically.",
     "Review how many new files were found, then click \"Scan with AI\" to extract the data.",
     "Already-imported file names are tracked so nothing is duplicated. Click Reset to start fresh.",
   ];
@@ -445,10 +530,10 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
           </div>
         )}
         <input ref={folderRef} type="file" webkitdirectory="" multiple onChange={handleFolderInput} style={{display:"none"}}/>
-        <div style={{display:"flex",gap:8,marginBottom:pendingFiles.length>0?12:0}}>
-          <Btn onClick={()=>folderRef.current.click()} disabled={syncing} full v="secondary">
-            {dirName ? `📁 ${dirName}` : "Pick Folder"}
-          </Btn>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          {needsPermission
+            ? <Btn onClick={restoreAccess} disabled={syncing} full v="secondary">🔑 Restore Access to 📁 {dirName}</Btn>
+            : <Btn onClick={pickFolder} disabled={syncing} full v="secondary">{dirName ? `📁 ${dirName}` : "Pick Folder"}</Btn>}
           <Btn onClick={scan} disabled={syncing || pendingFiles.length === 0} full>
             {syncing ? "Scanning…" : `Scan${pendingFiles.length > 0 ? ` ${pendingFiles.length} File${pendingFiles.length !== 1 ? "s" : ""}` : ""} with AI`}
           </Btn>
@@ -1027,6 +1112,44 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
   );
 }
 
+const WHATS_NEW = [
+  { icon: "✦", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
+  { icon: "✦", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
+  { icon: "✦", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
+  { icon: "✦", title: "Expected Income", desc: "Schedule future income and mark it received when it lands. Overdue items are flagged and pending totals show on the Dashboard. Try Expected Income." },
+  { icon: "✦", title: "Vacation Budgets", desc: "Track trip expenses in a separate budget so they don't distort your monthly spending. Spending also rolls up to the Dashboard. Try Vacations." },
+  { icon: "✦", title: "Category Budgets", desc: "Set a monthly cap per category. Progress bars and over-budget alerts appear on the Dashboard and in History. Try Categories." },
+  { icon: "✦", title: "Bulk Select & Edit", desc: "In History and Expected Income, tap Select to check multiple rows and delete or confirm them all at once." },
+  { icon: "✦", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
+];
+
+function WhatsNewModal({onClose}){
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"60px 0 0 18px"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",boxShadow:"0 8px 32px rgba(0,0,0,0.14)",width:340,maxHeight:"80vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:"#111827"}}>What's New</div>
+            <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Features you can try right now</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}}>×</button>
+        </div>
+        <div style={{overflowY:"auto",padding:"10px 0"}}>
+          {WHATS_NEW.map((f,i)=>(
+            <div key={i} style={{padding:"10px 18px",borderBottom:i<WHATS_NEW.length-1?"1px solid #f9fafb":"none"}}>
+              <div style={{display:"flex",alignItems:"baseline",gap:7,marginBottom:3}}>
+                <span style={{color:"#2563eb",fontSize:10,flexShrink:0}}>{f.icon}</span>
+                <span style={{fontWeight:600,fontSize:13,color:"#111827"}}>{f.title}</span>
+              </div>
+              <div style={{fontSize:12,color:"#6b7280",lineHeight:1.55,paddingLeft:17}}>{f.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const [view,setView]=useState("dashboard");
   const [txns,setTxns]=useState([]);
@@ -1039,9 +1162,7 @@ export default function App(){
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
-  const [showBackup,setShowBackup]=useState(false);
-  const [pasteVal,setPasteVal]=useState("");
-  const [copyMsg,setCopyMsg]=useState("");
+  const [showWhatsNew,setShowWhatsNew]=useState(false);
 
   useEffect(()=>{
     loadServerData().then(d => {
@@ -1070,43 +1191,17 @@ export default function App(){
     saveExpected(expected.map(e=>e.id===id?{...e,confirmed:true,confirmedDate:today()}:e));
   };
 
-  const getCode=()=>btoa(unescape(encodeURIComponent(JSON.stringify({txns,cats,expected,v:1}))));
-  const copyBackup=async()=>{try{await navigator.clipboard.writeText(getCode());setCopyMsg("Copied!");setTimeout(()=>setCopyMsg(""),2000);}catch(e){setCopyMsg("Copy the text below manually");setTimeout(()=>setCopyMsg(""),3000);}};
-  const restoreBackup=()=>{try{const d=JSON.parse(decodeURIComponent(escape(atob(pasteVal.trim()))));if(d.txns)saveTxns(d.txns);if(d.cats)saveCats(d.cats);if(d.expected)saveExpected(d.expected);setPasteVal("");setShowBackup(false);alert("Restored "+((d.txns||[]).length)+" transactions.");}catch{alert("Invalid backup code.");}};
-  const saveFile=()=>{const blob=new Blob([JSON.stringify({txns,cats,expected,v:1},null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="spend-tracker-"+today()+".json";a.click();URL.revokeObjectURL(url);};
-  const loadFile=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.txns)saveTxns(d.txns);if(d.cats)saveCats(d.cats);if(d.expected)saveExpected(d.expected);setShowBackup(false);alert("Restored "+((d.txns||[]).length)+" transactions.");}catch{alert("Invalid file.");}};r.readAsText(f);};
-
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
 
   const nav=[{k:"dashboard",l:"Dashboard"},{k:"expected",l:"Expected Income"},{k:"folder",l:"Folder Sync"},{k:"upload",l:"Upload Receipts"},{k:"manual",l:"Add Expense"},{k:"income",l:"Add Income"},{k:"history",l:"History"},{k:"vacations",l:"Vacations"},{k:"categories",l:"Categories"}];
   const pendingCount=expected.filter(e=>!e.confirmed).length;
 
-  if(showBackup) return (
-    <div style={{minHeight:"100vh",background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:60,padding:16,fontFamily:"system-ui,-apple-system,sans-serif"}}>
-      <div style={{background:"#fff",borderRadius:12,padding:24,maxWidth:480,width:"100%"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-          <h3 style={{margin:0,fontSize:16,fontWeight:600}}>Backup and Restore</h3>
-          <button onClick={()=>{setShowBackup(false);setPasteVal("");setCopyMsg("");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:"#9ca3af",fontFamily:"inherit"}}>x</button>
-        </div>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:"#374151"}}>Export</div>
-        <div style={{display:"flex",gap:8,marginBottom:18}}>
-          <Btn onClick={saveFile} full>Save JSON File</Btn>
-          <Btn v="secondary" onClick={copyBackup} full>{copyMsg||"Copy Code"}</Btn>
-        </div>
-        <textarea readOnly value={getCode()} rows={3} style={{width:"100%",padding:"8px 10px",borderRadius:7,border:"1px solid #d1d5db",fontSize:11,fontFamily:"monospace",resize:"none",boxSizing:"border-box",color:"#6b7280",background:"#f9fafb",marginBottom:18}}/>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:"#374151"}}>Import from file</div>
-        <input type="file" accept="application/json" onChange={loadFile} style={{marginBottom:16,fontSize:13}}/>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:"#374151"}}>Restore from code</div>
-        <textarea value={pasteVal} onChange={e=>setPasteVal(e.target.value)} placeholder="Paste backup code…" rows={3} style={{width:"100%",padding:"8px 10px",borderRadius:7,border:"1px solid #d1d5db",fontSize:11,fontFamily:"monospace",resize:"none",boxSizing:"border-box",marginBottom:8,outline:"none"}}/>
-        <Btn onClick={restoreBackup} disabled={!pasteVal.trim()} full>Restore Data</Btn>
-      </div>
-    </div>
-  );
-
   return (
     <div style={{minHeight:"100vh",background:"#f9fafb",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,sans-serif",color:"#111827"}}>
+      {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
       <header style={{background:"#fff",borderBottom:"1px solid #e5e7eb",position:"sticky",top:0,zIndex:20}}>
         <div style={{maxWidth:1100,margin:"0 auto",padding:"0 18px",display:"flex",alignItems:"center",height:50}}>
+          <button onClick={()=>setShowWhatsNew(v=>!v)} title="What's New" style={{background:"none",border:"none",cursor:"pointer",padding:"3px 6px",marginRight:6,borderRadius:6,fontSize:14,color:"#6b7280",fontFamily:"inherit",flexShrink:0,display:"flex",alignItems:"center",gap:4,lineHeight:1}}>✦<span style={{fontSize:11,fontWeight:500,color:"#6b7280"}}>What's new</span></button>
           <span style={{fontWeight:700,fontSize:14,marginRight:18,whiteSpace:"nowrap"}}>Spend Tracker</span>
           <nav style={{display:"flex",gap:2,overflowX:"auto",flex:1}}>
             {nav.map(n=>(
@@ -1116,7 +1211,6 @@ export default function App(){
               </button>
             ))}
           </nav>
-          <button onClick={()=>setShowBackup(true)} style={{marginLeft:12,padding:"4px 12px",borderRadius:6,border:"1px solid #d1d5db",background:"#f9fafb",cursor:"pointer",fontSize:12,fontWeight:600,color:"#374151",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>Backup / Restore</button>
         </div>
       </header>
       <main style={{maxWidth:1100,margin:"0 auto",padding:"22px 18px"}}>
