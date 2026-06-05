@@ -104,7 +104,53 @@ function Btn({children,onClick,v,disabled,full,sm,style}){
   return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 13px":"10px 20px",borderRadius:10,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:600,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",letterSpacing:"0.01em",...s,...style}}>{children}</button>;
 }
 
-function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacations=[],vacationTxns=[]}){
+function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
+  const [open,setOpen]=useState(true);
+  const confirmed=mExp.filter(e=>e.confirmed).length;
+  return (
+    <div style={{gridColumn:"1/4",background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",borderRadius:18}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Expected Income — {ml(month)}</span>
+          <span style={{fontSize:11,fontWeight:600,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
+        </div>
+        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,lineHeight:1}}>{open?"▲":"▼"}</span>
+      </button>
+      {/* Collapsed: compact name + button chips */}
+      {!open&&(
+        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+          {mExp.map(e=>(
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,padding:"6px 10px 6px 12px",borderRadius:10,background:e.confirmed?"#f0fdf4":"#fffbeb",border:`1px solid ${e.confirmed?"#bbf7d0":"#fde68a"}`}}>
+              <span style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>{e.source}</span>
+              {e.confirmed
+                ?<button onClick={()=>onRevert(e.id)} title="Click to revert" style={{width:22,height:22,borderRadius:"50%",background:"#d1fae5",border:"2px solid #059669",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:GREEN}}>✓</button>
+                :<button onClick={()=>onConfirm(e.id)} title="Mark as received" style={{width:22,height:22,borderRadius:"50%",background:"#fef3c7",border:"2px solid #d97706",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:YELLOW}}>?</button>}
+            </div>
+          ))}
+        </div>
+      )}
+      {/* Expanded: full view with amounts */}
+      {open&&(
+        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0 16px"}}>
+          {mExp.map(e=>(
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #f0f9ff",gap:8}}>
+              <div style={{minWidth:0,flex:1}}>
+                <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
+                {e.note&&<span style={{fontSize:10,color:"#94a3b8"}}>{e.note}</span>}
+              </div>
+              <span style={{fontSize:12,fontWeight:700,color:e.confirmed?GREEN:YELLOW,flexShrink:0}}>{fmt(e.amount)}</span>
+              {e.confirmed
+                ?<button onClick={()=>onRevert(e.id)} title="Click to revert" style={{width:24,height:24,borderRadius:"50%",background:"#d1fae5",border:"2px solid #059669",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:GREEN}}>✓</button>
+                :<button onClick={()=>onConfirm(e.id)} title="Mark as received" style={{width:24,height:24,borderRadius:"50%",background:"#fef3c7",border:"2px solid #d97706",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:YELLOW}}>?</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[]}){
   const opts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const mt=txns.filter(t=>t.date&&t.date.startsWith(month));
@@ -128,8 +174,17 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
   const vacSpend=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((s,t)=>s+t.amount,0);
   const budgetTotal=Object.values(catBudgets).reduce((s,v)=>s+(v||0),0);
   const budgetRemaining=budgetTotal-spending;
-  const vacCard=vacSpend>0||activeVacations.length>0?{l:"Vacation Spend",v:vacSpend,c:"#8b5cf6",sub:activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null}:null;
-  const cards=[{l:"Income Received",v:actualIncome,c:"#059669"},{l:"Spending",v:spending,c:"#dc2626",sub:budgetTotal>0?fmt(Math.abs(budgetRemaining))+(budgetRemaining>=0?" remaining":" over budget"):null,subc:budgetTotal>0?(budgetRemaining>=0?"#059669":"#dc2626"):null},{l:"Net (Actual)",v:actNet,c:actNet>=0?"#059669":"#dc2626"},{l:"Expected Spend",v:budgetTotal,c:"#f59e0b",sub:budgetTotal>0?"budget across "+Object.values(catBudgets).filter(v=>v>0).length+" categories":null},...(vacCard?[vacCard]:[]),{l:"Expected Income",v:totalExp,c:"#0284C7",sub:pendingExp>0?fmt(pendingExp)+" pending":null},{l:"Projected Net",v:projNet,c:projNet>=0?"#059669":"#dc2626",sub:"incl. pending"}];
+  const vacSpendLabel=activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null;
+  // Three-color system: green=income, red=spending, yellow=pending/expected
+  const GREEN="#059669", RED="#dc2626", YELLOW="#d97706";
+  const incomeCards=[
+    {l:"Income Received",v:actualIncome,c:GREEN},
+    {l:"Expected Spend",v:budgetTotal,c:YELLOW,sub:budgetTotal>0?"across "+Object.values(catBudgets).filter(v=>v>0).length+" categories":null},
+  ];
+  const spendCards=[
+    {l:"Spending",v:spending,c:RED,sub:budgetTotal>0?fmt(Math.abs(budgetRemaining))+(budgetRemaining>=0?" remaining":" over budget"):null,subc:budgetTotal>0?(budgetRemaining>=0?GREEN:RED):null},
+    ...(vacSpend>0||activeVacations.length>0?[{l:"Vacation Spend",v:vacSpend,c:RED,sub:vacSpendLabel}]:[]),
+  ];
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
@@ -138,31 +193,56 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
           {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
         </select>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:14,marginBottom:20}}>
-        {cards.map(item=>(
-          <div key={item.l} style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:6}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>{item.l}</div>
-            <div style={{fontSize:22,fontWeight:800,color:item.c,letterSpacing:"-0.5px",lineHeight:1.1}}>{fmt(item.v)}</div>
-            {item.sub&&<div style={{fontSize:11,color:item.subc||"#94a3b8",fontWeight:500}}>{item.sub}</div>}
-          </div>
-        ))}
-      </div>
-      {mExp.length>0&&(
-        <div style={{...CA,marginBottom:16}}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Expected Income — {ml(month)}</div>
-          {mExp.map(e=>(
-            <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>
-              <div><span style={{fontSize:13}}>{e.source}</span>{e.note&&<span style={{fontSize:11,color:"#9ca3af"}}> · {e.note}</span>}</div>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:13,fontWeight:500}}>{fmt(e.amount)}</span>
-                {e.confirmed
-                  ?<span style={{fontSize:11,background:"#d1fae5",color:"#065f46",padding:"2px 8px",borderRadius:20,fontWeight:500}}>Received</span>
-                  :<button onClick={()=>onConfirm(e.id)} style={{fontSize:11,background:"#fef3c7",color:"#92400e",padding:"2px 10px",borderRadius:20,fontWeight:500,border:"none",cursor:"pointer",fontFamily:"inherit"}}>Mark Received</button>}
-              </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:14}}>
+        {/* Col 1 — income */}
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {incomeCards.map(item=>(
+            <div key={item.l} style={{...CA,padding:"16px 20px",display:"flex",flexDirection:"column",gap:5,borderLeft:`3px solid ${item.c}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>{item.l}</div>
+              <div style={{fontSize:20,fontWeight:800,color:item.c,letterSpacing:"-0.5px",lineHeight:1.1}}>{fmt(item.v)}</div>
+              {item.sub&&<div style={{fontSize:11,color:item.subc||"#94a3b8",fontWeight:500}}>{item.sub}</div>}
             </div>
           ))}
+          {/* Expected Income mini widget */}
+          <div style={{...CA,padding:"11px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderLeft:`3px solid ${YELLOW}`}}>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:3}}>Expected Income</div>
+              <div style={{fontSize:16,fontWeight:800,color:YELLOW,letterSpacing:"-0.4px"}}>{fmt(totalExp)}</div>
+            </div>
+            {pendingExp>0&&<div style={{fontSize:11,color:YELLOW,fontWeight:600,textAlign:"right"}}>{fmt(pendingExp)}<br/><span style={{fontWeight:400,color:"#94a3b8"}}>pending</span></div>}
+          </div>
         </div>
-      )}
+        {/* Col 2 — spending (combined card) */}
+        <div style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:10,borderLeft:`3px solid ${RED}`}}>
+          <div>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:5}}>Spending</div>
+            <div style={{fontSize:26,fontWeight:800,color:RED,letterSpacing:"-0.6px",lineHeight:1}}>{fmt(spending)}</div>
+            {budgetTotal>0&&<div style={{fontSize:11,fontWeight:500,marginTop:3,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"remaining":"over budget"}</div>}
+          </div>
+          {(vacSpend>0||activeVacations.length>0)&&(
+            <div style={{borderTop:"1px solid #e0f2fe",paddingTop:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Vacation Spend</div>
+              <div style={{fontSize:18,fontWeight:800,color:RED,letterSpacing:"-0.4px"}}>{fmt(vacSpend)}</div>
+              {vacSpendLabel&&<div style={{fontSize:11,color:"#94a3b8",fontWeight:500,marginTop:2}}>{vacSpendLabel}</div>}
+            </div>
+          )}
+        </div>
+        {/* Col 3 — net */}
+        <div style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:10,borderLeft:`3px solid ${actNet>=0?GREEN:RED}`}}>
+          <div>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:5}}>Net (Actual)</div>
+            <div style={{fontSize:26,fontWeight:800,color:actNet>=0?GREEN:RED,letterSpacing:"-0.6px",lineHeight:1}}>{fmt(actNet)}</div>
+            <div style={{fontSize:11,color:"#94a3b8",fontWeight:500,marginTop:3}}>income minus spending</div>
+          </div>
+          <div style={{borderTop:"1px solid #e0f2fe",paddingTop:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Projected Net</div>
+            <div style={{fontSize:18,fontWeight:800,color:projNet>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(projNet)}</div>
+            <div style={{fontSize:11,color:YELLOW,fontWeight:500,marginTop:2}}>incl. {fmt(pendingExp)} pending</div>
+          </div>
+        </div>
+        {/* Expected Income list — full width, collapsible */}
+        {mExp.length>0&&<ExpectedIncomeWidget mExp={mExp} ml={ml} month={month} GREEN={GREEN} YELLOW={YELLOW} onConfirm={onConfirm} onRevert={onRevert}/>}
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div style={CA}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Spending by Category</div>
@@ -1192,8 +1272,14 @@ export default function App(){
 
   const confirmPayment=id=>{
     const item=expected.find(e=>e.id===id);if(!item)return;
-    saveTxns([...txns,{id:uid(),type:"income",merchant:item.source,source:item.source,amount:item.amount,date:today(),note:item.note||""}]);
-    saveExpected(expected.map(e=>e.id===id?{...e,confirmed:true,confirmedDate:today()}:e));
+    const txnId=uid();
+    saveTxns([...txns,{id:txnId,type:"income",merchant:item.source,source:item.source,amount:item.amount,date:today(),note:item.note||""}]);
+    saveExpected(expected.map(e=>e.id===id?{...e,confirmed:true,confirmedDate:today(),confirmedTxnId:txnId}:e));
+  };
+  const revertPayment=id=>{
+    const item=expected.find(e=>e.id===id);if(!item)return;
+    if(item.confirmedTxnId) saveTxns(txns.filter(t=>t.id!==item.confirmedTxnId));
+    saveExpected(expected.map(e=>e.id===id?{...e,confirmed:false,confirmedDate:null,confirmedTxnId:null}:e));
   };
 
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
@@ -1220,7 +1306,7 @@ export default function App(){
       </header>
       <main style={{maxWidth:1140,margin:"0 auto",padding:"24px 20px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} vacations={vacations} vacationTxns={vacationTxns}/>}
+        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns}/>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
