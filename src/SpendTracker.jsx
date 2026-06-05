@@ -86,17 +86,22 @@ async function extractReceipt(b64, mtype, cats) {
   return JSON.parse(text.replace(/```[\w]*/g,"").replace(/```/g,"").trim());
 }
 
-const IS={width:"100%",padding:"8px 10px",borderRadius:7,border:"1px solid #d1d5db",fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
-const CA={background:"#fff",borderRadius:10,border:"1px solid #e5e7eb",padding:20};
+const IS={width:"100%",padding:"10px 13px",borderRadius:10,border:"1.5px solid #bae6fd",fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:"#f0f9ff",color:"#1E293B",transition:"border-color 0.15s,box-shadow 0.15s"};
+const CA={background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",padding:22,boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"};
 
 function Fld({label,children,style}){
-  return <div style={{marginBottom:14,...style}}>{label&&<label style={{display:"block",fontSize:12,fontWeight:500,color:"#6b7280",marginBottom:4}}>{label}</label>}{children}</div>;
+  return <div style={{marginBottom:16,...style}}>{label&&<label style={{display:"block",fontSize:11,fontWeight:600,color:"#0369a1",marginBottom:6,letterSpacing:"0.04em",textTransform:"uppercase"}}>{label}</label>}{children}</div>;
 }
 function Btn({children,onClick,v,disabled,full,sm,style}){
   const vv=v||"primary";
-  const bg=vv==="secondary"?"#f3f4f6":vv==="danger"?"#fee2e2":vv==="success"?"#d1fae5":"#2563eb";
-  const co=vv==="secondary"?"#374151":vv==="danger"?"#b91c1c":vv==="success"?"#065f46":"#fff";
-  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 11px":"9px 18px",borderRadius:7,border:"none",cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:14,fontWeight:500,background:bg,color:co,opacity:disabled?0.5:1,width:full?"100%":"auto",fontFamily:"inherit",...style}}>{children}</button>;
+  const variants={
+    primary:{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",color:"#fff",border:"none",boxShadow:"0 2px 10px rgba(2,132,199,0.35)"},
+    secondary:{background:"#f0f9ff",color:"#0369a1",border:"1.5px solid #bae6fd",boxShadow:"none"},
+    danger:{background:"#fff1f2",color:"#e11d48",border:"1.5px solid #fecdd3",boxShadow:"none"},
+    success:{background:"#f0fdf4",color:"#059669",border:"1.5px solid #bbf7d0",boxShadow:"none"},
+  };
+  const s=variants[vv]||variants.primary;
+  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 13px":"10px 20px",borderRadius:10,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:600,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",letterSpacing:"0.01em",...s,...style}}>{children}</button>;
 }
 
 function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacations=[],vacationTxns=[]}){
@@ -124,27 +129,27 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
   const budgetTotal=Object.values(catBudgets).reduce((s,v)=>s+(v||0),0);
   const budgetRemaining=budgetTotal-spending;
   const vacCard=vacSpend>0||activeVacations.length>0?{l:"Vacation Spend",v:vacSpend,c:"#8b5cf6",sub:activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null}:null;
-  const cards=[{l:"Income Received",v:actualIncome,c:"#059669"},{l:"Spending",v:spending,c:"#dc2626",sub:budgetTotal>0?fmt(Math.abs(budgetRemaining))+(budgetRemaining>=0?" remaining":" over budget"):null,subc:budgetTotal>0?(budgetRemaining>=0?"#059669":"#dc2626"):null},{l:"Net (Actual)",v:actNet,c:actNet>=0?"#059669":"#dc2626"},{l:"Expected Spend",v:budgetTotal,c:"#f59e0b",sub:budgetTotal>0?"budget across "+Object.values(catBudgets).filter(v=>v>0).length+" categories":null},...(vacCard?[vacCard]:[]),{l:"Expected Income",v:totalExp,c:"#2563eb",sub:pendingExp>0?fmt(pendingExp)+" pending":null},{l:"Projected Net",v:projNet,c:projNet>=0?"#059669":"#dc2626",sub:"incl. pending"}];
+  const cards=[{l:"Income Received",v:actualIncome,c:"#059669"},{l:"Spending",v:spending,c:"#dc2626",sub:budgetTotal>0?fmt(Math.abs(budgetRemaining))+(budgetRemaining>=0?" remaining":" over budget"):null,subc:budgetTotal>0?(budgetRemaining>=0?"#059669":"#dc2626"):null},{l:"Net (Actual)",v:actNet,c:actNet>=0?"#059669":"#dc2626"},{l:"Expected Spend",v:budgetTotal,c:"#f59e0b",sub:budgetTotal>0?"budget across "+Object.values(catBudgets).filter(v=>v>0).length+" categories":null},...(vacCard?[vacCard]:[]),{l:"Expected Income",v:totalExp,c:"#0284C7",sub:pendingExp>0?fmt(pendingExp)+" pending":null},{l:"Projected Net",v:projNet,c:projNet>=0?"#059669":"#dc2626",sub:"incl. pending"}];
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:10}}>
-        <h2 style={{margin:0,fontSize:19,fontWeight:600}}>Dashboard</h2>
-        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"7px 10px",borderRadius:7,border:"1px solid #d1d5db",fontSize:13,background:"#fff",fontFamily:"inherit"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
+        <h2 style={{margin:0,fontSize:22,fontWeight:800,letterSpacing:"-0.4px",color:"#1E293B"}}>Dashboard</h2>
+        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500,boxShadow:"0 1px 3px rgba(15,23,42,0.04)"}}>
           {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
         </select>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:14,marginBottom:20}}>
         {cards.map(item=>(
-          <div key={item.l} style={{...CA,padding:"14px 16px"}}>
-            <div style={{fontSize:10,fontWeight:600,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.7px",marginBottom:6}}>{item.l}</div>
-            <div style={{fontSize:18,fontWeight:700,color:item.c}}>{fmt(item.v)}</div>
-            {item.sub&&<div style={{fontSize:11,color:item.subc||"#9ca3af",marginTop:3}}>{item.sub}</div>}
+          <div key={item.l} style={{...CA,padding:"18px 20px",display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>{item.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:item.c,letterSpacing:"-0.5px",lineHeight:1.1}}>{fmt(item.v)}</div>
+            {item.sub&&<div style={{fontSize:11,color:item.subc||"#94a3b8",fontWeight:500}}>{item.sub}</div>}
           </div>
         ))}
       </div>
       {mExp.length>0&&(
-        <div style={{...CA,marginBottom:14}}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>Expected Income — {ml(month)}</div>
+        <div style={{...CA,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Expected Income — {ml(month)}</div>
           {mExp.map(e=>(
             <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>
               <div><span style={{fontSize:13}}>{e.source}</span>{e.note&&<span style={{fontSize:11,color:"#9ca3af"}}> · {e.note}</span>}</div>
@@ -158,9 +163,9 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
           ))}
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>Spending by Category</div>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Spending by Category</div>
           {catData.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No expenses this month</div>:
           catData.map((d,i)=>{
             const pct=d.budget>0?Math.min(d.amount/d.budget,1):0;
@@ -168,22 +173,22 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
             return(
               <div key={d.name} style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:3}}>
-                  <span style={{fontSize:12,fontWeight:500,color:"#374151"}}>{d.name}</span>
+                  <span style={{fontSize:12,fontWeight:500,color:"#1E293B"}}>{d.name}</span>
                   <span style={{fontSize:11,color:over?"#dc2626":"#6b7280"}}>
                     {fmt(d.amount)}{d.budget>0?<> / <span style={{color:"#9ca3af"}}>{fmt(d.budget)}</span></>:null}
                     {over&&<span style={{marginLeft:5,color:"#dc2626",fontWeight:600}}>↑{fmt(d.amount-d.budget)}</span>}
                   </span>
                 </div>
-                <div style={{height:6,borderRadius:3,background:"#f3f4f6",overflow:"hidden"}}>
-                  {d.budget>0&&<div style={{height:"100%",borderRadius:3,width:(pct*100)+"%",background:over?"#dc2626":COLORS[i%COLORS.length],transition:"width 0.3s"}}/>}
-                  {d.budget===0&&<div style={{height:"100%",borderRadius:3,width:"100%",background:COLORS[i%COLORS.length]+"33"}}/>}
+                <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden"}}>
+                  {d.budget>0&&<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?"#f43f5e":COLORS[i%COLORS.length],transition:"width 0.4s ease"}}/>}
+                  {d.budget===0&&<div style={{height:"100%",borderRadius:99,width:"100%",background:COLORS[i%COLORS.length]+"40"}}/>}
                 </div>
               </div>
             );
           })}
         </div>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>6-Month Cashflow</div>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>6-Month Cashflow</div>
           <ResponsiveContainer width="100%" height={190}>
             <LineChart data={trend} margin={{left:-12,right:8,top:4,bottom:0}}>
               <CartesianGrid strokeDasharray="3 3"/>
@@ -193,14 +198,14 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,vacat
               <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:11}}/>
               <Line type="monotone" dataKey="Income" stroke="#059669" strokeWidth={2} dot={false}/>
               <Line type="monotone" dataKey="Expenses" stroke="#dc2626" strokeWidth={2} dot={false}/>
-              <Line type="monotone" dataKey="Expected" stroke="#2563eb" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
+              <Line type="monotone" dataKey="Expected" stroke="#0284C7" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
             </LineChart>
           </ResponsiveContainer>
           <div style={{fontSize:11,color:"#9ca3af",marginTop:6}}>Dashed blue = pending expected income</div>
         </div>
       </div>
       <div style={CA}>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>Recent Transactions</div>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B",letterSpacing:"-0.1px"}}>Recent Transactions</div>
         {recent.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No transactions this month</div>:recent.map(t=>(
           <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f3f4f6"}}>
             <div>
@@ -248,13 +253,13 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   const confirmed=expected.filter(e=>e.confirmed);
   const shown=filter==="pending"?pending:filter==="confirmed"?confirmed:expected;
   const sorted=[...shown].sort((a,b)=>(a.expectedDate||"").localeCompare(b.expectedDate||""));
-  const sumCards=[{l:"Pending Income",v:pending.reduce((s,e)=>s+e.amount,0),c:"#2563eb",sub:pending.length+" item"+(pending.length!==1?"s":"")},{l:"Confirmed Received",v:confirmed.reduce((s,e)=>s+e.amount,0),c:"#059669",sub:confirmed.length+" item"+(confirmed.length!==1?"s":"")},{l:"Total Scheduled",v:expected.reduce((s,e)=>s+e.amount,0),c:"#111827",sub:expected.length+" total"}];
+  const sumCards=[{l:"Pending Income",v:pending.reduce((s,e)=>s+e.amount,0),c:"#0284C7",sub:pending.length+" item"+(pending.length!==1?"s":"")},{l:"Confirmed Received",v:confirmed.reduce((s,e)=>s+e.amount,0),c:"#059669",sub:confirmed.length+" item"+(confirmed.length!==1?"s":"")},{l:"Total Scheduled",v:expected.reduce((s,e)=>s+e.amount,0),c:"#111827",sub:expected.length+" total"}];
   return (
     <div>
-      <h2 style={{margin:"0 0 18px",fontSize:19,fontWeight:600}}>Expected Income</h2>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Expected Income</h2>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#374151"}}>Add Expected Income</div>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Expected Income</div>
           <Fld label="Source"><input style={IS} value={f.source} onChange={e=>set("source",e.target.value)} placeholder="e.g. Salary, Client payment"/></Fld>
           <Fld label="Amount ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
           <Fld label="Expected Date"><input style={IS} type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)}/></Fld>
@@ -271,27 +276,27 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           {sumCards.map(item=>(
-            <div key={item.l} style={{...CA,padding:"16px 18px"}}>
-              <div style={{fontSize:10,fontWeight:600,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.7px",marginBottom:6}}>{item.l}</div>
-              <div style={{fontSize:22,fontWeight:700,color:item.c}}>{fmt(item.v)}</div>
-              <div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>{item.sub}</div>
+            <div key={item.l} style={{...CA,padding:"18px 20px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>{item.l}</div>
+              <div style={{fontSize:24,fontWeight:800,color:item.c,letterSpacing:"-0.5px",lineHeight:1.1}}>{fmt(item.v)}</div>
+              <div style={{fontSize:11,color:"#94a3b8",marginTop:5,fontWeight:500}}>{item.sub}</div>
             </div>
           ))}
         </div>
       </div>
       <div style={CA}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
-          <div style={{fontSize:13,fontWeight:600,color:"#374151"}}>Income Schedule</div>
+          <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>Income Schedule</div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <select value={filter} onChange={e=>setFilter(e.target.value)} style={{padding:"6px 10px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12,background:"#fff",fontFamily:"inherit"}}>
               <option value="all">All</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option>
             </select>
-            <button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"6px 12px",borderRadius:7,border:"1px solid "+(selectMode?"#2563eb":"#d1d5db"),fontSize:12,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#2563eb":"#374151",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>
+            <button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"6px 12px",borderRadius:7,border:"1px solid "+(selectMode?"#0284C7":"#bae6fd"),fontSize:12,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#0284C7":"#1E293B",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>
           </div>
         </div>
         {selectMode&&selected.size>0&&(
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#eff6ff",borderRadius:8,border:"1px solid #bfdbfe",flexWrap:"wrap"}}>
-            <span style={{fontSize:13,fontWeight:500,color:"#1d4ed8",marginRight:"auto"}}>{selected.size} selected</span>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#f0f9ff",borderRadius:8,border:"1px solid #7dd3fc",flexWrap:"wrap"}}>
+            <span style={{fontSize:13,fontWeight:500,color:"#0284C7",marginRight:"auto"}}>{selected.size} selected</span>
             {allPendingSelected&&<Btn sm v="success" onClick={confirmSelected}>Confirm Selected</Btn>}
             <Btn sm v="danger" onClick={deleteSelected}>Delete Selected</Btn>
             <Btn sm v="secondary" onClick={exitSelect}>Cancel</Btn>
@@ -310,7 +315,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
                 <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}</div>
                 {e.confirmed&&<div style={{fontSize:11,color:"#059669",marginTop:1}}>Confirmed {e.confirmedDate}</div>}
               </div>
-              <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#2563eb",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
+              <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#0284C7",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
               {!selectMode&&<div style={{display:"flex",gap:6,flexShrink:0}}>
                 {!e.confirmed&&<Btn v="success" sm onClick={()=>onConfirm(e.id)}>Confirm Payment</Btn>}
                 <button onClick={()=>del(e.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>Remove</button>
@@ -516,9 +521,9 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
 
   return (
     <div style={{maxWidth:520}}>
-      <h2 style={{margin:"0 0 18px",fontSize:19,fontWeight:600}}>Folder Sync</h2>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Folder Sync</h2>
       <div style={{...CA,marginBottom:14}}>
-        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"12px 14px",marginBottom:18,fontSize:13,color:"#1d4ed8",lineHeight:1.6}}>
+        <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"13px 16px",marginBottom:18,fontSize:13,color:"#0369a1",lineHeight:1.65,fontWeight:500}}>
           Drop receipt photos or PDF invoices into a local folder. Pick the folder to preview what's new, then run the scan to extract data with AI.
         </div>
         {status && (
@@ -546,11 +551,11 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
         )}
       </div>
       <div style={CA}>
-        <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>How it works</div>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>How it works</div>
         {steps.map((step,i)=>(
           <div key={i} style={{display:"flex",gap:10,marginBottom:10,alignItems:"flex-start"}}>
-            <span style={{minWidth:20,height:20,borderRadius:"50%",background:"#2563eb",color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</span>
-            <span style={{fontSize:13,color:"#4b5563",lineHeight:1.5}}>{step}</span>
+            <span style={{minWidth:20,height:20,borderRadius:"50%",background:"#0284C7",color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</span>
+            <span style={{fontSize:13,color:"#475569",lineHeight:1.5}}>{step}</span>
           </div>
         ))}
       </div>
@@ -622,17 +627,17 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
 
   if(stage==="select") return (
     <div>
-      <h2 style={{margin:"0 0 18px",fontSize:19,fontWeight:600}}>Upload Receipts</h2>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Upload Receipts</h2>
       <div style={{...CA,marginBottom:14}}>
         <div
           onClick={()=>ref.current.click()}
           onDragOver={e=>e.preventDefault()}
           onDrop={e=>{e.preventDefault();loadFiles(e.dataTransfer.files);}}
-          style={{border:"2px dashed #d1d5db",borderRadius:8,padding:"32px 20px",textAlign:"center",cursor:"pointer",background:"#f9fafb",userSelect:"none"}}
+          style={{border:"2px dashed #c7d2fe",borderRadius:16,padding:"36px 20px",textAlign:"center",cursor:"pointer",background:"linear-gradient(135deg,#fafbff,#f5f3ff)",userSelect:"none",transition:"border-color 0.15s"}}
         >
-          <div style={{fontSize:22,color:"#9ca3af",marginBottom:8}}>+</div>
-          <div style={{fontWeight:500,fontSize:14,marginBottom:3}}>Tap to select receipts or drag and drop</div>
-          <div style={{fontSize:12,color:"#9ca3af"}}>JPG, PNG, HEIC, PDF — multiple files supported</div>
+          <div style={{fontSize:28,marginBottom:10}}>📄</div>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:4,color:"#1E293B"}}>Tap to select receipts or drag and drop</div>
+          <div style={{fontSize:12,color:"#94a3b8",fontWeight:500}}>JPG, PNG, HEIC, PDF — multiple files supported</div>
           <input ref={ref} type="file" multiple accept="image/*,application/pdf" style={{display:"none"}} onChange={e=>loadFiles(e.target.files)}/>
         </div>
         <div style={{display:"flex",gap:16,marginTop:12,justifyContent:"center"}}>
@@ -672,14 +677,14 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
-        <h2 style={{margin:0,fontSize:19,fontWeight:600}}>Review Receipts</h2>
+        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Review Receipts</h2>
         <span style={{fontSize:12,color:"#9ca3af"}}>{items.length} scanned</span>
       </div>
       <div style={{display:"grid",gap:12,marginBottom:18}}>
         {items.map(i=>(
           <div key={i.id} style={CA}>
             <div style={{display:"grid",gridTemplateColumns:"80px 1fr",gap:14,alignItems:"start"}}>
-              <div style={{height:80,borderRadius:7,overflow:"hidden",background:"#f3f4f6",border:"1px solid "+(isPdf(i.mtype)?"#fecaca":"#e5e7eb")}}>
+              <div style={{height:80,borderRadius:7,overflow:"hidden",background:"#e0f2fe",border:"1px solid "+(isPdf(i.mtype)?"#fecaca":"#e5e7eb")}}>
                 <FileThumbnail item={i}/>
               </div>
               <div>
@@ -733,7 +738,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
   const lbl=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
   return (
     <div style={{maxWidth:500}}>
-      <h2 style={{margin:"0 0 18px",fontSize:19,fontWeight:600}}>{title}</h2>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>{title}</h2>
       <div style={CA}>
         <Fld label={type==="income"?"Source":"Merchant / Description"}><input style={IS} value={f.merchant} onChange={e=>set("merchant",e.target.value)} placeholder={type==="income"?"e.g. Salary, Freelance":"e.g. Walmart, Netflix, Rent"}/></Fld>
         <Fld label="Amount per payment ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
@@ -742,7 +747,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
         <Fld label="Recurrence"><select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>{CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></Fld>
         {recurring&&<Fld label="Number of payments"><input style={IS} type="number" min="2" max="120" value={f.occurrences} onChange={e=>set("occurrences",e.target.value)}/></Fld>}
         <Fld label="Note (optional)" style={{marginBottom:recurring&&amtNum?12:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-        {recurring&&amtNum>0&&<div style={{background:type==="expense"?"#fef3c7":"#eff6ff",border:"1px solid "+(type==="expense"?"#fde68a":"#bfdbfe"),borderRadius:8,padding:"10px 13px",marginBottom:16,fontSize:13,color:type==="expense"?"#92400e":"#1d4ed8"}}>{count} payments of {fmt(amtNum)} = <strong>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        {recurring&&amtNum>0&&<div style={{background:type==="expense"?"linear-gradient(135deg,#fffbeb,#fef3c7)":"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid "+(type==="expense"?"#fde68a":"#7dd3fc"),borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:type==="expense"?"#92400e":"#0369a1",fontWeight:500}}>{count} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
         <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
       </div>
     </div>
@@ -792,7 +797,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
     const gCount=Math.max(1,parseInt(gEd.occurrences)||1);const gAmt=parseFloat(gEd.amount)||0;
     return (
       <div style={{maxWidth:500}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}><button onClick={()=>setEditGroupId(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button><h2 style={{margin:0,fontSize:19,fontWeight:600}}>Edit Recurring Group</h2></div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}><button onClick={()=>setEditGroupId(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Edit Recurring Group</h2></div>
         <div style={CA}>
           <div style={{background:"#fef3c7",border:"1px solid #fde68a",borderRadius:8,padding:"10px 13px",marginBottom:16,fontSize:12,color:"#92400e"}}>This replaces all entries in this group with new ones based on your updated settings.</div>
           <Fld label="Merchant / Source"><input style={IS} value={gEd.merchant} onChange={e=>setGEd(p=>({...p,merchant:e.target.value}))}/></Fld>
@@ -802,7 +807,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
           <Fld label="Cadence"><select style={{...IS,background:"#fff"}} value={gEd.cadence} onChange={e=>setGEd(p=>({...p,cadence:e.target.value}))}>{CADENCES.filter(c=>c.v!=="once").map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></Fld>
           <Fld label="Number of entries"><input style={IS} type="number" min="1" max="120" value={gEd.occurrences} onChange={e=>setGEd(p=>({...p,occurrences:e.target.value}))}/></Fld>
           <Fld label="Note (optional)" style={{marginBottom:12}}><input style={IS} value={gEd.note} onChange={e=>setGEd(p=>({...p,note:e.target.value}))}/></Fld>
-          {gAmt>0&&<div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"10px 13px",marginBottom:16,fontSize:13,color:"#1d4ed8"}}>{gCount} entries of {fmt(gAmt)} = <strong>{fmt(gAmt*gCount)}</strong> — {cLabel(gEd.cadence).toLowerCase()}, starting {gEd.startDate}</div>}
+          {gAmt>0&&<div style={{background:"#f0f9ff",border:"1px solid #7dd3fc",borderRadius:8,padding:"10px 13px",marginBottom:16,fontSize:13,color:"#0284C7"}}>{gCount} entries of {fmt(gAmt)} = <strong>{fmt(gAmt*gCount)}</strong> — {cLabel(gEd.cadence).toLowerCase()}, starting {gEd.startDate}</div>}
           <div style={{display:"flex",gap:8}}><Btn onClick={saveGroup} disabled={!gEd.merchant.trim()||!gEd.amount} full>Save Group</Btn><Btn v="secondary" onClick={()=>setEditGroupId(null)}>Cancel</Btn></div>
         </div>
       </div>
@@ -814,11 +819,11 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
         <h2 style={{margin:0,fontSize:19,fontWeight:600,marginRight:"auto"}}>History</h2>
         <select value={fMonth} onChange={e=>setFMonth(e.target.value)} style={ss}><option value="all">All Months</option>{months.map(m=><option key={m} value={m}>{new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"})}</option>)}</select>
         <select value={fCat} onChange={e=>setFCat(e.target.value)} style={ss}><option value="all">All Types</option><option value="income">Income</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select>
-        <button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"7px 12px",borderRadius:7,border:"1px solid "+(selectMode?"#2563eb":"#d1d5db"),fontSize:12,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#2563eb":"#374151",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>
+        <button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"7px 12px",borderRadius:7,border:"1px solid "+(selectMode?"#0284C7":"#bae6fd"),fontSize:12,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#0284C7":"#1E293B",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>
       </div>
       {selectMode&&selected.size>0&&(
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#eff6ff",borderRadius:8,border:"1px solid #bfdbfe",flexWrap:"wrap"}}>
-          <span style={{fontSize:13,fontWeight:500,color:"#1d4ed8",marginRight:"auto"}}>{selected.size} selected</span>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,padding:"10px 14px",background:"#f0f9ff",borderRadius:8,border:"1px solid #7dd3fc",flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:500,color:"#0284C7",marginRight:"auto"}}>{selected.size} selected</span>
           {canEditGroup&&<Btn sm onClick={()=>{const gTxns=txns.filter(t=>t.groupId===selectedGroups[0]);startEditGroup(selectedGroups[0],gTxns);exitSelect();}}>Edit Group</Btn>}
           <Btn sm v="danger" onClick={deleteSelected}>Delete Selected</Btn>
           <Btn sm v="secondary" onClick={exitSelect}>Cancel</Btn>
@@ -839,7 +844,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
                       <span style={{fontSize:13,fontWeight:500}}>{rep.merchant||rep.source}</span>
-                      <span style={{fontSize:11,background:"#eff6ff",color:"#1d4ed8",padding:"1px 7px",borderRadius:20,fontWeight:500}}>{cLabel(rep.cadence||"monthly")}</span>
+                      <span style={{fontSize:11,background:"#f0f9ff",color:"#0284C7",padding:"1px 7px",borderRadius:20,fontWeight:500}}>{cLabel(rep.cadence||"monthly")}</span>
                       <span style={{fontSize:11,color:"#9ca3af"}}>{gTxns.length} entries</span>
                     </div>
                     <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{first} – {last}{rep.category?" · "+rep.category:""}</div>
@@ -847,7 +852,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
                   <div style={{fontWeight:600,fontSize:13,color:rep.type==="income"?"#059669":"#111827",whiteSpace:"nowrap"}}>{rep.type==="income"?"+":""}{fmt(total)}</div>
                   {!selectMode&&<div style={{display:"flex",gap:5,flexShrink:0}}>
                     {rBtn(()=>toggleExpand(gid),"#e5e7eb","#6b7280",isExp?"Collapse":"Expand")}
-                    {rBtn(()=>startEditGroup(gid,gTxns),"#bfdbfe","#1d4ed8","Edit Group")}
+                    {rBtn(()=>startEditGroup(gid,gTxns),"#bae6fd","#0284C7","Edit Group")}
                     {rBtn(()=>delGroup(gid),"#fecaca","#dc2626","Delete All")}
                   </div>}
                   {selectMode&&rBtn(()=>toggleExpand(gid),"#e5e7eb","#6b7280",isExp?"Collapse":"Expand")}
@@ -858,7 +863,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth}){
                       ?<div style={{padding:"10px 0"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}><Fld label="Amount ($)"><input style={IS} type="number" value={ed.amount||""} onChange={e=>setEd(d=>({...d,amount:e.target.value}))}/></Fld><Fld label="Date"><input style={IS} type="date" value={ed.date||""} onChange={e=>setEd(d=>({...d,date:e.target.value}))}/></Fld><Fld label="Note"><input style={IS} value={ed.note||""} onChange={e=>setEd(d=>({...d,note:e.target.value}))}/></Fld></div><div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div></div>
                       :<div style={{display:"flex",alignItems:"center",padding:"7px 0",gap:10,borderBottom:"1px solid #f9fafb"}}>
                         {selectMode&&<input type="checkbox" checked={selected.has(t.id)} onChange={()=>toggleSelect(t.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
-                        <div style={{flex:1}}><div style={{fontSize:12,color:"#374151"}}>{t.date}</div>{t.note&&<div style={{fontSize:11,color:"#9ca3af"}}>{t.note}</div>}</div>
+                        <div style={{flex:1}}><div style={{fontSize:12,color:"#1E293B"}}>{t.date}</div>{t.note&&<div style={{fontSize:11,color:"#9ca3af"}}>{t.note}</div>}</div>
                         <div style={{fontSize:12,fontWeight:500,color:t.type==="income"?"#059669":"#111827"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
                         {!selectMode&&<div style={{display:"flex",gap:4}}>{rBtn(()=>startEdit(t),"#e5e7eb","#6b7280","Edit")}{rBtn(()=>del(t.id),"#fecaca","#dc2626","Delete")}</div>}
                       </div>}
@@ -899,7 +904,7 @@ function Categories({cats,onUpdate,catBudgets,onUpdateBudgets}){
   const saveBudget=(cat)=>{const v=parseFloat(budgetEdit[cat]);onUpdateBudgets({...catBudgets,[cat]:isNaN(v)||v<=0?0:v});setBudgetEdit(p=>{const n={...p};delete n[cat];return n;});};
   return (
     <div style={{maxWidth:520}}>
-      <h2 style={{margin:"0 0 18px",fontSize:19,fontWeight:600}}>Categories</h2>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Categories</h2>
       <div style={CA}>
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New category name" style={{...IS,flex:1}}/>
@@ -979,7 +984,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
     <div style={{maxWidth:460}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
         <button onClick={()=>setView("list")} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
-        <h2 style={{margin:0,fontSize:19,fontWeight:600}}>New Vacation</h2>
+        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>New Vacation</h2>
       </div>
       <div style={CA}>
         <Fld label="Trip Name"><input style={IS} value={form.name} onChange={e=>setF("name",e.target.value)} placeholder="e.g. Paris Trip, Beach Week"/></Fld>
@@ -1008,7 +1013,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
         </div>
         {editingMeta&&(
           <div style={{...CA,marginBottom:16}}>
-            <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>Edit Vacation</div>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Edit Vacation</div>
             <Fld label="Trip Name"><input style={IS} value={metaForm.name} onChange={e=>setMetaForm(p=>({...p,name:e.target.value}))}/></Fld>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <Fld label="Start Date"><input style={IS} type="date" value={metaForm.startDate} onChange={e=>setMetaForm(p=>({...p,startDate:e.target.value}))}/></Fld>
@@ -1026,9 +1031,9 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
             </div>
           ))}
         </div>
-        {vac.budget>0&&<div style={{height:8,borderRadius:4,background:"#f3f4f6",marginBottom:16,overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,width:Math.min(total/vac.budget,1)*100+"%",background:remaining>=0?"#f59e0b":"#dc2626",transition:"width 0.3s"}}/></div>}
+        {vac.budget>0&&<div style={{height:8,borderRadius:4,background:"#e0f2fe",marginBottom:16,overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,width:Math.min(total/vac.budget,1)*100+"%",background:remaining>=0?"#f59e0b":"#dc2626",transition:"width 0.3s"}}/></div>}
         <div style={{...CA,marginBottom:14}}>
-          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#374151"}}>Log Expense</div>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Log Expense</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Fld label="Merchant"><input style={IS} value={expForm.merchant} onChange={e=>setE("merchant",e.target.value)} placeholder="e.g. Hotel, Restaurant"/></Fld>
             <Fld label="Amount ($)"><input style={IS} type="number" value={expForm.amount} onChange={e=>setE("amount",e.target.value)} placeholder="0.00"/></Fld>
@@ -1039,12 +1044,12 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
         </div>
         <div style={CA}>
           <div style={{display:"flex",alignItems:"center",marginBottom:12,gap:8}}>
-            <span style={{fontSize:13,fontWeight:600,color:"#374151",flex:1}}>Expenses ({txns.length})</span>
-            {txns.length>0&&<button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"4px 10px",borderRadius:6,border:"1px solid "+(selectMode?"#2563eb":"#d1d5db"),fontSize:11,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#2563eb":"#374151",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>}
+            <span style={{fontSize:13,fontWeight:600,color:"#1E293B",flex:1}}>Expenses ({txns.length})</span>
+            {txns.length>0&&<button onClick={()=>{setSelectMode(s=>!s);setSelected(new Set());}} style={{padding:"4px 10px",borderRadius:6,border:"1px solid "+(selectMode?"#0284C7":"#bae6fd"),fontSize:11,background:selectMode?"#eff6ff":"#fff",color:selectMode?"#0284C7":"#1E293B",cursor:"pointer",fontFamily:"inherit",fontWeight:selectMode?600:400}}>Select</button>}
           </div>
           {selectMode&&selected.size>0&&(
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"8px 12px",background:"#eff6ff",borderRadius:7,border:"1px solid #bfdbfe"}}>
-              <span style={{fontSize:12,fontWeight:500,color:"#1d4ed8",flex:1}}>{selected.size} selected</span>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"8px 12px",background:"#f0f9ff",borderRadius:7,border:"1px solid #7dd3fc"}}>
+              <span style={{fontSize:12,fontWeight:500,color:"#0284C7",flex:1}}>{selected.size} selected</span>
               <Btn sm v="danger" onClick={deleteSelected}>Delete</Btn>
               <Btn sm v="secondary" onClick={exitSelect}>Cancel</Btn>
             </div>
@@ -1096,7 +1101,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:15,fontWeight:600,marginBottom:2}}>{v.name}</div>
                   <div style={{fontSize:11,color:"#9ca3af"}}>{v.startDate} – {v.endDate}</div>
-                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#f3f4f6",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:over?"#dc2626":"#f59e0b"}}/></div>}
+                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#e0f2fe",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:over?"#dc2626":"#f59e0b"}}/></div>}
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
                   <div style={{fontSize:15,fontWeight:700,color:"#dc2626"}}>{fmt(total)}</div>
@@ -1125,23 +1130,23 @@ const WHATS_NEW = [
 
 function WhatsNewModal({onClose}){
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"60px 0 0 18px"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",boxShadow:"0 8px 32px rgba(0,0,0,0.14)",width:340,maxHeight:"80vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
-        <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:20,border:"1px solid #eef0f6",boxShadow:"0 24px 64px rgba(15,23,42,0.22)",width:348,maxHeight:"78vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #e0f2fe",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:"linear-gradient(135deg,#0284C7,#0369a1)",borderRadius:"20px 20px 0 0"}}>
           <div>
-            <div style={{fontWeight:700,fontSize:15,color:"#111827"}}>What's New</div>
-            <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Features you can try right now</div>
+            <div style={{fontWeight:800,fontSize:15,color:"#fff",letterSpacing:"-0.2px"}}>What's New</div>
+            <div style={{fontSize:11,color:"#bae6fd",marginTop:2,fontWeight:500}}>Features you can try right now</div>
           </div>
-          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}}>×</button>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.15)",border:"none",cursor:"pointer",fontSize:16,color:"#e0f2fe",padding:"4px 8px",borderRadius:8,lineHeight:1,fontFamily:"inherit"}}>×</button>
         </div>
-        <div style={{overflowY:"auto",padding:"10px 0"}}>
+        <div style={{overflowY:"auto",padding:"8px 0"}}>
           {WHATS_NEW.map((f,i)=>(
-            <div key={i} style={{padding:"10px 18px",borderBottom:i<WHATS_NEW.length-1?"1px solid #f9fafb":"none"}}>
-              <div style={{display:"flex",alignItems:"baseline",gap:7,marginBottom:3}}>
-                <span style={{color:"#2563eb",fontSize:10,flexShrink:0}}>{f.icon}</span>
-                <span style={{fontWeight:600,fontSize:13,color:"#111827"}}>{f.title}</span>
+            <div key={i} style={{padding:"11px 20px",borderBottom:i<WHATS_NEW.length-1?"1px solid #f0f9ff":"none"}}>
+              <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:4}}>
+                <span style={{color:"#06B6D4",fontSize:9,flexShrink:0,fontWeight:800}}>{f.icon}</span>
+                <span style={{fontWeight:700,fontSize:13,color:"#1E293B",letterSpacing:"-0.1px"}}>{f.title}</span>
               </div>
-              <div style={{fontSize:12,color:"#6b7280",lineHeight:1.55,paddingLeft:17}}>{f.desc}</div>
+              <div style={{fontSize:12,color:"#64748b",lineHeight:1.6,paddingLeft:17}}>{f.desc}</div>
             </div>
           ))}
         </div>
@@ -1197,23 +1202,23 @@ export default function App(){
   const pendingCount=expected.filter(e=>!e.confirmed).length;
 
   return (
-    <div style={{minHeight:"100vh",background:"#f9fafb",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,sans-serif",color:"#111827"}}>
+    <div style={{minHeight:"100vh",background:"#f0f9ff",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B"}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
-      <header style={{background:"#fff",borderBottom:"1px solid #e5e7eb",position:"sticky",top:0,zIndex:20}}>
-        <div style={{maxWidth:1100,margin:"0 auto",padding:"0 18px",display:"flex",alignItems:"center",height:50}}>
-          <button onClick={()=>setShowWhatsNew(v=>!v)} title="What's New" style={{background:"none",border:"none",cursor:"pointer",padding:"3px 6px",marginRight:6,borderRadius:6,fontSize:14,color:"#6b7280",fontFamily:"inherit",flexShrink:0,display:"flex",alignItems:"center",gap:4,lineHeight:1}}>✦<span style={{fontSize:11,fontWeight:500,color:"#6b7280"}}>What's new</span></button>
-          <span style={{fontWeight:700,fontSize:14,marginRight:18,whiteSpace:"nowrap"}}>Spend Tracker</span>
-          <nav style={{display:"flex",gap:2,overflowX:"auto",flex:1}}>
+      <header style={{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",position:"sticky",top:0,zIndex:20,boxShadow:"0 2px 12px rgba(2,132,199,0.3)"}}>
+        <div style={{maxWidth:1140,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:56,gap:16}}>
+          <button onClick={()=>setShowWhatsNew(v=>!v)} title="What's New" style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",cursor:"pointer",padding:"4px 10px",borderRadius:20,fontSize:11,color:"#e0f2fe",fontFamily:"inherit",flexShrink:0,display:"flex",alignItems:"center",gap:5,lineHeight:1,fontWeight:500,whiteSpace:"nowrap"}}>✦ <span>What's new</span></button>
+          <span style={{fontWeight:800,fontSize:15,whiteSpace:"nowrap",color:"#fff",letterSpacing:"-0.3px",flexShrink:0}}>SpendTracker</span>
+          <nav style={{display:"flex",gap:1,overflowX:"auto",flex:1}}>
             {nav.map(n=>(
-              <button key={n.k} onClick={()=>setView(n.k)} style={{padding:"5px 11px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,whiteSpace:"nowrap",background:view===n.k?"#2563eb":"transparent",color:view===n.k?"#fff":"#4b5563",flexShrink:0,fontFamily:"inherit",position:"relative"}}>
+              <button key={n.k} onClick={()=>setView(n.k)} style={{padding:"6px 13px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,whiteSpace:"nowrap",background:view===n.k?"#fff":"transparent",color:view===n.k?"#0284C7":"rgba(255,255,255,0.75)",flexShrink:0,fontFamily:"inherit",position:"relative",transition:"background 0.15s,color 0.15s"}}>
                 {n.l}
-                {n.k==="expected"&&pendingCount>0&&<span style={{position:"absolute",top:2,right:3,width:14,height:14,borderRadius:"50%",background:"#ef4444",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{pendingCount}</span>}
+                {n.k==="expected"&&pendingCount>0&&<span style={{position:"absolute",top:3,right:4,width:13,height:13,borderRadius:"50%",background:"#06B6D4",color:"#fff",fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{pendingCount}</span>}
               </button>
             ))}
           </nav>
         </div>
       </header>
-      <main style={{maxWidth:1100,margin:"0 auto",padding:"22px 18px"}}>
+      <main style={{maxWidth:1140,margin:"0 auto",padding:"24px 20px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
         {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} vacations={vacations} vacationTxns={vacationTxns}/>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
