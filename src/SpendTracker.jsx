@@ -152,12 +152,49 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
   );
 }
 
-function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[]}){
+function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,month,ml,GREEN,RED}){
+  const [open,setOpen]=useState(true);
+  return(
+    <div style={{...CA,marginBottom:14}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Bills Due — {ml(month)}</span>
+          <span style={{fontSize:11,fontWeight:600,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
+          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED,fontWeight:600}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
+        </div>
+        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,flexShrink:0}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&(
+        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+          {[...monthBills].sort((a,b)=>a.dueDay-b.dueDay).map(b=>{
+            const paid=billPaid(b.id);
+            return(
+              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 12px",borderRadius:10,background:paid?"#f0fdf4":"#fafafa",border:`1px solid ${paid?"#bbf7d0":"#f1f5f9"}`,cursor:"pointer",transition:"all 0.15s"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                  <div style={{width:20,height:20,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?GREEN:"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {paid&&<span style={{fontSize:10,color:GREEN}}>✓</span>}
+                  </div>
+                  <span style={{fontSize:12,fontWeight:600,color:paid?"#94a3b8":"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
+                </div>
+                <span style={{fontSize:12,fontWeight:700,color:paid?"#94a3b8":RED,flexShrink:0}}>{fmt(b.amount)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={}}){
   const opts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const mt=txns.filter(t=>t.date&&t.date.startsWith(month));
   const actualIncome=mt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const spending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const txnSpending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  // Paid bills for this month count as spending
+  const paidBillsTotal=billPayments.filter(p=>p.month===month).reduce((s,p)=>s+p.amount,0);
+  const spending=txnSpending+paidBillsTotal;
   const mExp=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(month));
   const pendingExp=mExp.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0);
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
@@ -196,6 +233,26 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   const yearExpenses=yearData.reduce((s,d)=>s+d.Expenses,0);
   const GREEN="#059669", RED="#dc2626", YELLOW="#d97706";
   const [chartTab,setChartTab]=useState("6mo");
+  // Net worth
+  const ASSET_TYPES=["chequing","savings","investment","other"];
+  const totalAssets=accounts.filter(a=>ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+  const totalLiab=accounts.filter(a=>!ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+  const netWorth=totalAssets-totalLiab;
+  const portfolioValue=holdings.reduce((s,h)=>s+(stockPrices[h.ticker]?.price??0)*h.shares,0);
+  // Bills due this month
+  const monthBills=bills.filter(b=>b.active!==false);
+  const billPaid=id=>billPayments.some(p=>p.billId===id&&p.month===month);
+  const billsUnpaid=monthBills.filter(b=>!billPaid(b.id));
+  const billsPaid=monthBills.filter(b=>billPaid(b.id));
+  // Budget health — last 6 months per category
+  const bhMonths=Array.from({length:6},(_,i)=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-5+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+  const budgetHealth=cats.filter(c=>catBudgets[c]>0).map(c=>{
+    const bgt=catBudgets[c];
+    return{name:c,budget:bgt,months:bhMonths.map(ym=>{const spent=txns.filter(t=>t.date&&t.date.startsWith(ym)&&t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0);return{ym,spent,status:spent===0?"none":spent>bgt?"over":"ok"};})};
+  });
+  // Anomaly detection — flag transactions >2.5x category average (min 3 txns)
+  const catAvgs={};cats.forEach(c=>{const ct=txns.filter(t=>t.type==="expense"&&t.category===c&&t.amount>0);if(ct.length>=3)catAvgs[c]=ct.reduce((s,t)=>s+t.amount,0)/ct.length;});
+  const isAnomaly=t=>t.type==="expense"&&catAvgs[t.category]&&t.amount>2.5*catAvgs[t.category];
   return (
     <div>
       {/* Header */}
@@ -218,6 +275,18 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
       </div>
 
+      {/* Net worth strip */}
+      {(accounts.length>0||holdings.length>0)&&(
+        <div style={{...CA,padding:"12px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",flexShrink:0}}>Net Worth</div>
+          <div style={{fontSize:18,fontWeight:800,color:netWorth>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(netWorth+(portfolioValue||0))}</div>
+          <div style={{fontSize:12,color:"#94a3b8",display:"flex",gap:14,flexWrap:"wrap"}}>
+            <span>Assets <span style={{color:GREEN,fontWeight:600}}>{fmt(totalAssets)}</span></span>
+            <span>Liabilities <span style={{color:RED,fontWeight:600}}>{fmt(totalLiab)}</span></span>
+            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:"#0284C7",fontWeight:600}}>{fmt(portfolioValue)}</span></span>}
+          </div>
+        </div>
+      )}
       {/* Three stat cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
         <div style={{...CA,padding:"20px 22px"}}>
@@ -243,6 +312,36 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
 
       {/* Expected Income widget */}
       {mExp.length>0&&<div style={{marginBottom:14}}><ExpectedIncomeWidget mExp={mExp} ml={ml} month={month} GREEN={GREEN} YELLOW={YELLOW} onConfirm={onConfirm} onRevert={onRevert}/></div>}
+
+      {/* Bills Due widget */}
+      {monthBills.length>0&&<BillsDueWidget monthBills={monthBills} billsPaid={billsPaid} billsUnpaid={billsUnpaid} billPaid={billPaid} onToggleBill={onToggleBill} month={month} ml={ml} GREEN={GREEN} RED={RED}/>}
+
+      {/* Goals strip */}
+      {goals.length>0&&(
+        <div style={{...CA,marginBottom:14,padding:"16px 20px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Savings Goals</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+            {goals.map(g=>{
+              const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
+              return(
+                <div key={g.id} style={{padding:"10px 14px",borderRadius:10,background:"#fafafa",border:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:16}}>{g.emoji}</span>
+                    <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
+                  </div>
+                  <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:5}}>
+                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s"}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontSize:11,fontWeight:600,color:g.color||"#0284C7"}}>{fmt(g.currentAmount)}</span>
+                    <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
@@ -325,6 +424,49 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
       </div>
 
+      {/* Budget Health */}
+      {budgetHealth.length>0&&(
+        <div style={{...CA,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Budget Health — Last 6 Months</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr>
+                  <th style={{textAlign:"left",padding:"0 10px 8px 0",color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>Category</th>
+                  {bhMonths.map(ym=><th key={ym} style={{textAlign:"center",padding:"0 6px 8px",color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{new Date(ym+"-02").toLocaleString("default",{month:"short"})}</th>)}
+                  <th style={{textAlign:"right",padding:"0 0 8px 10px",color:"#94a3b8",fontWeight:600,fontSize:11}}>Budget</th>
+                </tr>
+              </thead>
+              <tbody>
+                {budgetHealth.map(row=>{
+                  const hits=row.months.filter(m=>m.status==="ok").length;
+                  const total=row.months.filter(m=>m.status!=="none").length;
+                  return(
+                    <tr key={row.name} style={{borderTop:"1px solid #f8fafc"}}>
+                      <td style={{padding:"7px 10px 7px 0",fontWeight:500,color:"#374151",whiteSpace:"nowrap"}}>
+                        {row.name}
+                        {total>0&&<span style={{fontSize:10,marginLeft:7,color:hits===total?"#059669":hits/total>=0.5?"#d97706":"#dc2626",fontWeight:600}}>{hits}/{total}</span>}
+                      </td>
+                      {row.months.map(m=>(
+                        <td key={m.ym} style={{textAlign:"center",padding:"7px 6px"}}>
+                          {m.status==="ok"&&<span title={fmt(m.spent)} style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#dcfce7",border:"1.5px solid #059669",lineHeight:"14px",fontSize:10,color:"#059669"}}>✓</span>}
+                          {m.status==="over"&&<span title={fmt(m.spent)} style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#fee2e2",border:"1.5px solid #dc2626",lineHeight:"14px",fontSize:10,color:"#dc2626"}}>✗</span>}
+                          {m.status==="none"&&<span style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#f8fafc",border:"1.5px solid #f1f5f9"}}/>}
+                        </td>
+                      ))}
+                      <td style={{textAlign:"right",padding:"7px 0 7px 10px",color:"#94a3b8",fontSize:11}}>{fmt(row.budget)}/mo</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Stock price chart */}
+      {holdings.length>0&&<StockPriceChart holdings={holdings}/>}
+
       {/* Recent Transactions */}
       <div style={CA}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Recent Transactions</div>
@@ -335,7 +477,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                 {t.type==="income"?"💰":"🧾"}
               </div>
               <div>
-                <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{t.merchant||t.source}</div>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{t.merchant||t.source}</span>
+                  {isAnomaly(t)&&<span title={"Avg for "+t.category+": "+fmt(catAvgs[t.category])} style={{fontSize:9,fontWeight:700,background:"#fef3c7",color:"#92400e",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em",border:"1px solid #fde68a"}}>UNUSUAL</span>}
+                </div>
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>{t.date}{t.type==="expense"&&t.category?" · "+t.category:" · Income"}</div>
               </div>
             </div>
@@ -1277,6 +1422,461 @@ function Toast({msg,undoFn,onClose}){
   );
 }
 
+const STOCK_COLORS=["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#f97316"];
+
+function StockPriceChart({holdings}){
+  const RANGES=[{l:"1W",v:"5d",iv:"1h"},{l:"1M",v:"1mo",iv:"1d"},{l:"3M",v:"3mo",iv:"1d"},{l:"6M",v:"6mo",iv:"1wk"},{l:"1Y",v:"1y",iv:"1wk"}];
+  const [range,setRange]=useState("1mo");
+  const [chartData,setChartData]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+
+  useEffect(()=>{
+    if(!holdings.length){setChartData([]);return;}
+    setLoading(true);setError(null);
+    const rv=RANGES.find(r=>r.v===range)||RANGES[1];
+    Promise.all(holdings.map(h=>
+      fetch(`/api/stocks/history?symbol=${h.ticker}&range=${rv.v}&interval=${rv.iv}`)
+        .then(r=>r.json()).catch(()=>({symbol:h.ticker,points:[]}))
+    )).then(results=>{
+      const seriesMap={};
+      results.forEach(({symbol,points})=>{
+        if(!points||!points.length)return;
+        const base=points[0].close;
+        points.forEach(p=>{
+          if(!seriesMap[p.date])seriesMap[p.date]={date:p.date};
+          seriesMap[p.date][symbol]=base>0?+((p.close-base)/base*100).toFixed(2):0;
+        });
+      });
+      const sorted=Object.values(seriesMap).sort((a,b)=>a.date.localeCompare(b.date));
+      setChartData(sorted);
+      setLoading(false);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[holdings.map(h=>h.ticker).join(","),range]);
+
+  if(!holdings.length)return null;
+
+  const tickers=holdings.map(h=>h.ticker);
+
+  return(
+    <div style={{...CA,marginTop:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>Stock Performance</div>
+        <div style={{display:"flex",gap:4}}>
+          {RANGES.map(r=>(
+            <button key={r.v} onClick={()=>setRange(r.v)} style={{padding:"3px 10px",borderRadius:20,border:"1.5px solid "+(range===r.v?"#3b82f6":"#e2e8f0"),background:range===r.v?"#3b82f6":"#fff",color:range===r.v?"#fff":"#64748b",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{r.l}</button>
+          ))}
+        </div>
+      </div>
+      {loading&&<div style={{textAlign:"center",padding:"32px 0",color:"#94a3b8",fontSize:13}}>Loading…</div>}
+      {error&&<div style={{color:"#dc2626",fontSize:12,padding:"8px 0"}}>{error}</div>}
+      {!loading&&chartData.length>0&&(
+        <>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={chartData} margin={{top:4,right:8,left:0,bottom:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+              <XAxis dataKey="date" tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={d=>d.slice(5)} tickLine={false} axisLine={false} interval="preserveStartEnd"/>
+              <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>v+"%"} tickLine={false} axisLine={false} width={40}/>
+              <Tooltip formatter={(v,name)=>[(v>=0?"+":"")+Number(v).toFixed(2)+"%",name]} labelStyle={{fontSize:11,color:"#64748b"}} contentStyle={{fontSize:12,borderRadius:8,border:"1px solid #e2e8f0",boxShadow:"0 4px 12px rgba(0,0,0,.08)"}}/>
+              <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11,paddingTop:8}}/>
+              {tickers.map((tk,i)=>(
+                <Line key={tk} type="monotone" dataKey={tk} stroke={STOCK_COLORS[i%STOCK_COLORS.length]} strokeWidth={2} dot={false} activeDot={{r:4}} connectNulls/>
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{fontSize:10,color:"#94a3b8",textAlign:"right",marginTop:2}}>% change from period start · normalized</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stocks({holdings,onSaveHoldings,onPricesUpdate}){
+  const [prices,setPrices]=useState({});
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [lastUpdated,setLastUpdated]=useState(null);
+  const [form,setForm]=useState({ticker:"",shares:"",costBasis:""});
+  const [editId,setEditId]=useState(null);
+  const [editF,setEditF]=useState({});
+  const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const fetchPrices=async(hdgs=holdings)=>{
+    if(!hdgs.length)return;
+    setLoading(true);setError(null);
+    try{
+      const symbols=hdgs.map(h=>h.ticker.toUpperCase()).join(",");
+      const res=await fetch(`/api/stocks?symbols=${symbols}`);
+      const data=await res.json();
+      if(data.error)throw new Error(data.error);
+      const map=Object.fromEntries((data.quotes||[]).map(q=>[q.symbol,q]));
+      setPrices(map);onPricesUpdate&&onPricesUpdate(map);setLastUpdated(new Date());
+    }catch(e){setError("Could not fetch prices: "+e.message);}
+    setLoading(false);
+  };
+
+  useEffect(()=>{
+    if(holdings.length){fetchPrices();}
+    const iv=setInterval(()=>{if(holdings.length)fetchPrices();},60000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[holdings.map(h=>h.ticker).join(",")]);
+
+  const add=()=>{
+    const tk=form.ticker.trim().toUpperCase();
+    if(!tk||!form.shares)return;
+    if(holdings.some(h=>h.ticker===tk)){setError("Already tracking "+tk);return;}
+    const next=[...holdings,{id:uid(),ticker:tk,shares:parseFloat(form.shares)||0,costBasis:form.costBasis?parseFloat(form.costBasis):null}];
+    onSaveHoldings(next);setForm({ticker:"",shares:"",costBasis:""});setError(null);
+    setTimeout(()=>fetchPrices(next),300);
+  };
+  const remove=id=>onSaveHoldings(holdings.filter(h=>h.id!==id));
+  const saveEdit=()=>{
+    onSaveHoldings(holdings.map(h=>h.id===editId?{...h,shares:parseFloat(editF.shares)||0,costBasis:editF.costBasis?parseFloat(editF.costBasis):null}:h));
+    setEditId(null);
+  };
+
+  const totalValue=holdings.reduce((s,h)=>s+(prices[h.ticker]?.price??0)*h.shares,0);
+  const todayChange=holdings.reduce((s,h)=>s+(prices[h.ticker]?.change??0)*h.shares,0);
+  const totalCost=holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0);
+  const totalGain=totalCost>0?totalValue-totalCost:null;
+  const anyOpen=Object.values(prices).some(q=>q.marketState==="REGULAR");
+
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Stock Portfolio</h2>
+          {lastUpdated&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Prices as of {lastUpdated.toLocaleTimeString()} · {anyOpen?<span style={{color:"#059669",fontWeight:600}}>Market Open</span>:<span style={{color:"#94a3b8"}}>Market Closed</span>}</div>}
+        </div>
+        <button onClick={()=>fetchPrices()} disabled={loading||!holdings.length} style={{padding:"7px 16px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#fff",color:"#0284C7",cursor:loading||!holdings.length?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:loading||!holdings.length?0.5:1}}>
+          {loading?"Updating…":"↻ Refresh"}
+        </button>
+      </div>
+
+      {error&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,background:"#fee2e2",color:"#b91c1c",fontSize:13,border:"1px solid #fecaca"}}>{error}</div>}
+
+      {/* Summary */}
+      {holdings.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:16}}>
+          {[
+            {l:"Portfolio Value",v:fmt(totalValue),c:"#1E293B",bold:true},
+            {l:"Today's Change",v:(todayChange>=0?"+":"")+fmt(todayChange),c:todayChange>=0?"#059669":"#dc2626",sub:totalValue>0?(todayChange>=0?"+":"")+((todayChange/totalValue)*100).toFixed(2)+"%":null},
+            ...(totalGain!=null?[{l:"Total Gain/Loss",v:(totalGain>=0?"+":"")+fmt(totalGain),c:totalGain>=0?"#059669":"#dc2626",sub:totalCost>0?(totalGain>=0?"+":"")+((totalGain/totalCost)*100).toFixed(2)+"%":null}]:[]),
+          ].map(card=>(
+            <div key={card.l} style={{...CA,padding:"16px 20px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{card.l}</div>
+              <div style={{fontSize:card.bold?22:20,fontWeight:800,color:card.c,letterSpacing:"-0.5px"}}>{card.v}</div>
+              {card.sub&&<div style={{fontSize:11,fontWeight:600,color:card.c,marginTop:3}}>{card.sub}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Holdings */}
+      {holdings.length>0&&(
+        <div style={{...CA,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Holdings</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:"1px solid #f1f5f9"}}>
+                  {["Symbol","Name","Shares","Price","Day Change","Value","Gain / Loss",""].map(h=>(
+                    <th key={h} style={{textAlign:h===""||h==="Shares"||h==="Price"||h==="Day Change"||h==="Value"||h==="Gain / Loss"?"right":"left",padding:"0 12px 10px "+(h===""?"0":"0"),color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map(h=>{
+                  const q=prices[h.ticker];
+                  const val=(q?.price??0)*h.shares;
+                  const gain=h.costBasis!=null?val-h.costBasis*h.shares:null;
+                  const gainPct=h.costBasis!=null&&h.costBasis>0?((gain/(h.costBasis*h.shares))*100):null;
+                  const dayChange=(q?.change??0)*h.shares;
+                  return editId===h.id?(
+                    <tr key={h.id} style={{borderBottom:"1px solid #f1f5f9",background:"#f8fbff"}}>
+                      <td style={{padding:"10px 12px 10px 0",fontWeight:700,color:"#0284C7"}}>{h.ticker}</td>
+                      <td colSpan={5} style={{padding:"10px 12px"}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                          <input type="number" value={editF.shares} onChange={e=>setEditF(p=>({...p,shares:e.target.value}))} placeholder="Shares" style={{...IS,width:90}} autoFocus/>
+                          <input type="number" value={editF.costBasis} onChange={e=>setEditF(p=>({...p,costBasis:e.target.value}))} placeholder="Cost/share (opt)" style={{...IS,width:130}}/>
+                          <Btn sm onClick={saveEdit}>Save</Btn>
+                          <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+                        </div>
+                      </td>
+                      <td/><td/>
+                    </tr>
+                  ):(
+                    <tr key={h.id} style={{borderBottom:"1px solid #f8fafc"}}>
+                      <td style={{padding:"12px 12px 12px 0",fontWeight:700,color:"#0284C7",whiteSpace:"nowrap"}}>
+                        {h.ticker}
+                        {q?.marketState==="REGULAR"&&<span style={{marginLeft:5,fontSize:9,background:"#dcfce7",color:"#059669",padding:"1px 5px",borderRadius:20,fontWeight:600}}>LIVE</span>}
+                      </td>
+                      <td style={{padding:"12px",color:"#374151",fontSize:12,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q?.name||"—"}</td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:500}}>{h.shares}</td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:700,color:"#1E293B"}}>{q?.price!=null?fmt(q.price):<span style={{color:"#94a3b8"}}>—</span>}</td>
+                      <td style={{padding:"12px",textAlign:"right",whiteSpace:"nowrap"}}>
+                        {q?.change!=null?<><span style={{fontWeight:600,color:q.change>=0?"#059669":"#dc2626"}}>{q.change>=0?"+":""}{fmt(dayChange)}</span><span style={{fontSize:11,color:q.change>=0?"#059669":"#dc2626",marginLeft:4}}>({q.changePercent>=0?"+":""}{q.changePercent?.toFixed(2)}%)</span></>:<span style={{color:"#94a3b8"}}>—</span>}
+                      </td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:700}}>{q?.price!=null?fmt(val):<span style={{color:"#94a3b8"}}>—</span>}</td>
+                      <td style={{padding:"12px",textAlign:"right",whiteSpace:"nowrap"}}>
+                        {gain!=null?<><span style={{fontWeight:600,color:gain>=0?"#059669":"#dc2626"}}>{gain>=0?"+":""}{fmt(gain)}</span>{gainPct!=null&&<span style={{fontSize:11,color:gain>=0?"#059669":"#dc2626",marginLeft:4}}>({gainPct>=0?"+":""}{gainPct.toFixed(2)}%)</span>}</>:<span style={{color:"#e2e8f0",fontSize:12}}>no cost</span>}
+                      </td>
+                      <td style={{padding:"12px 0 12px 8px",textAlign:"right",whiteSpace:"nowrap"}}>
+                        <div style={{display:"flex",gap:5,justifyContent:"flex-end"}}>
+                          <button onClick={()=>{setEditId(h.id);setEditF({shares:String(h.shares),costBasis:h.costBasis!=null?String(h.costBasis):""});}} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+                          <button onClick={()=>remove(h.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Add form */}
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>{holdings.length===0?"Add Your First Holding":"Add Holding"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          <Fld label="Ticker Symbol"><input style={IS} value={form.ticker} onChange={e=>setF("ticker",e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. AAPL, TSLA"/></Fld>
+          <Fld label="Number of Shares"><input style={IS} type="number" min="0" step="any" value={form.shares} onChange={e=>setF("shares",e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="10"/></Fld>
+          <Fld label="Cost per Share (optional)"><input style={IS} type="number" min="0" step="any" value={form.costBasis} onChange={e=>setF("costBasis",e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="For gain/loss"/></Fld>
+        </div>
+        <Btn onClick={add} disabled={!form.ticker.trim()||!form.shares} full>Add &amp; Fetch Price</Btn>
+      </div>
+    </div>
+  );
+}
+
+function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
+  const [form,setForm]=useState({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const monthOpts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+  const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
+  const [viewMonth,setViewMonth]=useState(today().slice(0,7));
+  const active=bills.filter(b=>b.active!==false);
+  const isPaid=(id,mo=viewMonth)=>billPayments.some(p=>p.billId===id&&p.month===mo);
+  const togglePaid=id=>{
+    if(isPaid(id)){onSaveBillPayments(billPayments.filter(p=>!(p.billId===id&&p.month===viewMonth)));}
+    else{const b=bills.find(x=>x.id===id);onSaveBillPayments([...billPayments,{id:uid(),billId:id,month:viewMonth,paidDate:today(),amount:b.amount}]);}
+  };
+  const add=()=>{
+    if(!form.name.trim()||!form.amount)return;
+    onSaveBills([...bills,{id:uid(),name:form.name.trim(),amount:parseFloat(form.amount)||0,category:form.category,dueDay:parseInt(form.dueDay)||15,note:form.note,active:true}]);
+    setForm({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
+  };
+  const remove=id=>onSaveBills(bills.filter(b=>b.id!==id));
+  const paidAmt=active.filter(b=>isPaid(b.id)).reduce((s,b)=>s+b.amount,0);
+  const totalAmt=active.reduce((s,b)=>s+b.amount,0);
+  const sorted=[...active].sort((a,b)=>a.dueDay-b.dueDay);
+  const ordinal=n=>n+(n===1?"st":n===2?"nd":n===3?"rd":"th");
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
+        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Bills</h2>
+        <select value={viewMonth} onChange={e=>setViewMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500}}>
+          {monthOpts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
+        </select>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+        {[{l:"Monthly Total",v:totalAmt,c:"#1E293B"},{l:"Paid",v:paidAmt,c:"#059669"},{l:"Remaining",v:totalAmt-paidAmt,c:totalAmt-paidAmt>0?"#dc2626":"#059669"}].map(card=>(
+          <div key={card.l} style={{...CA,padding:"16px 20px"}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{card.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:card.c,letterSpacing:"-0.5px"}}>{fmt(card.v)}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{...CA,marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Recurring Bill</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Bill Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Netflix, Rent, Phone"/></Fld>
+          <Fld label="Amount ($)"><input style={IS} type="number" value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Category"><select style={{...IS,background:"#fff"}} value={form.category} onChange={e=>set("category",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>
+          <Fld label="Due Day of Month"><input style={IS} type="number" min="1" max="28" value={form.dueDay} onChange={e=>set("dueDay",e.target.value)}/></Fld>
+        </div>
+        <Fld label="Note (optional)" style={{marginBottom:12}}><input style={IS} value={form.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
+        <Btn onClick={add} disabled={!form.name.trim()||!form.amount} full>Add Bill</Btn>
+      </div>
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Bills for {ml(viewMonth)}</div>
+        {sorted.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No bills yet. Add recurring bills above.</div>:sorted.map(b=>{
+          const paid=isPaid(b.id);
+          return(
+            <div key={b.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #f8fafc"}}>
+              <button onClick={()=>togglePaid(b.id)} style={{width:26,height:26,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?"#059669":"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all 0.15s",fontFamily:"inherit"}}>
+                {paid&&<span style={{fontSize:11,color:"#059669"}}>✓</span>}
+              </button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:paid?"#94a3b8":"#1E293B",textDecoration:paid?"line-through":"none"}}>{b.name}</div>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>Due {ordinal(b.dueDay)} · {b.category}{b.note?" · "+b.note:""}</div>
+              </div>
+              <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{fmt(b.amount)}</div>
+              <button onClick={()=>remove(b.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0}}>Remove</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Goals({goals,onSaveGoals}){
+  const [form,setForm]=useState({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const [contrib,setContrib]=useState({});
+  const GOAL_COLORS=["#0284C7","#059669","#d97706","#7c3aed","#db2777","#0891b2"];
+  const add=()=>{
+    if(!form.name.trim()||!form.targetAmount)return;
+    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"🎯",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
+    setForm({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  };
+  const logContrib=id=>{
+    const amt=parseFloat(contrib[id])||0;if(!amt)return;
+    onSaveGoals(goals.map(g=>g.id===id?{...g,currentAmount:Math.min(g.currentAmount+amt,g.targetAmount)}:g));
+    setContrib(p=>({...p,[id]:""}));
+  };
+  const remove=id=>onSaveGoals(goals.filter(g=>g.id!==id));
+  return(
+    <div>
+      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Savings Goals</h2>
+      {goals.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:14,marginBottom:16}}>
+          {goals.map(g=>{
+            const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
+            const remaining=Math.max(g.targetAmount-g.currentAmount,0);
+            const monthsLeft=g.monthlyTarget>0&&remaining>0?Math.ceil(remaining/g.monthlyTarget):null;
+            return(
+              <div key={g.id} style={{...CA,padding:"20px"}}>
+                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14}}>
+                  <div><div style={{fontSize:24,marginBottom:4}}>{g.emoji}</div><div style={{fontSize:15,fontWeight:700,color:"#1E293B"}}>{g.name}</div>{g.deadline&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>By {g.deadline}</div>}</div>
+                  <button onClick={()=>remove(g.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:18,fontFamily:"inherit",padding:0,lineHeight:1}}>×</button>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                  <span style={{fontSize:22,fontWeight:800,color:g.color||"#0284C7",letterSpacing:"-0.5px"}}>{fmt(g.currentAmount)}</span>
+                  <span style={{fontSize:13,color:"#94a3b8",alignSelf:"flex-end",marginBottom:2}}>of {fmt(g.targetAmount)}</span>
+                </div>
+                <div style={{height:8,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:6}}>
+                  <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s ease"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:pct<1?12:0}}>
+                  <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% saved</span>
+                  {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{fmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
+                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached! 🎉</span>}
+                </div>
+                {pct<1&&(
+                  <div style={{display:"flex",gap:8,borderTop:"1px solid #f1f5f9",paddingTop:10}}>
+                    <input type="number" placeholder="Add amount" value={contrib[g.id]||""} onChange={e=>setContrib(p=>({...p,[g.id]:e.target.value}))} style={{...IS,flex:1}} onKeyDown={e=>e.key==="Enter"&&logContrib(g.id)}/>
+                    <Btn sm onClick={()=>logContrib(g.id)} disabled={!contrib[g.id]}>Add</Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>{goals.length===0?"Create Your First Goal":"Add Another Goal"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Goal Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Emergency Fund, House"/></Fld>
+          <Fld label="Emoji"><input style={{...IS}} value={form.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎯"/></Fld>
+          <Fld label="Target Amount ($)"><input style={IS} type="number" value={form.targetAmount} onChange={e=>set("targetAmount",e.target.value)} placeholder="10000"/></Fld>
+          <Fld label="Already Saved ($)"><input style={IS} type="number" value={form.currentAmount} onChange={e=>set("currentAmount",e.target.value)} placeholder="0"/></Fld>
+          <Fld label="Monthly Target ($)"><input style={IS} type="number" value={form.monthlyTarget} onChange={e=>set("monthlyTarget",e.target.value)} placeholder="Optional"/></Fld>
+          <Fld label="Target Date"><input style={IS} type="date" value={form.deadline} onChange={e=>set("deadline",e.target.value)}/></Fld>
+        </div>
+        <Fld label="Color">
+          <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+            {GOAL_COLORS.map(c=><button key={c} onClick={()=>set("color",c)} style={{width:26,height:26,borderRadius:"50%",background:c,border:form.color===c?"3px solid #1E293B":"2px solid transparent",cursor:"pointer"}}/>)}
+          </div>
+        </Fld>
+        <Btn onClick={add} disabled={!form.name.trim()||!form.targetAmount} full>Create Goal</Btn>
+      </div>
+    </div>
+  );
+}
+
+function NetWorth({accounts,accountHistory,onSaveAccounts,onSaveAccountHistory,holdings=[],stockPrices={}}){
+  const [form,setForm]=useState({name:"",type:"chequing",balance:""});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const [editId,setEditId]=useState(null);
+  const [editBal,setEditBal]=useState("");
+  const TYPES=[{v:"chequing",l:"Chequing",asset:true},{v:"savings",l:"Savings",asset:true},{v:"investment",l:"Investment / RRSP",asset:true},{v:"credit",l:"Credit Card",asset:false},{v:"loan",l:"Loan / Mortgage",asset:false},{v:"other",l:"Other",asset:true}];
+  const isAsset=t=>TYPES.find(x=>x.v===t)?.asset!==false;
+  const add=()=>{
+    if(!form.name.trim())return;
+    const bal=parseFloat(form.balance)||0;
+    const acc={id:uid(),name:form.name.trim(),type:form.type,balance:bal};
+    onSaveAccounts([...accounts,acc]);
+    onSaveAccountHistory([...accountHistory,{id:uid(),accountId:acc.id,date:today(),balance:bal}]);
+    setForm({name:"",type:"chequing",balance:""});
+  };
+  const saveBalance=id=>{
+    const bal=parseFloat(editBal)||0;
+    onSaveAccounts(accounts.map(a=>a.id===id?{...a,balance:bal}:a));
+    onSaveAccountHistory([...accountHistory,{id:uid(),accountId:id,date:today(),balance:bal}]);
+    setEditId(null);
+  };
+  const remove=id=>{onSaveAccounts(accounts.filter(a=>a.id!==id));onSaveAccountHistory(accountHistory.filter(h=>h.accountId!==id));};
+  const assets=accounts.filter(a=>isAsset(a.type));
+  const liabilities=accounts.filter(a=>!isAsset(a.type));
+  const totalAssets=assets.reduce((s,a)=>s+a.balance,0);
+  const totalLiab=liabilities.reduce((s,a)=>s+a.balance,0);
+  const portfolioValue=holdings.reduce((s,h)=>s+(stockPrices[h.ticker]?.price??0)*h.shares,0);
+  const netWorth=totalAssets+portfolioValue-totalLiab;
+  const AccountRow=({a})=>(
+    <div style={{display:"flex",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #f8fafc",gap:10}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:500}}>{a.name}</div>
+        <div style={{fontSize:11,color:"#94a3b8"}}>{TYPES.find(t=>t.v===a.type)?.l||a.type}</div>
+      </div>
+      {editId===a.id
+        ?<div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="number" value={editBal} onChange={e=>setEditBal(e.target.value)} style={{...IS,width:100}} onKeyDown={e=>e.key==="Enter"&&saveBalance(a.id)} autoFocus/>
+            <Btn sm onClick={()=>saveBalance(a.id)}>Save</Btn>
+            <Btn sm v="secondary" onClick={()=>setEditId(null)}>✕</Btn>
+          </div>
+        :<>
+          <div style={{fontSize:14,fontWeight:700,color:isAsset(a.type)?"#059669":"#dc2626"}}>{fmt(a.balance)}</div>
+          <button onClick={()=>{setEditId(a.id);setEditBal(String(a.balance));}} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+          <button onClick={()=>remove(a.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+        </>}
+    </div>
+  );
+  return(
+    <div>
+      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Accounts & Net Worth</h2>
+      {(accounts.length>0||holdings.length>0)&&(
+        <div style={{...CA,padding:"24px 28px",marginBottom:16,borderLeft:`4px solid ${netWorth>=0?"#0284C7":"#dc2626"}`}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Net Worth</div>
+          <div style={{fontSize:40,fontWeight:800,color:netWorth>=0?"#059669":"#dc2626",letterSpacing:"-1.5px",marginBottom:10}}>{fmt(netWorth)}</div>
+          <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+            {totalAssets>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Assets <span style={{color:"#059669",fontWeight:700}}>{fmt(totalAssets)}</span></span>}
+            {portfolioValue>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Portfolio <span style={{color:"#0284C7",fontWeight:700}}>{fmt(portfolioValue)}</span></span>}
+            {totalLiab>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Liabilities <span style={{color:"#dc2626",fontWeight:700}}>{fmt(totalLiab)}</span></span>}
+          </div>
+        </div>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:assets.length>0&&liabilities.length>0?"1fr 1fr":"1fr",gap:16,marginBottom:16}}>
+        {assets.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Assets <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalAssets)}</span></div>{assets.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+        {liabilities.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Liabilities <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalLiab)}</span></div>{liabilities.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+      </div>
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Account</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Account Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. TD Chequing, Visa"/></Fld>
+          <Fld label="Type"><select style={{...IS,background:"#fff"}} value={form.type} onChange={e=>set("type",e.target.value)}>{TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</select></Fld>
+        </div>
+        <Fld label="Current Balance ($)" style={{marginBottom:12}}><input style={IS} type="number" value={form.balance} onChange={e=>set("balance",e.target.value)} placeholder="0.00"/></Fld>
+        <Btn onClick={add} disabled={!form.name.trim()} full>Add Account</Btn>
+      </div>
+    </div>
+  );
+}
+
 function WhatsNewModal({onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
@@ -1313,6 +1913,13 @@ export default function App(){
   const [vacations,setVacations]=useState([]);
   const [vacationTxns,setVacationTxns]=useState([]);
   const [receiptFPs,setReceiptFPs]=useState(new Set());
+  const [bills,setBills]=useState([]);
+  const [billPayments,setBillPayments]=useState([]);
+  const [goals,setGoals]=useState([]);
+  const [accounts,setAccounts]=useState([]);
+  const [accountHistory,setAccountHistory]=useState([]);
+  const [holdings,setHoldings]=useState([]);
+  const [stockPrices,setStockPrices]=useState({});
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
@@ -1331,6 +1938,12 @@ export default function App(){
       if(d.vacations) setVacations(d.vacations);
       if(d.vacationTxns) setVacationTxns(d.vacationTxns);
       if(d.receiptFPs) setReceiptFPs(new Set(d.receiptFPs));
+      if(d.bills) setBills(d.bills);
+      if(d.billPayments) setBillPayments(d.billPayments);
+      if(d.goals) setGoals(d.goals);
+      if(d.accounts) setAccounts(d.accounts);
+      if(d.accountHistory) setAccountHistory(d.accountHistory);
+      if(d.holdings) setHoldings(d.holdings);
       setReady(true);
     });
   },[]);
@@ -1342,6 +1955,17 @@ export default function App(){
   const saveVacations=v=>{setVacations(v);saveServerData({vacations:v})};
   const saveVacationTxns=t=>{setVacationTxns(t);saveServerData({vacationTxns:t})};
   const saveReceiptFPs=fps=>{setReceiptFPs(fps);saveServerData({receiptFPs:[...fps]})};
+  const saveBills=b=>{setBills(b);saveServerData({bills:b})};
+  const saveBillPayments=p=>{setBillPayments(p);saveServerData({billPayments:p})};
+  const saveGoals=g=>{setGoals(g);saveServerData({goals:g})};
+  const saveAccounts=a=>{setAccounts(a);saveServerData({accounts:a})};
+  const saveAccountHistory=h=>{setAccountHistory(h);saveServerData({accountHistory:h})};
+  const saveHoldings=h=>{setHoldings(h);saveServerData({holdings:h})};
+  const toggleBill=id=>{
+    const paid=billPayments.some(p=>p.billId===id&&p.month===month);
+    if(paid){saveBillPayments(billPayments.filter(p=>!(p.billId===id&&p.month===month)));}
+    else{const b=bills.find(x=>x.id===id);if(b)saveBillPayments([...billPayments,{id:uid(),billId:id,month,paidDate:today(),amount:b.amount}]);}
+  };
 
   const confirmPayment=id=>{
     const item=expected.find(e=>e.id===id);if(!item)return;
@@ -1357,8 +1981,9 @@ export default function App(){
 
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
 
-  const nav=[{k:"dashboard",l:"Dashboard"},{k:"expected",l:"Expected Income"},{k:"folder",l:"Folder Sync"},{k:"upload",l:"Upload Receipts"},{k:"manual",l:"Add Expense"},{k:"income",l:"Add Income"},{k:"history",l:"History"},{k:"vacations",l:"Vacations"},{k:"categories",l:"Categories"}];
+  const nav=[{k:"dashboard",l:"Dashboard"},{k:"bills",l:"Bills"},{k:"goals",l:"Goals"},{k:"networth",l:"Net Worth"},{k:"stocks",l:"Stocks"},{k:"expected",l:"Expected Income"},{k:"folder",l:"Folder Sync"},{k:"upload",l:"Upload Receipts"},{k:"manual",l:"Add Expense"},{k:"income",l:"Add Income"},{k:"history",l:"History"},{k:"vacations",l:"Vacations"},{k:"categories",l:"Categories"}];
   const pendingCount=expected.filter(e=>!e.confirmed).length;
+  const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
 
   return (
     <div style={{minHeight:"100vh",background:"#f0f9ff",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B"}}>
@@ -1373,6 +1998,7 @@ export default function App(){
               <button key={n.k} onClick={()=>setView(n.k)} style={{padding:"6px 13px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,whiteSpace:"nowrap",background:view===n.k?"#fff":"transparent",color:view===n.k?"#0284C7":"rgba(255,255,255,0.75)",flexShrink:0,fontFamily:"inherit",position:"relative",transition:"background 0.15s,color 0.15s"}}>
                 {n.l}
                 {n.k==="expected"&&pendingCount>0&&<span style={{position:"absolute",top:3,right:4,width:13,height:13,borderRadius:"50%",background:"#06B6D4",color:"#fff",fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{pendingCount}</span>}
+                {n.k==="bills"&&unpaidBillCount>0&&<span style={{position:"absolute",top:3,right:4,width:13,height:13,borderRadius:"50%",background:"#dc2626",color:"#fff",fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unpaidBillCount}</span>}
               </button>
             ))}
           </nav>
@@ -1380,13 +2006,17 @@ export default function App(){
       </header>
       <main style={{maxWidth:1140,margin:"0 auto",padding:"24px 20px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns}/>}
+        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices}/>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="manual"&&<RecurringForm title="Add Expense" type="expense" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="income"&&<RecurringForm title="Add Income" type="income" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast}/>}
+        {view==="bills"&&<Bills bills={bills} billPayments={billPayments} onSaveBills={saveBills} onSaveBillPayments={saveBillPayments} cats={cats}/>}
+        {view==="goals"&&<Goals goals={goals} onSaveGoals={saveGoals}/>}
+        {view==="networth"&&<NetWorth accounts={accounts} accountHistory={accountHistory} onSaveAccounts={saveAccounts} onSaveAccountHistory={saveAccountHistory} holdings={holdings} stockPrices={stockPrices}/>}
+        {view==="stocks"&&<Stocks holdings={holdings} onSaveHoldings={saveHoldings} onPricesUpdate={setStockPrices}/>}
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
         {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets}/>}
