@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell, ReferenceLine, PieChart, Pie, AreaChart, Area } from "recharts";
 
 const DEFAULT_CATS = ["Groceries","Dining","Transport","Utilities","Entertainment","Health","Shopping","Fuel","Other"];
 const COLORS = ["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#84cc16","#6b7280","#f97316"];
@@ -10,6 +10,7 @@ const CADENCES = [
 ];
 
 const fmt = n => new Intl.NumberFormat("en-CA",{style:"currency",currency:"CAD"}).format(n||0);
+const fmtUSD = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(n||0);
 const today = () => new Date().toISOString().split("T")[0];
 const uid = () => Math.random().toString(36).slice(2)+Date.now().toString(36);
 const toB64 = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
@@ -152,12 +153,49 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
   );
 }
 
-function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[]}){
+function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,month,ml,GREEN,RED}){
+  const [open,setOpen]=useState(true);
+  return(
+    <div style={{...CA,marginBottom:14}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Bills Due — {ml(month)}</span>
+          <span style={{fontSize:11,fontWeight:600,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
+          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED,fontWeight:600}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
+        </div>
+        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,flexShrink:0}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&(
+        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+          {[...monthBills].sort((a,b)=>a.dueDay-b.dueDay).map(b=>{
+            const paid=billPaid(b.id);
+            return(
+              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 12px",borderRadius:10,background:paid?"#f0fdf4":"#fafafa",border:`1px solid ${paid?"#bbf7d0":"#f1f5f9"}`,cursor:"pointer",transition:"all 0.15s"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                  <div style={{width:20,height:20,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?GREEN:"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {paid&&<span style={{fontSize:10,color:GREEN}}>✓</span>}
+                  </div>
+                  <span style={{fontSize:12,fontWeight:600,color:paid?"#94a3b8":"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
+                </div>
+                <span style={{fontSize:12,fontWeight:700,color:paid?"#94a3b8":RED,flexShrink:0}}>{fmt(b.amount)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={},fxRate=1.38}){
   const opts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const mt=txns.filter(t=>t.date&&t.date.startsWith(month));
   const actualIncome=mt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const spending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const txnSpending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  // Paid bills for this month count as spending
+  const paidBillsTotal=billPayments.filter(p=>p.month===month).reduce((s,p)=>s+p.amount,0);
+  const spending=txnSpending+paidBillsTotal;
   const mExp=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(month));
   const pendingExp=mExp.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0);
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
@@ -196,6 +234,26 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   const yearExpenses=yearData.reduce((s,d)=>s+d.Expenses,0);
   const GREEN="#059669", RED="#dc2626", YELLOW="#d97706";
   const [chartTab,setChartTab]=useState("6mo");
+  // Net worth
+  const ASSET_TYPES=["chequing","savings","investment","other"];
+  const totalAssets=accounts.filter(a=>ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+  const totalLiab=accounts.filter(a=>!ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+  const netWorth=totalAssets-totalLiab;
+  const portfolioValue=holdings.reduce((s,h)=>{const cur=stockPrices[h.ticker]?.currency??(h.ticker.toUpperCase().endsWith('.TO')?'CAD':'USD');return s+(stockPrices[h.ticker]?.price??0)*h.shares*(cur==='USD'?fxRate:1);},0);
+  // Bills due this month
+  const monthBills=bills.filter(b=>b.active!==false);
+  const billPaid=id=>billPayments.some(p=>p.billId===id&&p.month===month);
+  const billsUnpaid=monthBills.filter(b=>!billPaid(b.id));
+  const billsPaid=monthBills.filter(b=>billPaid(b.id));
+  // Budget health — last 6 months per category
+  const bhMonths=Array.from({length:6},(_,i)=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-5+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+  const budgetHealth=cats.filter(c=>catBudgets[c]>0).map(c=>{
+    const bgt=catBudgets[c];
+    return{name:c,budget:bgt,months:bhMonths.map(ym=>{const spent=txns.filter(t=>t.date&&t.date.startsWith(ym)&&t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0);return{ym,spent,status:spent===0?"none":spent>bgt?"over":"ok"};})};
+  });
+  // Anomaly detection — flag transactions >2.5x category average (min 3 txns)
+  const catAvgs={};cats.forEach(c=>{const ct=txns.filter(t=>t.type==="expense"&&t.category===c&&t.amount>0);if(ct.length>=3)catAvgs[c]=ct.reduce((s,t)=>s+t.amount,0)/ct.length;});
+  const isAnomaly=t=>t.type==="expense"&&catAvgs[t.category]&&t.amount>2.5*catAvgs[t.category];
   return (
     <div>
       {/* Header */}
@@ -218,6 +276,18 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
       </div>
 
+      {/* Net worth strip */}
+      {(accounts.length>0||holdings.length>0)&&(
+        <div style={{...CA,padding:"12px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",flexShrink:0}}>Net Worth</div>
+          <div style={{fontSize:18,fontWeight:800,color:netWorth>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(netWorth+(portfolioValue||0))}</div>
+          <div style={{fontSize:12,color:"#94a3b8",display:"flex",gap:14,flexWrap:"wrap"}}>
+            <span>Assets <span style={{color:GREEN,fontWeight:600}}>{fmt(totalAssets)}</span></span>
+            <span>Liabilities <span style={{color:RED,fontWeight:600}}>{fmt(totalLiab)}</span></span>
+            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:"#0284C7",fontWeight:600}}>{fmt(portfolioValue)}</span></span>}
+          </div>
+        </div>
+      )}
       {/* Three stat cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
         <div style={{...CA,padding:"20px 22px"}}>
@@ -243,6 +313,36 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
 
       {/* Expected Income widget */}
       {mExp.length>0&&<div style={{marginBottom:14}}><ExpectedIncomeWidget mExp={mExp} ml={ml} month={month} GREEN={GREEN} YELLOW={YELLOW} onConfirm={onConfirm} onRevert={onRevert}/></div>}
+
+      {/* Bills Due widget */}
+      {monthBills.length>0&&<BillsDueWidget monthBills={monthBills} billsPaid={billsPaid} billsUnpaid={billsUnpaid} billPaid={billPaid} onToggleBill={onToggleBill} month={month} ml={ml} GREEN={GREEN} RED={RED}/>}
+
+      {/* Goals strip */}
+      {goals.length>0&&(
+        <div style={{...CA,marginBottom:14,padding:"16px 20px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Savings Goals</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+            {goals.map(g=>{
+              const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
+              return(
+                <div key={g.id} style={{padding:"10px 14px",borderRadius:10,background:"#fafafa",border:"1px solid #f1f5f9"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:16}}>{g.emoji}</span>
+                    <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
+                  </div>
+                  <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:5}}>
+                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s"}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontSize:11,fontWeight:600,color:g.color||"#0284C7"}}>{fmt(g.currentAmount)}</span>
+                    <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
@@ -325,6 +425,49 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
       </div>
 
+      {/* Budget Health */}
+      {budgetHealth.length>0&&(
+        <div style={{...CA,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Budget Health — Last 6 Months</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr>
+                  <th style={{textAlign:"left",padding:"0 10px 8px 0",color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>Category</th>
+                  {bhMonths.map(ym=><th key={ym} style={{textAlign:"center",padding:"0 6px 8px",color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{new Date(ym+"-02").toLocaleString("default",{month:"short"})}</th>)}
+                  <th style={{textAlign:"right",padding:"0 0 8px 10px",color:"#94a3b8",fontWeight:600,fontSize:11}}>Budget</th>
+                </tr>
+              </thead>
+              <tbody>
+                {budgetHealth.map(row=>{
+                  const hits=row.months.filter(m=>m.status==="ok").length;
+                  const total=row.months.filter(m=>m.status!=="none").length;
+                  return(
+                    <tr key={row.name} style={{borderTop:"1px solid #f8fafc"}}>
+                      <td style={{padding:"7px 10px 7px 0",fontWeight:500,color:"#374151",whiteSpace:"nowrap"}}>
+                        {row.name}
+                        {total>0&&<span style={{fontSize:10,marginLeft:7,color:hits===total?"#059669":hits/total>=0.5?"#d97706":"#dc2626",fontWeight:600}}>{hits}/{total}</span>}
+                      </td>
+                      {row.months.map(m=>(
+                        <td key={m.ym} style={{textAlign:"center",padding:"7px 6px"}}>
+                          {m.status==="ok"&&<span title={fmt(m.spent)} style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#dcfce7",border:"1.5px solid #059669",lineHeight:"14px",fontSize:10,color:"#059669"}}>✓</span>}
+                          {m.status==="over"&&<span title={fmt(m.spent)} style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#fee2e2",border:"1.5px solid #dc2626",lineHeight:"14px",fontSize:10,color:"#dc2626"}}>✗</span>}
+                          {m.status==="none"&&<span style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#f8fafc",border:"1.5px solid #f1f5f9"}}/>}
+                        </td>
+                      ))}
+                      <td style={{textAlign:"right",padding:"7px 0 7px 10px",color:"#94a3b8",fontSize:11}}>{fmt(row.budget)}/mo</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Stock price chart */}
+      {holdings.length>0&&<StockPriceChart holdings={holdings}/>}
+
       {/* Recent Transactions */}
       <div style={CA}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Recent Transactions</div>
@@ -335,7 +478,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                 {t.type==="income"?"💰":"🧾"}
               </div>
               <div>
-                <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{t.merchant||t.source}</div>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{t.merchant||t.source}</span>
+                  {isAnomaly(t)&&<span title={"Avg for "+t.category+": "+fmt(catAvgs[t.category])} style={{fontSize:9,fontWeight:700,background:"#fef3c7",color:"#92400e",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em",border:"1px solid #fde68a"}}>UNUSUAL</span>}
+                </div>
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>{t.date}{t.type==="expense"&&t.category?" · "+t.category:" · Income"}</div>
               </div>
             </div>
@@ -358,19 +504,42 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   const deleteSelected=()=>{onUpdate(expected.filter(e=>!selected.has(e.id)));exitSelect();};
   const confirmSelected=()=>{[...selected].forEach(id=>onConfirm(id));exitSelect();};
   const allPendingSelected=[...selected].every(id=>{const e=expected.find(x=>x.id===id);return e&&!e.confirmed;});
+
+  // How many times does a cadence fit from startDate to Dec 31 of that same year?
+  const countForYear=(start,cadence)=>{
+    const yearEnd=new Date(new Date(start+"T12:00:00").getFullYear(),11,31);
+    let d=new Date(start+"T12:00:00"),count=1;
+    while(true){
+      const n=new Date(d);
+      if(cadence==="weekly") n.setDate(n.getDate()+7);
+      else if(cadence==="biweekly") n.setDate(n.getDate()+14);
+      else if(cadence==="every15") n.setDate(n.getDate()+15);
+      else if(cadence==="monthly") n.setMonth(n.getMonth()+1);
+      else if(cadence==="bimonthly") n.setMonth(n.getMonth()+2);
+      else if(cadence==="quarterly") n.setMonth(n.getMonth()+3);
+      else if(cadence==="annually") n.setFullYear(n.getFullYear()+1);
+      else break;
+      if(n>yearEnd)break;
+      count++;d=n;
+    }
+    return count;
+  };
+
+  const amtNum=parseFloat(f.amount)||0;
+  const recurring=f.recurrence!=="once";
+  const yearCount=recurring?countForYear(f.expectedDate,f.recurrence):1;
+  const recurrenceLabel=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
+
   const add=()=>{
     if(!f.source.trim()||!f.amount) return;
-    const base={source:f.source.trim(),amount:parseFloat(f.amount)||0,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null};
-    const items=[{...base,id:uid()}];
-    if(f.recurrence!=="once"){
-      const count=f.recurrence==="monthly"?11:3;
-      for(let i=1;i<=count;i++){
-        const d=new Date(f.expectedDate+"T12:00:00");
-        if(f.recurrence==="monthly") d.setMonth(d.getMonth()+i);
-        else if(f.recurrence==="biweekly") d.setDate(d.getDate()+i*14);
-        else if(f.recurrence==="weekly") d.setDate(d.getDate()+i*7);
-        items.push({...base,id:uid(),expectedDate:d.toISOString().split("T")[0]});
-      }
+    const base={source:f.source.trim(),amount:amtNum,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null};
+    let items;
+    if(recurring){
+      const gid=uid();
+      const dates=buildDates(f.expectedDate,f.recurrence,yearCount);
+      items=dates.map(date=>({...base,id:uid(),expectedDate:date,groupId:gid,cadence:f.recurrence}));
+    } else {
+      items=[{...base,id:uid()}];
     }
     onUpdate([...expected,...items]);
     setF({source:"",amount:"",expectedDate:today(),recurrence:"once",note:""});
@@ -380,7 +549,30 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   const confirmed=expected.filter(e=>e.confirmed);
   const shown=filter==="pending"?pending:filter==="confirmed"?confirmed:expected;
   const sorted=[...shown].sort((a,b)=>(a.expectedDate||"").localeCompare(b.expectedDate||""));
-  const sumCards=[{l:"Pending Income",v:pending.reduce((s,e)=>s+e.amount,0),c:"#0284C7",sub:pending.length+" item"+(pending.length!==1?"s":"")},{l:"Confirmed Received",v:confirmed.reduce((s,e)=>s+e.amount,0),c:"#059669",sub:confirmed.length+" item"+(confirmed.length!==1?"s":"")},{l:"Total Scheduled",v:expected.reduce((s,e)=>s+e.amount,0),c:"#111827",sub:expected.length+" total"}];
+  const thisYear=new Date().getFullYear().toString();
+  const thisMonth=today().slice(0,7);
+  const confirmedYear=confirmed.filter(e=>(e.expectedDate||"").startsWith(thisYear));
+  const confirmedMonth=confirmed.filter(e=>(e.expectedDate||"").startsWith(thisMonth));
+
+  // Extrapolate yearly: deduplicate recurring groups → amount × annual frequency + one-offs
+  const timesPerYear=c=>({weekly:52,biweekly:26,every15:24,monthly:12,bimonthly:6,quarterly:4,annually:1}[c]||1);
+  const allYear=expected.filter(e=>(e.expectedDate||"").startsWith(thisYear));
+  const seenGroups=new Set();
+  const projectedYearly=allYear.reduce((s,e)=>{
+    if(e.groupId){
+      if(seenGroups.has(e.groupId))return s;
+      seenGroups.add(e.groupId);
+      return s+e.amount*timesPerYear(e.cadence);
+    }
+    return s+e.amount; // one-off
+  },0);
+  const confirmedYearTotal=confirmedYear.reduce((s,e)=>s+e.amount,0);
+  const confirmedMonthTotal=confirmedMonth.reduce((s,e)=>s+e.amount,0);
+
+  const sumCards=[
+    {l:`Projected Annual ${thisYear}`,v:projectedYearly,c:"#0284C7",sub:`${fmt(confirmedYearTotal)} confirmed · ${fmt(confirmedMonthTotal)} this month`},
+    {l:"Total Scheduled",v:expected.reduce((s,e)=>s+e.amount,0),c:"#111827",sub:expected.length+" total"},
+  ];
   return (
     <div>
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Expected Income</h2>
@@ -392,14 +584,16 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
           <Fld label="Expected Date"><input style={IS} type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)}/></Fld>
           <Fld label="Recurrence">
             <select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>
-              <option value="once">One-time</option>
-              <option value="weekly">Weekly (4 weeks)</option>
-              <option value="biweekly">Bi-weekly (4 entries)</option>
-              <option value="monthly">Monthly (12 months)</option>
+              {CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}
             </select>
           </Fld>
+          {recurring&&amtNum>0&&(
+            <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
+              {yearCount} {recurrenceLabel.toLowerCase()} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+            </div>
+          )}
           <Fld label="Note (optional)" style={{marginBottom:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-          <Btn onClick={add} disabled={!f.source.trim()||!f.amount} full>Add to Schedule</Btn>
+          <Btn onClick={add} disabled={!f.source.trim()||!f.amount} full>{recurring?`Add ${yearCount} Entries`:"Add to Schedule"}</Btn>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           {sumCards.map(item=>(
@@ -1277,6 +1471,2281 @@ function Toast({msg,undoFn,onClose}){
   );
 }
 
+const STOCK_COLORS=["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#f97316"];
+
+function StockPriceChart({holdings}){
+  const RANGES=[
+    {l:"1W",v:"5d",iv:"1h"},
+    {l:"1M",v:"1mo",iv:"1d"},
+    {l:"3M",v:"3mo",iv:"1d"},
+    {l:"6M",v:"6mo",iv:"1wk"},
+    {l:"1Y",v:"1y",iv:"1wk"},
+    {l:"YTD",v:"ytd",iv:"1d"},
+    {l:"5Y",v:"5y",iv:"1mo"},
+    {l:"All",v:"max",iv:"3mo"},
+  ];
+  const [range,setRange]=useState("1mo");
+  const [chartData,setChartData]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [pinA,setPinA]=useState(null); // {date, vals:{ticker: normalizedPct}}
+  const [hover,setHover]=useState(null); // same shape, tracks mouse position
+  const chartRef=useRef(null);
+
+  // Clear pin when clicking outside the chart card
+  useEffect(()=>{
+    const onDocClick=(e)=>{
+      if(chartRef.current&&!chartRef.current.contains(e.target)){
+        setPinA(null);setHover(null);
+      }
+    };
+    document.addEventListener("mousedown",onDocClick);
+    return()=>document.removeEventListener("mousedown",onDocClick);
+  },[]);
+
+  useEffect(()=>{
+    if(!holdings.length){setChartData([]);return;}
+    setPinA(null);setHover(null);
+    setLoading(true);setError(null);
+    const rv=RANGES.find(r=>r.v===range)||RANGES[1];
+    Promise.all(holdings.map(h=>
+      fetch(`/api/stocks/history?symbol=${h.ticker}&range=${rv.v}&interval=${rv.iv}`)
+        .then(r=>r.json()).catch(()=>({symbol:h.ticker,points:[]}))
+    )).then(results=>{
+      const seriesMap={};
+      results.forEach(({symbol,points})=>{
+        if(!points||!points.length)return;
+        const base=points[0].close;
+        points.forEach(p=>{
+          if(!seriesMap[p.date])seriesMap[p.date]={date:p.date};
+          seriesMap[p.date][symbol]=base>0?+((p.close-base)/base*100).toFixed(4):0;
+        });
+      });
+      setChartData(Object.values(seriesMap).sort((a,b)=>a.date.localeCompare(b.date)));
+      setLoading(false);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[holdings.map(h=>h.ticker).join(","),range]);
+
+  const [selected,setSelected]=useState(()=>new Set(holdings.map(h=>h.ticker)));
+  // Keep selected in sync when holdings change (add newly added tickers, remove deleted)
+  useEffect(()=>{
+    const all=new Set(holdings.map(h=>h.ticker));
+    setSelected(prev=>{
+      const next=new Set([...prev].filter(t=>all.has(t)));
+      all.forEach(t=>{if(!prev.has(t))next.add(t);});
+      return next;
+    });
+  },[holdings.map(h=>h.ticker).join(",")]);// eslint-disable-line
+
+  const toggleTicker=(tk)=>setSelected(prev=>{
+    const next=new Set(prev);
+    if(next.has(tk)){if(next.size>1)next.delete(tk);}
+    else next.add(tk);
+    return next;
+  });
+
+  if(!holdings.length)return null;
+
+  const tickers=holdings.map(h=>h.ticker);
+  const activeTickers=tickers.filter(t=>selected.has(t));
+
+  // Period change for each active ticker (first → last data point)
+  const periodChange=tk=>{
+    const pts=chartData.filter(d=>d[tk]!=null);
+    if(pts.length<2)return null;
+    return pts[pts.length-1][tk]; // normalized pct from period start
+  };
+
+  const extractPoint=(data)=>{
+    if(!data||!data.activeLabel)return null;
+    const vals={};
+    (data.activePayload||[]).forEach(p=>{vals[p.dataKey]=p.value;});
+    return{date:data.activeLabel,vals};
+  };
+
+  const handleClick=(data)=>{
+    const pt=extractPoint(data);
+    if(!pt)return;
+    if(!pinA||pt.date===pinA.date){setPinA(pt);}
+    else{setPinA(pt);}  // clicking always resets the pin to the new point
+  };
+
+  const handleMouseMove=(data)=>{
+    const pt=extractPoint(data);
+    setHover(pt);
+  };
+
+  const handleMouseLeave=()=>setHover(null);
+
+  // % return from pinA to any point
+  const compareReturn=(a,b)=>((1+b/100)/(1+a/100)-1)*100;
+
+  const comparePoint=pinA&&hover&&hover.date!==pinA.date?hover:null;
+
+  const fmtPct=v=>(v>=0?"+":"")+v.toFixed(2)+"%";
+
+  return(
+    <div ref={chartRef} style={{...CA,marginTop:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>Stock Performance</div>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          {RANGES.map(r=>(
+            <button key={r.v} onClick={()=>setRange(r.v)} style={{padding:"3px 10px",borderRadius:20,border:"1.5px solid "+(range===r.v?"#3b82f6":"#e2e8f0"),background:range===r.v?"#3b82f6":"#fff",color:range===r.v?"#fff":"#64748b",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{r.l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Ticker filter chips + period change summary */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
+        {tickers.map((tk,i)=>{
+          const color=STOCK_COLORS[i%STOCK_COLORS.length];
+          const isOn=selected.has(tk);
+          const pct=periodChange(tk);
+          return(
+            <button key={tk} onClick={()=>toggleTicker(tk)} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,border:`1.5px solid ${isOn?color:"#e2e8f0"}`,background:isOn?color+"18":"#f8fafc",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:isOn?color:"#cbd5e1",flexShrink:0,display:"inline-block"}}/>
+              <span style={{fontSize:11,fontWeight:700,color:isOn?color:"#94a3b8"}}>{tk}</span>
+              {pct!=null&&isOn&&<span style={{fontSize:11,fontWeight:700,color:pct>=0?"#059669":"#dc2626"}}>{fmtPct(pct)}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Compare panel — hover after pin */}
+      {pinA&&comparePoint&&(
+        <div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:"#f0f9ff",border:"1px solid #bae6fd",display:"flex",flexWrap:"wrap",gap:14,alignItems:"center"}}>
+          <div style={{fontSize:11,color:"#0284C7",fontWeight:600}}>{pinA.date} → {comparePoint.date}</div>
+          {activeTickers.map((tk,i)=>{
+            const globalIdx=tickers.indexOf(tk);
+            const a=pinA.vals[tk]??null;
+            const b=comparePoint.vals[tk]??null;
+            if(a==null||b==null)return null;
+            const ret=compareReturn(a,b);
+            return(
+              <div key={tk} style={{display:"flex",alignItems:"center",gap:5}}>
+                <span style={{width:8,height:8,borderRadius:"50%",background:STOCK_COLORS[globalIdx%STOCK_COLORS.length],display:"inline-block"}}/>
+                <span style={{fontSize:12,fontWeight:600,color:"#374151"}}>{tk}</span>
+                <span style={{fontSize:13,fontWeight:800,color:ret>=0?"#059669":"#dc2626"}}>{fmtPct(ret)}</span>
+              </div>
+            );
+          })}
+          <button onClick={(e)=>{e.stopPropagation();setPinA(null);}} style={{marginLeft:"auto",fontSize:11,color:"#94a3b8",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>✕ Clear</button>
+        </div>
+      )}
+      {pinA&&!comparePoint&&(
+        <div style={{marginBottom:10,padding:"8px 14px",borderRadius:10,background:"#fefce8",border:"1px solid #fde68a",fontSize:11,color:"#92400e",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span>From: <strong>{pinA.date}</strong> — hover to compare · click to repin</span>
+          <button onClick={(e)=>{e.stopPropagation();setPinA(null);}} style={{fontSize:11,color:"#94a3b8",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",marginLeft:12}}>✕ Clear</button>
+        </div>
+      )}
+
+      {loading&&<div style={{textAlign:"center",padding:"32px 0",color:"#94a3b8",fontSize:13}}>Loading…</div>}
+      {error&&<div style={{color:"#dc2626",fontSize:12,padding:"8px 0"}}>{error}</div>}
+      {!loading&&chartData.length>0&&(
+        <>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData} margin={{top:4,right:8,left:0,bottom:0}} onClick={handleClick} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} style={{cursor:pinA?"crosshair":"default"}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+              <XAxis dataKey="date" tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={d=>d.slice(5)} tickLine={false} axisLine={false} interval="preserveStartEnd"/>
+              <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>v.toFixed(0)+"%"} tickLine={false} axisLine={false} width={40}/>
+              <Tooltip formatter={(v,name)=>[fmtPct(Number(v)),name]} labelStyle={{fontSize:11,color:"#64748b"}} contentStyle={{fontSize:12,borderRadius:8,border:"1px solid #e2e8f0",boxShadow:"0 4px 12px rgba(0,0,0,.08)"}}/>
+              {pinA&&<ReferenceLine x={pinA.date} stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 2" label={{value:"from",position:"top",fill:"#f59e0b",fontSize:10,fontWeight:700}}/>}
+              {tickers.map((tk,i)=>(
+                <Line key={tk} type="monotone" dataKey={tk} stroke={STOCK_COLORS[i%STOCK_COLORS.length]} strokeWidth={selected.has(tk)?2:0} strokeOpacity={selected.has(tk)?1:0} dot={false} activeDot={selected.has(tk)?{r:4}:false} connectNulls hide={!selected.has(tk)}/>
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{fontSize:10,color:"#94a3b8",marginTop:2,textAlign:"right"}}>% change · normalized · {pinA?"hover to compare · click to repin":"click to pin start date"}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
+  const [prices,setPrices]=useState({});
+  const [fxRate,setFxRate]=useState(1.38); // USD→CAD live rate
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [lastUpdated,setLastUpdated]=useState(null);
+
+  // helpers
+  const getCur=tk=>prices[tk]?.currency??(tk.toUpperCase().endsWith('.TO')?'CAD':'USD');
+  const fmtN=(n,cur)=>cur==='USD'?fmtUSD(n):fmt(n);
+  const toCAD=(amount,cur)=>cur==='USD'?amount*fxRate:amount;
+  const [form,setForm]=useState({ticker:"",shares:"",costBasis:""});
+  const [editId,setEditId]=useState(null);
+  const [editF,setEditF]=useState({});
+  const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const fetchPrices=async(hdgs=holdings)=>{
+    if(!hdgs.length)return;
+    setLoading(true);setError(null);
+    try{
+      const symbols=hdgs.map(h=>h.ticker.toUpperCase()).join(",");
+      const [stockRes,fxRes]=await Promise.all([
+        fetch(`/api/stocks?symbols=${encodeURIComponent(symbols)}`),
+        fetch(`/api/stocks?symbols=USDCAD%3DX`),
+      ]);
+      const stockData=await stockRes.json();
+      const fxData=await fxRes.json();
+      if(stockData.error)throw new Error(stockData.error);
+      const map=Object.fromEntries((stockData.quotes||[]).map(q=>[q.symbol,q]));
+      const rate=fxData.quotes?.[0]?.price??fxRate;
+      setPrices(map);
+      setFxRate(rate);
+      onPricesUpdate&&onPricesUpdate(map);
+      onFxRateUpdate&&onFxRateUpdate(rate);
+      setLastUpdated(new Date());
+    }catch(e){setError("Could not fetch prices: "+e.message);}
+    setLoading(false);
+  };
+
+  useEffect(()=>{
+    if(holdings.length){fetchPrices();}
+    const iv=setInterval(()=>{if(holdings.length)fetchPrices();},60000);
+    return()=>clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[holdings.map(h=>h.ticker).join(",")]);
+
+  const add=()=>{
+    const tk=form.ticker.trim().toUpperCase();
+    if(!tk||!form.shares)return;
+    if(holdings.some(h=>h.ticker===tk)){setError("Already tracking "+tk);return;}
+    const next=[...holdings,{id:uid(),ticker:tk,shares:parseFloat(form.shares)||0,costBasis:form.costBasis?parseFloat(form.costBasis):null}];
+    onSaveHoldings(next);setForm({ticker:"",shares:"",costBasis:""});setError(null);
+    setTimeout(()=>fetchPrices(next),300);
+  };
+  const remove=id=>onSaveHoldings(holdings.filter(h=>h.id!==id));
+  const saveEdit=()=>{
+    onSaveHoldings(holdings.map(h=>h.id===editId?{...h,shares:parseFloat(editF.shares)||0,costBasis:editF.costBasis?parseFloat(editF.costBasis):null}:h));
+    setEditId(null);
+  };
+
+  const [showAdd,setShowAdd]=useState(false);
+  const [quickId,setQuickId]=useState(null);
+  const [quickShares,setQuickShares]=useState("");
+
+  const confirmQuickAdd=()=>{
+    const n=parseFloat(quickShares);
+    if(!n||n<=0){setQuickId(null);setQuickShares("");return;}
+    onSaveHoldings(holdings.map(h=>{
+      if(h.id!==quickId)return h;
+      const curPrice=prices[h.ticker]?.price??null;
+      const newShares=h.shares+n;
+      let newCostBasis=h.costBasis;
+      if(curPrice!=null){
+        const oldCost=(h.costBasis??curPrice)*h.shares;
+        newCostBasis=+(( oldCost+curPrice*n)/newShares).toFixed(4);
+      }
+      return{...h,shares:+newShares.toFixed(6),costBasis:newCostBasis};
+    }));
+    setQuickId(null);setQuickShares("");
+  };
+  // Native-currency per-holding value
+  const hVal=h=>(prices[h.ticker]?.price??0)*h.shares;
+  // CAD-converted totals (for combined display)
+  const totalValueCAD=holdings.reduce((s,h)=>s+toCAD(hVal(h),getCur(h.ticker)),0);
+  const totalCostCAD=holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+toCAD(h.costBasis*h.shares,getCur(h.ticker)),0);
+  const totalGainCAD=totalCostCAD>0?totalValueCAD-totalCostCAD:null;
+  // For USD-only / CAD-only display
+  const hasUSD=holdings.some(h=>getCur(h.ticker)==='USD');
+  const hasCAD=holdings.some(h=>getCur(h.ticker)==='CAD');
+  const isMixed=hasUSD&&hasCAD;
+  const anyOpen=Object.values(prices).some(q=>q.marketState==="REGULAR");
+
+  return(
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Stock Portfolio</h2>
+          {lastUpdated&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Prices as of {lastUpdated.toLocaleTimeString()} · {anyOpen?<span style={{color:"#059669",fontWeight:600}}>Market Open</span>:<span style={{color:"#94a3b8"}}>Market Closed</span>}</div>}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>setShowAdd(v=>!v)} style={{padding:"7px 14px",borderRadius:10,border:"1.5px solid "+(showAdd?"#0284C7":"#e2e8f0"),background:showAdd?"#0284C7":"#fff",color:showAdd?"#fff":"#374151",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit"}}>
+            {showAdd?"✕ Close":"+ Add Holding"}
+          </button>
+          <button onClick={()=>fetchPrices()} disabled={loading||!holdings.length} style={{padding:"7px 14px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#fff",color:"#0284C7",cursor:loading||!holdings.length?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:loading||!holdings.length?0.5:1}}>
+            {loading?"Updating…":"↻ Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {error&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,background:"#fee2e2",color:"#b91c1c",fontSize:13,border:"1px solid #fecaca"}}>{error}</div>}
+
+      {/* Collapsible add form */}
+      {(showAdd||holdings.length===0)&&(
+        <div style={{...CA,marginBottom:16}}>
+          <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:6}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>{holdings.length===0?"Add Your First Holding":"Add Holding"}</div>
+            <div style={{fontSize:11,color:"#94a3b8"}}>Canadian stocks: use <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:4,fontSize:11}}>SHOP.TO</code>, <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:4,fontSize:11}}>RY.TO</code>, etc.</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+            <Fld label="Ticker Symbol"><input style={IS} value={form.ticker} onChange={e=>setF("ticker",e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. AAPL, TSLA" autoFocus={showAdd}/></Fld>
+            <Fld label="Number of Shares"><input style={IS} type="number" min="0" step="any" value={form.shares} onChange={e=>setF("shares",e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="10"/></Fld>
+            <Fld label="Cost per Share (optional)"><input style={IS} type="number" min="0" step="any" value={form.costBasis} onChange={e=>setF("costBasis",e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="For gain/loss"/></Fld>
+          </div>
+          <Btn onClick={()=>{add();setShowAdd(false);}} disabled={!form.ticker.trim()||!form.shares} full>Add &amp; Fetch Price</Btn>
+        </div>
+      )}
+
+      {/* Chart */}
+      <StockPriceChart holdings={holdings}/>
+
+      {/* Summary cards */}
+      {holdings.length>0&&(
+        <div style={{marginTop:14,marginBottom:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
+            {/* Portfolio Value card — shows mixed currencies if applicable */}
+            <div style={{...CA,padding:"16px 20px"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Portfolio Value</div>
+              {isMixed?(
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {hasUSD&&<div style={{display:"flex",alignItems:"baseline",gap:6}}>
+                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{fmtUSD(holdings.filter(h=>getCur(h.ticker)==='USD').reduce((s,h)=>s+hVal(h),0))}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>USD</span>
+                  </div>}
+                  {hasCAD&&<div style={{display:"flex",alignItems:"baseline",gap:6}}>
+                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{fmt(holdings.filter(h=>getCur(h.ticker)==='CAD').reduce((s,h)=>s+hVal(h),0))}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>CAD</span>
+                  </div>}
+                </div>
+              ):(
+                <div style={{fontSize:22,fontWeight:800,color:"#1E293B",letterSpacing:"-0.5px"}}>{hasUSD?fmtUSD(totalValueCAD/fxRate):fmt(totalValueCAD)}</div>
+              )}
+            </div>
+            {/* Gain/Loss card */}
+            {totalGainCAD!=null&&(
+              <div style={{...CA,padding:"16px 20px"}}>
+                <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Total Gain / Loss</div>
+                {isMixed?(
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {hasUSD&&(()=>{const usdHlds=holdings.filter(h=>getCur(h.ticker)==='USD'&&h.costBasis!=null);const g=usdHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=usdHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return usdHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{fmtUSD(g)}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>USD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
+                    {hasCAD&&(()=>{const cadHlds=holdings.filter(h=>getCur(h.ticker)==='CAD'&&h.costBasis!=null);const g=cadHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=cadHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return cadHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{fmt(g)}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>CAD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
+                  </div>
+                ):(
+                  <>
+                    <div style={{fontSize:20,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.5px"}}>{totalGainCAD>=0?"+":""}{hasUSD?fmtUSD(totalGainCAD/fxRate):fmt(totalGainCAD)}</div>
+                    {totalCostCAD>0&&<div style={{fontSize:11,fontWeight:600,color:totalGainCAD>=0?"#059669":"#dc2626",marginTop:3}}>{totalGainCAD>=0?"+":""}{((totalGainCAD/totalCostCAD)*100).toFixed(2)}%</div>}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {/* Combined CAD subcard — only when mixed currencies */}
+          {isMixed&&(
+            <div style={{marginTop:8,padding:"10px 16px",borderRadius:12,background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #bae6fd",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.07em"}}>Combined Value</span>
+                <span style={{fontSize:11,color:"#64748b",background:"#fff",border:"1px solid #bae6fd",padding:"1px 7px",borderRadius:20,fontWeight:600}}>CAD · 1 USD = {fmt(fxRate)}</span>
+              </div>
+              <div style={{display:"flex",gap:24,alignItems:"baseline"}}>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:11,color:"#64748b",fontWeight:600}}>Portfolio</div>
+                  <div style={{fontSize:18,fontWeight:800,color:"#0369a1",letterSpacing:"-0.4px"}}>{fmt(totalValueCAD)}</div>
+                </div>
+                {totalGainCAD!=null&&<div style={{textAlign:"right"}}>
+                  <div style={{fontSize:11,color:"#64748b",fontWeight:600}}>Gain / Loss</div>
+                  <div style={{fontSize:18,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{totalGainCAD>=0?"+":""}{fmt(totalGainCAD)}</div>
+                </div>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Holdings table */}
+      {holdings.length>0&&(
+        <div style={CA}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:quickId?"10px":"14px"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#1E293B"}}>Holdings</div>
+            {!quickId
+              ?<button onClick={()=>{setQuickId(holdings[0].id);setQuickShares("");setEditId(null);}} style={{padding:"4px 12px",borderRadius:8,border:"1.5px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>+ Add Shares</button>
+              :<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <select value={quickId} onChange={e=>setQuickId(e.target.value)} style={{...IS,padding:"4px 8px",fontSize:12,width:"auto"}}>
+                  {holdings.map(h=><option key={h.id} value={h.id}>{h.ticker}{prices[h.ticker]?.price!=null?" — "+fmtN(prices[h.ticker].price,getCur(h.ticker)):""}</option>)}
+                </select>
+                <input type="number" min="0" step="any" value={quickShares} onChange={e=>setQuickShares(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmQuickAdd();if(e.key==="Escape"){setQuickId(null);setQuickShares("");} }} placeholder="# shares" style={{...IS,width:90,padding:"4px 8px",fontSize:12}} autoFocus/>
+                {(()=>{const h=holdings.find(x=>x.id===quickId);const p=h&&prices[h.ticker]?.price;const c=h&&getCur(h.ticker);return p?<span style={{fontSize:11,color:"#94a3b8",whiteSpace:"nowrap"}}>@ {fmtN(p,c)}</span>:null;})()}
+                <button onClick={confirmQuickAdd} disabled={!quickShares} style={{padding:"4px 12px",borderRadius:8,border:"none",background:"#059669",color:"#fff",cursor:quickShares?"pointer":"not-allowed",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:quickShares?1:0.5}}>Add</button>
+                <button onClick={()=>{setQuickId(null);setQuickShares("");}} style={{padding:"4px 8px",borderRadius:8,border:"1px solid #e2e8f0",background:"none",color:"#94a3b8",cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>✕</button>
+              </div>
+            }
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:"1px solid #f1f5f9"}}>
+                  {["Symbol","Name","Shares","Price","Value","Gain / Loss",""].map(h=>(
+                    <th key={h} style={{textAlign:h===""||h==="Shares"||h==="Price"||h==="Value"||h==="Gain / Loss"?"right":"left",padding:"0 12px 10px 0",color:"#94a3b8",fontWeight:600,fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map(h=>{
+                  const q=prices[h.ticker];
+                  const cur=getCur(h.ticker);
+                  const val=(q?.price??0)*h.shares;
+                  const gain=h.costBasis!=null?val-h.costBasis*h.shares:null;
+                  const gainPct=h.costBasis!=null&&h.costBasis>0?((gain/(h.costBasis*h.shares))*100):null;
+                  return editId===h.id?(
+                    <tr key={h.id} style={{borderBottom:"1px solid #f1f5f9",background:"#f8fbff"}}>
+                      <td style={{padding:"10px 12px 10px 0",fontWeight:700,color:"#0284C7"}}>{h.ticker}</td>
+                      <td colSpan={4} style={{padding:"10px 12px"}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                          <input type="number" value={editF.shares} onChange={e=>setEditF(p=>({...p,shares:e.target.value}))} placeholder="Shares" style={{...IS,width:90}} autoFocus/>
+                          <input type="number" value={editF.costBasis} onChange={e=>setEditF(p=>({...p,costBasis:e.target.value}))} placeholder="Cost/share (opt)" style={{...IS,width:130}}/>
+                          <Btn sm onClick={saveEdit}>Save</Btn>
+                          <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+                        </div>
+                      </td>
+                      <td/><td/>
+                    </tr>
+                  ):(
+                    <tr key={h.id} style={{borderBottom:"1px solid #f8fafc",background:quickId===h.id?"#f0fdf4":"transparent",transition:"background .15s"}}>
+                      <td style={{padding:"12px 12px 12px 0",fontWeight:700,color:"#0284C7",whiteSpace:"nowrap"}}>
+                        {h.ticker}
+                        {q?.marketState==="REGULAR"&&<span style={{marginLeft:5,fontSize:9,background:"#dcfce7",color:"#059669",padding:"1px 5px",borderRadius:20,fontWeight:600}}>LIVE</span>}
+                      </td>
+                      <td style={{padding:"12px",color:"#374151",fontSize:12,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q?.name||"—"}</td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:500}}>{h.shares}</td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:700,color:"#1E293B"}}>
+                        {q?.price!=null?<><span>{fmtN(q.price,cur)}</span>{isMixed&&<span style={{fontSize:9,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 4px",borderRadius:8,marginLeft:4}}>{cur}</span>}</>:<span style={{color:"#94a3b8"}}>—</span>}
+                      </td>
+                      <td style={{padding:"12px",textAlign:"right",fontWeight:700}}>
+                        {q?.price!=null?<><span>{fmtN(val,cur)}</span>{isMixed&&<span style={{fontSize:9,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 4px",borderRadius:8,marginLeft:4}}>{cur}</span>}</>:<span style={{color:"#94a3b8"}}>—</span>}
+                      </td>
+                      <td style={{padding:"12px",textAlign:"right",whiteSpace:"nowrap"}}>
+                        {gain!=null?<><span style={{fontWeight:600,color:gain>=0?"#059669":"#dc2626"}}>{gain>=0?"+":""}{fmtN(gain,cur)}</span>{isMixed&&<span style={{fontSize:9,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 4px",borderRadius:8,marginLeft:4}}>{cur}</span>}{gainPct!=null&&<span style={{fontSize:11,color:gain>=0?"#059669":"#dc2626",marginLeft:4}}>({gainPct>=0?"+":""}{gainPct.toFixed(2)}%)</span>}</>:<span style={{color:"#e2e8f0",fontSize:12}}>no cost</span>}
+                      </td>
+                      <td style={{padding:"12px 0 12px 8px",textAlign:"right",whiteSpace:"nowrap"}}>
+                        <div style={{display:"flex",gap:5,justifyContent:"flex-end"}}>
+                          <button onClick={()=>{setEditId(h.id);setEditF({shares:String(h.shares),costBasis:h.costBasis!=null?String(h.costBasis):""});setQuickId(null);}} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+                          <button onClick={()=>remove(h.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
+  const [form,setForm]=useState({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const monthOpts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+  const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
+  const [viewMonth,setViewMonth]=useState(today().slice(0,7));
+  const active=bills.filter(b=>b.active!==false);
+  const isPaid=(id,mo=viewMonth)=>billPayments.some(p=>p.billId===id&&p.month===mo);
+  const togglePaid=id=>{
+    if(isPaid(id)){onSaveBillPayments(billPayments.filter(p=>!(p.billId===id&&p.month===viewMonth)));}
+    else{const b=bills.find(x=>x.id===id);onSaveBillPayments([...billPayments,{id:uid(),billId:id,month:viewMonth,paidDate:today(),amount:b.amount}]);}
+  };
+  const add=()=>{
+    if(!form.name.trim()||!form.amount)return;
+    onSaveBills([...bills,{id:uid(),name:form.name.trim(),amount:parseFloat(form.amount)||0,category:form.category,dueDay:parseInt(form.dueDay)||15,note:form.note,active:true}]);
+    setForm({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
+  };
+  const remove=id=>onSaveBills(bills.filter(b=>b.id!==id));
+  const paidAmt=active.filter(b=>isPaid(b.id)).reduce((s,b)=>s+b.amount,0);
+  const totalAmt=active.reduce((s,b)=>s+b.amount,0);
+  const sorted=[...active].sort((a,b)=>a.dueDay-b.dueDay);
+  const ordinal=n=>n+(n===1?"st":n===2?"nd":n===3?"rd":"th");
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
+        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Bills</h2>
+        <select value={viewMonth} onChange={e=>setViewMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500}}>
+          {monthOpts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
+        </select>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+        {[{l:"Monthly Total",v:totalAmt,c:"#1E293B"},{l:"Paid",v:paidAmt,c:"#059669"},{l:"Remaining",v:totalAmt-paidAmt,c:totalAmt-paidAmt>0?"#dc2626":"#059669"}].map(card=>(
+          <div key={card.l} style={{...CA,padding:"16px 20px"}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{card.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:card.c,letterSpacing:"-0.5px"}}>{fmt(card.v)}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{...CA,marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Recurring Bill</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Bill Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Netflix, Rent, Phone"/></Fld>
+          <Fld label="Amount ($)"><input style={IS} type="number" value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Category"><select style={{...IS,background:"#fff"}} value={form.category} onChange={e=>set("category",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>
+          <Fld label="Due Day of Month"><input style={IS} type="number" min="1" max="28" value={form.dueDay} onChange={e=>set("dueDay",e.target.value)}/></Fld>
+        </div>
+        <Fld label="Note (optional)" style={{marginBottom:12}}><input style={IS} value={form.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
+        <Btn onClick={add} disabled={!form.name.trim()||!form.amount} full>Add Bill</Btn>
+      </div>
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Bills for {ml(viewMonth)}</div>
+        {sorted.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No bills yet. Add recurring bills above.</div>:sorted.map(b=>{
+          const paid=isPaid(b.id);
+          return(
+            <div key={b.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #f8fafc"}}>
+              <button onClick={()=>togglePaid(b.id)} style={{width:26,height:26,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?"#059669":"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all 0.15s",fontFamily:"inherit"}}>
+                {paid&&<span style={{fontSize:11,color:"#059669"}}>✓</span>}
+              </button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:paid?"#94a3b8":"#1E293B",textDecoration:paid?"line-through":"none"}}>{b.name}</div>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>Due {ordinal(b.dueDay)} · {b.category}{b.note?" · "+b.note:""}</div>
+              </div>
+              <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{fmt(b.amount)}</div>
+              <button onClick={()=>remove(b.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0}}>Remove</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Goals({goals,onSaveGoals}){
+  const [form,setForm]=useState({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const [contrib,setContrib]=useState({});
+  const GOAL_COLORS=["#0284C7","#059669","#d97706","#7c3aed","#db2777","#0891b2"];
+  const add=()=>{
+    if(!form.name.trim()||!form.targetAmount)return;
+    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"🎯",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
+    setForm({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  };
+  const logContrib=id=>{
+    const amt=parseFloat(contrib[id])||0;if(!amt)return;
+    onSaveGoals(goals.map(g=>g.id===id?{...g,currentAmount:Math.min(g.currentAmount+amt,g.targetAmount)}:g));
+    setContrib(p=>({...p,[id]:""}));
+  };
+  const remove=id=>onSaveGoals(goals.filter(g=>g.id!==id));
+  return(
+    <div>
+      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Savings Goals</h2>
+      {goals.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:14,marginBottom:16}}>
+          {goals.map(g=>{
+            const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
+            const remaining=Math.max(g.targetAmount-g.currentAmount,0);
+            const monthsLeft=g.monthlyTarget>0&&remaining>0?Math.ceil(remaining/g.monthlyTarget):null;
+            return(
+              <div key={g.id} style={{...CA,padding:"20px"}}>
+                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14}}>
+                  <div><div style={{fontSize:24,marginBottom:4}}>{g.emoji}</div><div style={{fontSize:15,fontWeight:700,color:"#1E293B"}}>{g.name}</div>{g.deadline&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>By {g.deadline}</div>}</div>
+                  <button onClick={()=>remove(g.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:18,fontFamily:"inherit",padding:0,lineHeight:1}}>×</button>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                  <span style={{fontSize:22,fontWeight:800,color:g.color||"#0284C7",letterSpacing:"-0.5px"}}>{fmt(g.currentAmount)}</span>
+                  <span style={{fontSize:13,color:"#94a3b8",alignSelf:"flex-end",marginBottom:2}}>of {fmt(g.targetAmount)}</span>
+                </div>
+                <div style={{height:8,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:6}}>
+                  <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s ease"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:pct<1?12:0}}>
+                  <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% saved</span>
+                  {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{fmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
+                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached! 🎉</span>}
+                </div>
+                {pct<1&&(
+                  <div style={{display:"flex",gap:8,borderTop:"1px solid #f1f5f9",paddingTop:10}}>
+                    <input type="number" placeholder="Add amount" value={contrib[g.id]||""} onChange={e=>setContrib(p=>({...p,[g.id]:e.target.value}))} style={{...IS,flex:1}} onKeyDown={e=>e.key==="Enter"&&logContrib(g.id)}/>
+                    <Btn sm onClick={()=>logContrib(g.id)} disabled={!contrib[g.id]}>Add</Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>{goals.length===0?"Create Your First Goal":"Add Another Goal"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Goal Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Emergency Fund, House"/></Fld>
+          <Fld label="Emoji"><input style={{...IS}} value={form.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎯"/></Fld>
+          <Fld label="Target Amount ($)"><input style={IS} type="number" value={form.targetAmount} onChange={e=>set("targetAmount",e.target.value)} placeholder="10000"/></Fld>
+          <Fld label="Already Saved ($)"><input style={IS} type="number" value={form.currentAmount} onChange={e=>set("currentAmount",e.target.value)} placeholder="0"/></Fld>
+          <Fld label="Monthly Target ($)"><input style={IS} type="number" value={form.monthlyTarget} onChange={e=>set("monthlyTarget",e.target.value)} placeholder="Optional"/></Fld>
+          <Fld label="Target Date"><input style={IS} type="date" value={form.deadline} onChange={e=>set("deadline",e.target.value)}/></Fld>
+        </div>
+        <Fld label="Color">
+          <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+            {GOAL_COLORS.map(c=><button key={c} onClick={()=>set("color",c)} style={{width:26,height:26,borderRadius:"50%",background:c,border:form.color===c?"3px solid #1E293B":"2px solid transparent",cursor:"pointer"}}/>)}
+          </div>
+        </Fld>
+        <Btn onClick={add} disabled={!form.name.trim()||!form.targetAmount} full>Create Goal</Btn>
+      </div>
+    </div>
+  );
+}
+
+function NetWorth({accounts,accountHistory,onSaveAccounts,onSaveAccountHistory,holdings=[],stockPrices={},fxRate=1.38}){
+  const [form,setForm]=useState({name:"",type:"chequing",balance:""});
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const [editId,setEditId]=useState(null);
+  const [editBal,setEditBal]=useState("");
+  const TYPES=[{v:"chequing",l:"Chequing",asset:true},{v:"savings",l:"Savings",asset:true},{v:"investment",l:"Investment / RRSP",asset:true},{v:"credit",l:"Credit Card",asset:false},{v:"loan",l:"Loan / Mortgage",asset:false},{v:"other",l:"Other",asset:true}];
+  const isAsset=t=>TYPES.find(x=>x.v===t)?.asset!==false;
+  const add=()=>{
+    if(!form.name.trim())return;
+    const bal=parseFloat(form.balance)||0;
+    const acc={id:uid(),name:form.name.trim(),type:form.type,balance:bal};
+    onSaveAccounts([...accounts,acc]);
+    onSaveAccountHistory([...accountHistory,{id:uid(),accountId:acc.id,date:today(),balance:bal}]);
+    setForm({name:"",type:"chequing",balance:""});
+  };
+  const saveBalance=id=>{
+    const bal=parseFloat(editBal)||0;
+    onSaveAccounts(accounts.map(a=>a.id===id?{...a,balance:bal}:a));
+    onSaveAccountHistory([...accountHistory,{id:uid(),accountId:id,date:today(),balance:bal}]);
+    setEditId(null);
+  };
+  const remove=id=>{onSaveAccounts(accounts.filter(a=>a.id!==id));onSaveAccountHistory(accountHistory.filter(h=>h.accountId!==id));};
+  const assets=accounts.filter(a=>isAsset(a.type));
+  const liabilities=accounts.filter(a=>!isAsset(a.type));
+  const totalAssets=assets.reduce((s,a)=>s+a.balance,0);
+  const totalLiab=liabilities.reduce((s,a)=>s+a.balance,0);
+  const portfolioValue=holdings.reduce((s,h)=>{const cur=stockPrices[h.ticker]?.currency??(h.ticker.toUpperCase().endsWith('.TO')?'CAD':'USD');return s+(stockPrices[h.ticker]?.price??0)*h.shares*(cur==='USD'?fxRate:1);},0);
+  const netWorth=totalAssets+portfolioValue-totalLiab;
+  const AccountRow=({a})=>(
+    <div style={{display:"flex",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #f8fafc",gap:10}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:500}}>{a.name}</div>
+        <div style={{fontSize:11,color:"#94a3b8"}}>{TYPES.find(t=>t.v===a.type)?.l||a.type}</div>
+      </div>
+      {editId===a.id
+        ?<div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="number" value={editBal} onChange={e=>setEditBal(e.target.value)} style={{...IS,width:100}} onKeyDown={e=>e.key==="Enter"&&saveBalance(a.id)} autoFocus/>
+            <Btn sm onClick={()=>saveBalance(a.id)}>Save</Btn>
+            <Btn sm v="secondary" onClick={()=>setEditId(null)}>✕</Btn>
+          </div>
+        :<>
+          <div style={{fontSize:14,fontWeight:700,color:isAsset(a.type)?"#059669":"#dc2626"}}>{fmt(a.balance)}</div>
+          <button onClick={()=>{setEditId(a.id);setEditBal(String(a.balance));}} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+          <button onClick={()=>remove(a.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+        </>}
+    </div>
+  );
+  return(
+    <div>
+      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Accounts & Net Worth</h2>
+      {(accounts.length>0||holdings.length>0)&&(
+        <div style={{...CA,padding:"24px 28px",marginBottom:16,borderLeft:`4px solid ${netWorth>=0?"#0284C7":"#dc2626"}`}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Net Worth</div>
+          <div style={{fontSize:40,fontWeight:800,color:netWorth>=0?"#059669":"#dc2626",letterSpacing:"-1.5px",marginBottom:10}}>{fmt(netWorth)}</div>
+          <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+            {totalAssets>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Assets <span style={{color:"#059669",fontWeight:700}}>{fmt(totalAssets)}</span></span>}
+            {portfolioValue>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Portfolio <span style={{color:"#0284C7",fontWeight:700}}>{fmt(portfolioValue)}</span></span>}
+            {totalLiab>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Liabilities <span style={{color:"#dc2626",fontWeight:700}}>{fmt(totalLiab)}</span></span>}
+          </div>
+        </div>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:assets.length>0&&liabilities.length>0?"1fr 1fr":"1fr",gap:16,marginBottom:16}}>
+        {assets.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Assets <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalAssets)}</span></div>{assets.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+        {liabilities.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Liabilities <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalLiab)}</span></div>{liabilities.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+      </div>
+      <div style={CA}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Account</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Fld label="Account Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. TD Chequing, Visa"/></Fld>
+          <Fld label="Type"><select style={{...IS,background:"#fff"}} value={form.type} onChange={e=>set("type",e.target.value)}>{TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</select></Fld>
+        </div>
+        <Fld label="Current Balance ($)" style={{marginBottom:12}}><input style={IS} type="number" value={form.balance} onChange={e=>set("balance",e.target.value)} placeholder="0.00"/></Fld>
+        <Btn onClick={add} disabled={!form.name.trim()} full>Add Account</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEFAULT SCHEMA  (FinanceLookML)
+// ─────────────────────────────────────────────────────────────────────────────
+const MEASURE_TYPES=[
+  {v:"count",    l:"count",    color:"#8b5cf6"},
+  {v:"sum",      l:"sum",      color:"#0284C7"},
+  {v:"subtract", l:"subtract", color:"#ef4444"},
+  {v:"multiply", l:"multiply", color:"#f59e0b"},
+  {v:"divide",   l:"divide",   color:"#06b6d4"},
+  {v:"average",  l:"average",  color:"#059669"},
+];
+const DIM_TYPES=["string","number","date","boolean","currency"];
+
+const DEFAULT_SCHEMA={views:{
+  transactions:{
+    label:"Transactions",description:"All income and expense transactions",source:"txns",
+    dimensions:{
+      date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",field:"date"},
+      amount:  {type:"currency",label:"Amount",  description:"Transaction amount in CAD",field:"amount"},
+      category:{type:"string", label:"Category", description:"Spending / income category (e.g. Groceries, Dining)",field:"category"},
+      type:    {type:"string", label:"Type",     description:"'income' or 'expense'",field:"type"},
+      merchant:{type:"string", label:"Merchant", description:"Merchant name or income source",field:"merchant"},
+      note:    {type:"string", label:"Note",     description:"Optional transaction note",field:"note"},
+    },
+    measures:{
+      count:          {type:"count",   label:"Count",         description:"Total number of transactions",                        query:"data.txns.length"},
+      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                         query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
+      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                          query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)"},
+      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",                  query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
+      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",             query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()"},
+      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",              query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()"},
+      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses × 100 ÷ total income (spend %)",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()"},
+    }
+  },
+  bills:{
+    label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",
+    dimensions:{
+      name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",field:"name"},
+      amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",field:"amount"},
+      category:{type:"string", label:"Category", description:"Bill category",field:"category"},
+      due_day: {type:"number", label:"Due Day",  description:"Day of month the bill is due (1–31)",field:"dueDay"},
+      active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",field:"active"},
+    },
+    measures:{
+      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                                           query:"data.bills.filter(b=>b.active!==false).length"},
+      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)"},
+      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12"},
+      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",                                      query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()"},
+    }
+  },
+  expected_income:{
+    label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",
+    dimensions:{
+      source:       {type:"string", label:"Source",       description:"Income source / payer name",field:"source"},
+      amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",field:"amount"},
+      expected_date:{type:"date",   label:"Expected Date",description:"When the payment is expected",field:"expectedDate"},
+      confirmed:    {type:"boolean",label:"Confirmed",    description:"Whether the payment has been received",field:"confirmed"},
+      cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency: monthly, weekly, biweekly, quarterly, etc.",field:"cadence"},
+    },
+    measures:{
+      count_pending:   {type:"count",label:"Pending Count",  description:"Number of unconfirmed upcoming payments",             query:"data.expected.filter(e=>!e.confirmed).length"},
+      total_pending:   {type:"sum",  label:"Total Pending",  description:"Sum of all unconfirmed expected amounts",             query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)"},
+      total_confirmed: {type:"sum",  label:"Total Confirmed",description:"Sum of all confirmed received payments",             query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)"},
+      confirmation_rate:{type:"divide",label:"Confirmation %",description:"% of payments confirmed (confirmed ÷ total × 100)",query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()"},
+    }
+  },
+  goals:{
+    label:"Goals",description:"Financial savings goals and progress",source:"goals",
+    dimensions:{
+      name:          {type:"string", label:"Name",           description:"Goal name",field:"name"},
+      target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",field:"targetAmount"},
+      current_amount:{type:"currency",label:"Current Amount",description:"Amount saved so far in CAD",field:"currentAmount"},
+      deadline:      {type:"date",   label:"Deadline",       description:"Target completion date",field:"deadline"},
+    },
+    measures:{
+      count:           {type:"count",   label:"Count",           description:"Total number of goals",                                         query:"data.goals.length"},
+      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",                               query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)"},
+      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved across goals",               query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)"},
+      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",                       query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)"},
+      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion percentage across all goals",              query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()"},
+    }
+  },
+  accounts:{
+    label:"Accounts",description:"Bank and financial accounts",source:"accounts",
+    dimensions:{
+      name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",field:"name"},
+      type:   {type:"string", label:"Type",    description:"Account type: chequing, savings, credit_card, loan, mortgage, investment, property, other_asset, other_liability",field:"type"},
+      balance:{type:"currency",label:"Balance",description:"Current account balance in CAD (positive for assets, negative for debts)",field:"balance"},
+    },
+    measures:{
+      count:             {type:"count",   label:"Count",              description:"Total number of accounts",                                          query:"data.accounts.length"},
+      total_assets:      {type:"sum",     label:"Total Assets",       description:"Sum of all asset account balances",                                query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
+      total_liabilities: {type:"sum",     label:"Total Liabilities",  description:"Sum of all liability balances (credit cards, loans, mortgages)",  query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
+      net_worth:         {type:"subtract",label:"Net Worth",          description:"Total assets minus total liabilities",                            query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
+    }
+  },
+  holdings:{
+    label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",
+    dimensions:{
+      ticker:    {type:"string", label:"Ticker",     description:"Stock ticker symbol — append .TO for Canadian stocks (e.g. TSLA, XEQT.TO)",field:"ticker"},
+      shares:    {type:"number", label:"Shares",     description:"Number of shares held",field:"shares"},
+      cost_basis:{type:"currency",label:"Cost Basis",description:"Weighted average purchase price per share in native currency",field:"costBasis"},
+    },
+    measures:{
+      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",                                           query:"data.holdings.length"},
+      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of (cost basis × shares) for all holdings with a known cost basis",       query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)"},
+      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",                                       query:"data.holdings.reduce((s,h)=>s+h.shares,0)"},
+    }
+  }
+}};
+
+const DEFAULT_SETTINGS={name:"",ollamaUrl:"http://localhost:11434",ollamaModel:"phi3:mini",devMode:false};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+function Settings({settings,onSave}){
+  const [f,setF]=useState({...DEFAULT_SETTINGS,...settings});
+  const [ollamaStatus,setOllamaStatus]=useState(null); // null | "ok" | "error"
+  const [testing,setTesting]=useState(false);
+  const [copied,setCopied]=useState("");
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+
+  const save=()=>onSave(f);
+
+  const testOllama=async()=>{
+    setTesting(true);setOllamaStatus(null);
+    try{
+      const r=await fetch("/api/llm/models");
+      if(r.ok){setOllamaStatus("ok");}
+      else{setOllamaStatus("error");}
+    }catch{setOllamaStatus("error");}
+    setTesting(false);
+  };
+
+  const copy=text=>{navigator.clipboard?.writeText(text);setCopied(text);setTimeout(()=>setCopied(""),2000);};
+
+  const CodeBlock=({cmd})=>(
+    <div style={{display:"flex",alignItems:"center",gap:8,background:"#0f172a",borderRadius:8,padding:"10px 14px",marginTop:6,marginBottom:4}}>
+      <code style={{flex:1,fontSize:12,color:"#a5f3fc",fontFamily:"'Menlo','Monaco','Courier New',monospace"}}>{cmd}</code>
+      <button onClick={()=>copy(cmd)} style={{background:copied===cmd?"#059669":"rgba(255,255,255,0.1)",border:"none",cursor:"pointer",color:"#fff",fontSize:11,padding:"3px 9px",borderRadius:6,fontFamily:"inherit",flexShrink:0,transition:"background .2s"}}>
+        {copied===cmd?"✓ Copied":"Copy"}
+      </button>
+    </div>
+  );
+
+  return(
+    <div>
+      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Settings</h2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+
+        {/* Left column */}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+          {/* Personal */}
+          <div style={CA}>
+            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Personal</div>
+            <Fld label="Your Name">
+              <input style={IS} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Gabe"/>
+            </Fld>
+            <Btn onClick={save} full>Save Settings</Btn>
+          </div>
+
+          {/* Developer Access */}
+          <div style={{...CA,background:f.devMode?"linear-gradient(135deg,#fefce8,#fef9c3)":"#fff",border:f.devMode?"1px solid #fde047":"1px solid #e2e8f0"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Developer Access</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Unlocks the Data Model editor tab</div>
+              </div>
+              <button onClick={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.devMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
+                <span style={{position:"absolute",top:3,left:f.devMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+              </button>
+            </div>
+            {f.devMode&&<div style={{fontSize:11,color:"#854d0e",background:"#fef9c3",border:"1px solid #fde047",borderRadius:8,padding:"7px 10px"}}>⚠ Dev mode enabled — Data Model tab is now visible in the nav.</div>}
+          </div>
+
+        </div>
+
+        {/* Right column — Ollama */}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={CA}>
+            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Local AI (Ollama)</div>
+            <div style={{fontSize:11,color:"#64748b",marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
+
+            <Fld label="Ollama URL">
+              <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
+            </Fld>
+            <Fld label="Model">
+              <input style={IS} value={f.ollamaModel} onChange={e=>set("ollamaModel",e.target.value)} placeholder="phi3:mini"/>
+              <div style={{fontSize:10,color:"#94a3b8",marginTop:4}}>Recommended: <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>phi3:mini</code> (fast, 3.8B) · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>llama3.2:3b</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>mistral:7b</code></div>
+            </Fld>
+            <div style={{display:"flex",gap:8,marginTop:4,marginBottom:12}}>
+              <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>
+                {testing?"Testing…":"⚡ Test Connection"}
+              </button>
+              <Btn onClick={save}>Save</Btn>
+            </div>
+            {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontWeight:500}}>✓ Ollama is running and reachable</div>}
+            {ollamaStatus==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px"}}>✗ Could not reach Ollama — see install steps below</div>}
+          </div>
+
+          {/* Install instructions */}
+          <div style={CA}>
+            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:12}}>Install Ollama</div>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>macOS / Linux</div>
+                <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
+                <div style={{fontSize:11,color:"#94a3b8"}}>Or download from <a href="https://ollama.ai" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai</a></div>
+              </div>
+
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Windows</div>
+                <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Download the installer from <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai/download</a> and run it.</div>
+              </div>
+
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Pull a model (after installing)</div>
+                <CodeBlock cmd="ollama pull phi3:mini"/>
+                <CodeBlock cmd="ollama pull llama3.2:3b"/>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>phi3:mini is ~2.3GB and runs well on most machines. llama3.2:3b is ~2.0GB and slightly stronger at reasoning.</div>
+              </div>
+
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Start Ollama (if not auto-started)</div>
+                <CodeBlock cmd="ollama serve"/>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA MODEL COMPONENT  (dev mode only)
+// ─────────────────────────────────────────────────────────────────────────────
+function DataModel({schema,onSave}){
+  const [activeView,setActiveView]=useState(()=>Object.keys(schema.views)[0]);
+  const [mode,setMode]=useState("visual"); // "visual" | "raw"
+  const [rawText,setRawText]=useState(()=>JSON.stringify(schema,null,2));
+  const [rawError,setRawError]=useState(null);
+  const [editingDim,setEditingDim]=useState(null); // {viewKey, dimKey} or null
+  const [editingMsr,setEditingMsr]=useState(null); // {viewKey, msrKey} or null
+  const [dimForm,setDimForm]=useState({});
+  const [msrForm,setMsrForm]=useState({});
+  const [addingView,setAddingView]=useState(false);
+  const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:""});
+
+  const views=schema.views;
+  const vKeys=Object.keys(views);
+
+  const saveRaw=()=>{
+    try{const parsed=JSON.parse(rawText);onSave(parsed);setRawError(null);}
+    catch(e){setRawError(e.message);}
+  };
+
+  const resetToDefault=()=>{
+    onSave(DEFAULT_SCHEMA);
+    setRawText(JSON.stringify(DEFAULT_SCHEMA,null,2));
+    setActiveView(Object.keys(DEFAULT_SCHEMA.views)[0]);
+  };
+
+  // Edit dimension
+  const startEditDim=(vk,dk)=>{
+    setEditingDim({vk,dk});
+    setDimForm({...views[vk].dimensions[dk],key:dk});
+    setEditingMsr(null);
+  };
+  const saveDim=()=>{
+    const{key,...rest}=dimForm;
+    const v={...views[activeView]};
+    const dims={...v.dimensions};
+    if(editingDim.dk!==key){delete dims[editingDim.dk];}
+    dims[key||editingDim.dk]=rest;
+    v.dimensions=dims;
+    onSave({...schema,views:{...views,[activeView]:v}});
+    setEditingDim(null);
+  };
+  const deleteDim=(vk,dk)=>{
+    const v={...views[vk]};
+    const dims={...v.dimensions};
+    delete dims[dk];
+    v.dimensions=dims;
+    onSave({...schema,views:{...views,[vk]:v}});
+  };
+  const addDim=()=>{
+    const k=`new_dimension_${Date.now()}`;
+    const v={...views[activeView]};
+    v.dimensions={...v.dimensions,[k]:{type:"string",label:"New Dimension",description:"",field:""}};
+    onSave({...schema,views:{...views,[activeView]:v}});
+    startEditDim(activeView,k);
+  };
+
+  // Edit measure
+  const startEditMsr=(vk,mk)=>{
+    setEditingMsr({vk,mk});
+    setMsrForm({...views[vk].measures[mk],key:mk});
+    setEditingDim(null);
+  };
+  const saveMsr=()=>{
+    const{key,...rest}=msrForm;
+    const v={...views[activeView]};
+    const msrs={...v.measures};
+    if(editingMsr.mk!==key){delete msrs[editingMsr.mk];}
+    msrs[key||editingMsr.mk]=rest;
+    v.measures=msrs;
+    onSave({...schema,views:{...views,[activeView]:v}});
+    setEditingMsr(null);
+  };
+  const deleteMsr=(vk,mk)=>{
+    const v={...views[vk]};
+    const msrs={...v.measures};
+    delete msrs[mk];
+    v.measures=msrs;
+    onSave({...schema,views:{...views,[vk]:v}});
+  };
+  const addMsr=()=>{
+    const k=`new_measure_${Date.now()}`;
+    const v={...views[activeView]};
+    v.measures={...v.measures,[k]:{type:"sum",label:"New Measure",description:"",query:""}};
+    onSave({...schema,views:{...views,[activeView]:v}});
+    startEditMsr(activeView,k);
+  };
+
+  // Add view
+  const saveNewView=()=>{
+    if(!newViewForm.key.trim()||!newViewForm.source.trim())return;
+    onSave({...schema,views:{...views,[newViewForm.key.trim()]:{label:newViewForm.label||newViewForm.key,description:newViewForm.description,source:newViewForm.source.trim(),dimensions:{},measures:{}}}});
+    setActiveView(newViewForm.key.trim());
+    setAddingView(false);
+    setNewViewForm({key:"",label:"",description:"",source:""});
+  };
+  const deleteView=vk=>{
+    const v={...views};delete v[vk];
+    onSave({...schema,views:v});
+    setActiveView(Object.keys(v)[0]||"");
+  };
+
+  const tv=views[activeView];
+  const msrColor=t=>(MEASURE_TYPES.find(m=>m.v===t)||{color:"#94a3b8"}).color;
+
+  // Field editors
+  const DimEditor=()=>(
+    <div style={{...CA,border:"2px solid #0284C7",marginBottom:12}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#0284C7",marginBottom:12}}>Edit Dimension</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+        <Fld label="Key (field name)"><input style={IS} value={dimForm.key||""} onChange={e=>setDimForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="field_key"/></Fld>
+        <Fld label="Label (display name)"><input style={IS} value={dimForm.label||""} onChange={e=>setDimForm(p=>({...p,label:e.target.value}))} placeholder="Field Label"/></Fld>
+        <Fld label="Data Type"><select style={{...IS,background:"#fff"}} value={dimForm.type||"string"} onChange={e=>setDimForm(p=>({...p,type:e.target.value}))}>{DIM_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></Fld>
+        <Fld label="Source Field (JSON key)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="fieldName in data.json"/></Fld>
+      </div>
+      <Fld label="Description"><input style={IS} value={dimForm.description||""} onChange={e=>setDimForm(p=>({...p,description:e.target.value}))} placeholder="What does this field represent?"/></Fld>
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <Btn sm onClick={saveDim}>Save</Btn>
+        <Btn sm v="secondary" onClick={()=>setEditingDim(null)}>Cancel</Btn>
+      </div>
+    </div>
+  );
+
+  const MsrEditor=()=>(
+    <div style={{...CA,border:"2px solid #8b5cf6",marginBottom:12}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#8b5cf6",marginBottom:12}}>Edit Measure</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+        <Fld label="Key"><input style={IS} value={msrForm.key||""} onChange={e=>setMsrForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="measure_key"/></Fld>
+        <Fld label="Label"><input style={IS} value={msrForm.label||""} onChange={e=>setMsrForm(p=>({...p,label:e.target.value}))} placeholder="Measure Label"/></Fld>
+        <Fld label="Type"><select style={{...IS,background:"#fff"}} value={msrForm.type||"sum"} onChange={e=>setMsrForm(p=>({...p,type:e.target.value}))}>{MEASURE_TYPES.map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select></Fld>
+      </div>
+      <Fld label="Description"><input style={IS} value={msrForm.description||""} onChange={e=>setMsrForm(p=>({...p,description:e.target.value}))} placeholder="What does this measure calculate?"/></Fld>
+      <Fld label="Query (JavaScript — 'data' refers to the full data.json object)">
+        <textarea style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,minHeight:64,resize:"vertical"}} value={msrForm.query||""} onChange={e=>setMsrForm(p=>({...p,query:e.target.value}))} placeholder={"e.g. data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"}/>
+      </Fld>
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <Btn sm onClick={saveMsr}>Save</Btn>
+        <Btn sm v="secondary" onClick={()=>setEditingMsr(null)}>Cancel</Btn>
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Data Model</h2>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>Define views, dimensions, and measures for your AI agent</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",background:"#f1f5f9",borderRadius:8,padding:2}}>
+            {["visual","raw"].map(m=>(
+              <button key={m} onClick={()=>{setMode(m);if(m==="raw")setRawText(JSON.stringify(schema,null,2));}} style={{padding:"5px 14px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",background:mode===m?"#fff":"transparent",color:mode===m?"#0284C7":"#64748b",boxShadow:mode===m?"0 1px 3px rgba(0,0,0,0.1)":"none",transition:"all .15s"}}>
+                {m==="visual"?"Visual":"Raw JSON"}
+              </button>
+            ))}
+          </div>
+          <button onClick={resetToDefault} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #fde68a",background:"#fefce8",color:"#92400e",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>↺ Reset to Default</button>
+        </div>
+      </div>
+
+      {mode==="raw"?(
+        <div style={CA}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:8}}>Schema JSON</div>
+          {rawError&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px",marginBottom:10}}>JSON Error: {rawError}</div>}
+          <textarea style={{width:"100%",minHeight:500,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,padding:14,borderRadius:10,border:"1.5px solid #e2e8f0",background:"#0f172a",color:"#a5f3fc",lineHeight:1.6,boxSizing:"border-box",resize:"vertical"}} value={rawText} onChange={e=>setRawText(e.target.value)}/>
+          <Btn onClick={saveRaw} full style={{marginTop:10}}>Apply JSON</Btn>
+        </div>
+      ):(
+        <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:16,alignItems:"start"}}>
+
+          {/* View sidebar */}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4,paddingLeft:4}}>Views</div>
+            {vKeys.map(vk=>(
+              <button key={vk} onClick={()=>{setActiveView(vk);setEditingDim(null);setEditingMsr(null);}} style={{textAlign:"left",padding:"10px 12px",borderRadius:10,border:"1.5px solid "+(activeView===vk?"#0284C7":"#e2e8f0"),background:activeView===vk?"#eff6ff":"#fff",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
+                <div style={{fontWeight:600,fontSize:12,color:activeView===vk?"#0284C7":"#1E293B"}}>{views[vk].label}</div>
+                <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>source: <code style={{fontSize:10}}>{views[vk].source}</code></div>
+                <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{Object.keys(views[vk].dimensions||{}).length}d · {Object.keys(views[vk].measures||{}).length}m</div>
+              </button>
+            ))}
+            {addingView?(
+              <div style={{...CA,padding:12}}>
+                <Fld label="Key"><input style={IS} value={newViewForm.key} onChange={e=>setNewViewForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="view_key" autoFocus/></Fld>
+                <Fld label="Label"><input style={IS} value={newViewForm.label} onChange={e=>setNewViewForm(p=>({...p,label:e.target.value}))} placeholder="Display Name"/></Fld>
+                <Fld label="Source (data.json key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns"/></Fld>
+                <Fld label="Description"><input style={IS} value={newViewForm.description} onChange={e=>setNewViewForm(p=>({...p,description:e.target.value}))} placeholder="What is this view?"/></Fld>
+                <div style={{display:"flex",gap:6,marginTop:8}}>
+                  <Btn sm onClick={saveNewView}>Add</Btn>
+                  <Btn sm v="secondary" onClick={()=>setAddingView(false)}>Cancel</Btn>
+                </div>
+              </div>
+            ):(
+              <button onClick={()=>setAddingView(true)} style={{padding:"8px 12px",borderRadius:10,border:"1.5px dashed #cbd5e1",background:"transparent",color:"#94a3b8",cursor:"pointer",fontSize:11,fontFamily:"inherit",textAlign:"center"}}>+ Add View</button>
+            )}
+          </div>
+
+          {/* View detail */}
+          {tv&&(
+            <div>
+              <div style={{...CA,marginBottom:16}}>
+                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:6}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:15,color:"#1E293B"}}>{tv.label}</div>
+                    <div style={{fontSize:12,color:"#64748b",marginTop:3}}>{tv.description}</div>
+                    <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>data source: <code style={{background:"#f1f5f9",padding:"1px 6px",borderRadius:4,fontSize:11}}>data.{tv.source}[ ]</code></div>
+                  </div>
+                  <button onClick={()=>deleteView(activeView)} style={{background:"none",border:"1px solid #fecaca",borderRadius:6,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0,marginTop:2}}>Delete View</button>
+                </div>
+              </div>
+
+              {/* Dimensions */}
+              <div style={{...CA,marginBottom:16}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Dimensions <span style={{fontSize:11,color:"#94a3b8",fontWeight:400}}>— raw fields from the data</span></div>
+                  <button onClick={addDim} style={{padding:"4px 12px",borderRadius:8,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>+ Add</button>
+                </div>
+                {editingDim?.vk===activeView&&<DimEditor/>}
+                {Object.entries(tv.dimensions||{}).map(([dk,d])=>(
+                  <div key={dk} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                        <span style={{fontWeight:600,fontSize:12,color:"#1E293B"}}>{d.label}</span>
+                        <code style={{fontSize:10,background:"#f1f5f9",padding:"1px 6px",borderRadius:4,color:"#64748b"}}>{dk}</code>
+                        <span style={{fontSize:10,fontWeight:600,background:"#ede9fe",color:"#7c3aed",padding:"1px 6px",borderRadius:10}}>{d.type}</span>
+                      </div>
+                      <div style={{fontSize:11,color:"#64748b"}}>{d.description}</div>
+                      <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>field: <code style={{fontSize:10}}>{d.field}</code></div>
+                    </div>
+                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                      <button onClick={()=>startEditDim(activeView,dk)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>deleteDim(activeView,dk)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Measures */}
+              <div style={CA}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Measures <span style={{fontSize:11,color:"#94a3b8",fontWeight:400}}>— calculations over the data</span></div>
+                  <button onClick={addMsr} style={{padding:"4px 12px",borderRadius:8,border:"1.5px solid #ede9fe",background:"#faf5ff",color:"#7c3aed",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>+ Add</button>
+                </div>
+                {editingMsr?.vk===activeView&&<MsrEditor/>}
+                {Object.entries(tv.measures||{}).map(([mk,m])=>(
+                  <div key={mk} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+                        <span style={{fontWeight:600,fontSize:12,color:"#1E293B"}}>{m.label}</span>
+                        <code style={{fontSize:10,background:"#f1f5f9",padding:"1px 6px",borderRadius:4,color:"#64748b"}}>{mk}</code>
+                        <span style={{fontSize:10,fontWeight:700,background:msrColor(m.type)+"22",color:msrColor(m.type),padding:"1px 8px",borderRadius:10,border:`1px solid ${msrColor(m.type)}44`}}>{m.type}</span>
+                      </div>
+                      <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>{m.description}</div>
+                      <code style={{fontSize:10,background:"#0f172a",color:"#a5f3fc",padding:"4px 8px",borderRadius:6,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.query}</code>
+                    </div>
+                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                      <button onClick={()=>startEditMsr(activeView,mk)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>deleteMsr(activeView,mk)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INSIGHTS & ANALYTICS  — agent-powered chart builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Parse <tool>{...}</tool> blocks from LLM text
+function parseToolCalls(text){
+  const out=[];
+  const re=/<tool>([\s\S]*?)<\/tool>/g;
+  let m;
+  while((m=re.exec(text))!==null){
+    try{out.push(JSON.parse(m[1].trim()));}catch{}
+  }
+  return out;
+}
+
+function InsightWidget({w,onRemove}){
+  const CHART_H=220;
+  const colors=COLORS;
+  const fmtVal=(v,fmt_)=>{
+    if(fmt_==="currency")return fmt(Number(v));
+    if(fmt_==="percent")return Number(v).toFixed(1)+"%";
+    if(typeof v==="number")return Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+    return String(v);
+  };
+  return(
+    <div style={{...CA,position:"relative",padding:"16px 18px"}}>
+      <button onClick={()=>onRemove(w.id)} style={{position:"absolute",top:10,right:10,background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#cbd5e1",lineHeight:1,zIndex:2,fontFamily:"inherit"}}>×</button>
+      {w.title&&<div style={{fontSize:12,fontWeight:600,color:"#64748b",marginBottom:10,paddingRight:24}}>{fmtLabel(w.title)}</div>}
+
+      {w.type==="metric"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          <div style={{fontSize:34,fontWeight:800,color:"#0284C7",letterSpacing:"-1.5px",lineHeight:1}}>{fmtVal(w.value,w.format)}</div>
+          {w.label&&<div style={{fontSize:12,color:"#94a3b8",fontWeight:500}}>{w.label}</div>}
+        </div>
+      )}
+
+      {w.type==="bar"&&(
+        <ResponsiveContainer width="100%" height={CHART_H}>
+          <BarChart data={w.data} margin={{top:4,right:4,left:0,bottom:30}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+            <XAxis dataKey={w.xKey||"name"} tick={{fontSize:10}} angle={-30} textAnchor="end" interval={0}/>
+            <YAxis tick={{fontSize:10}} tickFormatter={v=>w.format==="currency"?("$"+Math.round(v)):v}/>
+            <Tooltip formatter={(v)=>fmtVal(v,w.format)} contentStyle={{borderRadius:8,fontSize:12}}/>
+            {(w.multiKeys||[w.yKey||"value"]).map((k,i)=>(
+              <Bar key={k} dataKey={k} fill={w.colors?.[i]||w.color||colors[i%colors.length]} radius={[4,4,0,0]}>
+                {!w.multiKeys&&w.data.map((_,ci)=><Cell key={ci} fill={w.color||colors[ci%colors.length]}/>)}
+              </Bar>
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+
+      {w.type==="line"&&(
+        <ResponsiveContainer width="100%" height={CHART_H}>
+          <LineChart data={w.data} margin={{top:4,right:4,left:0,bottom:20}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+            <XAxis dataKey={w.xKey||"name"} tick={{fontSize:10}}/>
+            <YAxis tick={{fontSize:10}} tickFormatter={v=>w.format==="currency"?("$"+Math.round(v)):v}/>
+            <Tooltip formatter={(v)=>fmtVal(v,w.format)} contentStyle={{borderRadius:8,fontSize:12}}/>
+            <Legend wrapperStyle={{fontSize:11}}/>
+            {(w.multiKeys||[w.yKey||"value"]).map((k,i)=>(
+              <Line key={k} type="monotone" dataKey={k} stroke={w.colors?.[i]||w.color||colors[i%colors.length]} strokeWidth={2} dot={false}/>
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+
+      {w.type==="area"&&(
+        <ResponsiveContainer width="100%" height={CHART_H}>
+          <AreaChart data={w.data} margin={{top:4,right:4,left:0,bottom:20}}>
+            <defs>
+              {(w.multiKeys||[w.yKey||"value"]).map((k,i)=>(
+                <linearGradient key={k} id={`ag${w.id}${i}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={w.colors?.[i]||w.color||colors[i%colors.length]} stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor={w.colors?.[i]||w.color||colors[i%colors.length]} stopOpacity={0}/>
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+            <XAxis dataKey={w.xKey||"name"} tick={{fontSize:10}}/>
+            <YAxis tick={{fontSize:10}} tickFormatter={v=>w.format==="currency"?("$"+Math.round(v)):v}/>
+            <Tooltip formatter={(v)=>fmtVal(v,w.format)} contentStyle={{borderRadius:8,fontSize:12}}/>
+            <Legend wrapperStyle={{fontSize:11}}/>
+            {(w.multiKeys||[w.yKey||"value"]).map((k,i)=>(
+              <Area key={k} type="monotone" dataKey={k} stroke={w.colors?.[i]||w.color||colors[i%colors.length]} strokeWidth={2} fill={`url(#ag${w.id}${i})`}/>
+            ))}
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
+
+      {w.type==="pie"&&(
+        <ResponsiveContainer width="100%" height={320}>
+          <PieChart margin={{top:20,right:90,bottom:20,left:90}}>
+            <Pie
+              data={w.data}
+              dataKey={w.yKey||"value"}
+              nameKey={w.xKey||"name"}
+              cx="50%" cy="50%"
+              outerRadius={75}
+              paddingAngle={2}
+              labelLine={{stroke:"#94a3b8",strokeWidth:1}}
+              label={({name,percent,x,y,textAnchor})=>{
+                if(percent<0.05) return <text/>;
+                const short=name.length>9?name.slice(0,9)+"…":name;
+                return(
+                  <text x={x} y={y} textAnchor={textAnchor} fill="#374151" fontSize={11} fontFamily="system-ui,sans-serif">
+                    {`${short} ${(percent*100).toFixed(0)}%`}
+                  </text>
+                );
+              }}
+            >
+              {(w.data||[]).map((_,i)=><Cell key={i} fill={colors[i%colors.length]}/>)}
+            </Pie>
+            <Tooltip formatter={(v)=>fmtVal(v,w.format)} contentStyle={{borderRadius:8,fontSize:12}}/>
+            <Legend wrapperStyle={{fontSize:11,paddingTop:8}}/>
+          </PieChart>
+        </ResponsiveContainer>
+      )}
+
+      {w.type==="table"&&(
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr>{(w.columns||[]).map(c=><th key={c} style={{textAlign:"left",padding:"6px 10px 6px 0",color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f5f9",whiteSpace:"nowrap"}}>{c}</th>)}</tr>
+            </thead>
+            <tbody>
+              {(w.rows||[]).map((row,i)=>(
+                <tr key={i} style={{borderBottom:"1px solid #f8fafc"}}>
+                  {row.map((cell,j)=><td key={j} style={{padding:"6px 10px 6px 0",color:"#374151"}}>{typeof cell==="number"&&w.format==="currency"?fmtVal(cell,"currency"):String(cell)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Simple markdown-lite renderer for assistant responses
+function RenderMD({text}){
+  if(!text) return null;
+  const parseBold=str=>{
+    const parts=str.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p,i)=>p.startsWith("**")&&p.endsWith("**")?<strong key={i} style={{fontWeight:700}}>{p.slice(2,-2)}</strong>:p);
+  };
+  const lines=text.split("\n");
+  const out=[];
+  let listItems=[];
+  let keyIdx=0;
+  const k=()=>keyIdx++;
+  const flushList=()=>{
+    if(!listItems.length) return;
+    const items=[...listItems]; listItems=[];
+    out.push(<ul key={k()} style={{margin:"6px 0 6px 4px",paddingLeft:16,display:"flex",flexDirection:"column",gap:3}}>{items.map((li,i)=><li key={i} style={{fontSize:13,color:"#1E293B",lineHeight:1.55}}>{parseBold(li)}</li>)}</ul>);
+  };
+  lines.forEach(line=>{
+    const t=line.trim();
+    if(!t){flushList();return;}
+    if(t.startsWith("### ")){flushList();out.push(<div key={k()} style={{fontSize:13,fontWeight:700,color:"#0284C7",marginTop:8,marginBottom:2}}>{t.slice(4)}</div>);return;}
+    if(t.startsWith("## ")){flushList();out.push(<div key={k()} style={{fontSize:15,fontWeight:800,color:"#0f172a",marginTop:10,marginBottom:4}}>{t.slice(3)}</div>);return;}
+    if(t.startsWith("# ")){flushList();out.push(<div key={k()} style={{fontSize:17,fontWeight:800,color:"#0f172a",marginTop:10,marginBottom:6}}>{t.slice(2)}</div>);return;}
+    if(t.startsWith("- ")||t.startsWith("* ")){listItems.push(t.slice(2));return;}
+    if(/^\d+\.\s/.test(t)){listItems.push(t.replace(/^\d+\.\s/,""));return;}
+    flushList();
+    out.push(<p key={k()} style={{margin:"2px 0",fontSize:13,color:"#1E293B",lineHeight:1.6}}>{parseBold(t)}</p>);
+  });
+  flushList();
+  return <div style={{display:"flex",flexDirection:"column"}}>{out}</div>;
+}
+
+// Format a snake_case or raw query id into a readable label
+function fmtLabel(s){
+  return s.replace(/[_-]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+// Detect preferred chart type from a user message string
+function detectChartType(msg){
+  const m=(msg||"").toLowerCase();
+  if(m.includes("pie")) return "pie";
+  if(m.includes("line")) return "line";
+  if(m.includes("area")) return "area";
+  if(m.includes("bar")) return "bar";
+  if(m.includes("table")) return "table";
+  return null; // no preference — autoWidget picks best
+}
+
+// Auto-generate a widget from a raw query result
+function autoWidget(id,label,result,preferredType){
+  label=fmtLabel(label);
+  if(result===null||result===undefined) return null;
+  // Plain number → always metric regardless of preference
+  if(typeof result==="number"){
+    const isCurrency=/(spend|income|total|amount|balance|value|paid|net|bill|cost|price)/i.test(label);
+    return{id:uid(),type:"metric",title:label,value:result,format:isCurrency?"currency":"number"};
+  }
+  // Normalise plain object → array
+  let data=null;
+  if(typeof result==="object"&&!Array.isArray(result)){
+    const entries=Object.entries(result);
+    if(entries.length>0&&entries.every(([,v])=>typeof v==="number")){
+      data=entries.map(([k,v])=>({name:k,value:v}));
+    }
+  }
+  if(!data&&Array.isArray(result)&&result.length>0){
+    if(typeof result[0]==="object"&&result[0]!==null){
+      const keys=Object.keys(result[0]);
+      const numKey=keys.find(k=>typeof result[0][k]==="number");
+      const strKey=keys.find(k=>typeof result[0][k]==="string");
+      if(numKey&&strKey){
+        data=result.slice(0,20).map(r=>({name:String(r[strKey]),value:r[numKey]}));
+      } else {
+        // table fallback
+        return{id:uid(),type:"table",title:label,columns:keys,rows:result.slice(0,20).map(r=>keys.map(k=>r[k]??"")),format:"currency"};
+      }
+    } else if(typeof result[0]==="number"){
+      data=result.map((v,i)=>({name:String(i+1),value:v}));
+    }
+  }
+  if(!data) return null;
+  // Apply preferred type or fall back to sensible defaults
+  const chartType=preferredType||(data.length<=8?"pie":"bar");
+  if(chartType==="table"){
+    return{id:uid(),type:"table",title:label,columns:["Category","Amount"],rows:data.map(d=>[d.name,d.value]),format:"currency"};
+  }
+  return{id:uid(),type:chartType,title:label,data,xKey:"name",yKey:"value",format:"currency"};
+}
+
+function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSetMessages}){
+  const setMessages = onSetMessages;
+  const [input,setInput]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const chatEndRef=useRef(null);
+  const inputRef=useRef(null);
+
+  useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
+
+  // ─── Tool library: named functions the LLM can call by name + params ──────────
+  // The LLM never writes JavaScript — it just picks a tool name and fills params.
+  const TOOL_LIBRARY={
+    // expenses(month?) — total expenses for a given month
+    expenses:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`;
+    },
+    // income(month?) — total income for a given month
+    income:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`;
+    },
+    // net(month?) — income minus expenses for a given month
+    net:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;})()`;
+    },
+    // categories(month?) — expense totals grouped by category; omit month for all-time
+    categories:(args={})=>{
+      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:e[1]};});})()`;
+    },
+    // top_category(month?) — single highest-spend category
+    top_category:(args={})=>{
+      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:s[0][1]}:null;})()`;
+    },
+    // monthly(months?) — income & expenses per month for last N months
+    monthly:(args={})=>{
+      const n=args.months||6;
+      return `(function(){var mo={};data.txns.forEach(function(t){var d=t.date?t.date.slice(0,7):null;if(!d)return;if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;
+    },
+    // bills(type?) — type "total" returns sum, default returns list [{name,value}]
+    bills:(args={})=>{
+      if(args.type==="total")
+        return `data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)`;
+      return `data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};}).sort(function(a,b){return b.value-a.value;})`;
+    },
+    // portfolio(type?) — type "total" returns value, default returns holdings [{name,value}]
+    portfolio:(args={})=>{
+      if(args.type==="total")
+        return `(function(){if(!data.stocks||!data.stocks.length)return 0;return data.stocks.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0);})()`;
+      return `(function(){if(!data.stocks||!data.stocks.length)return [];return data.stocks.map(function(h){return {name:h.symbol||h.ticker||'?',value:(h.shares||0)*(h.price||h.currentPrice||0)};}).sort(function(a,b){return b.value-a.value;});})()`;
+    },
+    // merchants(month?, limit?) — top merchants/payees by spend
+    merchants:(args={})=>{
+      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      const n=args.limit||10;
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:e[1]};});})()`;
+    },
+    // transactions(month?, limit?) — recent transactions
+    transactions:(args={})=>{
+      const n=args.limit||10;
+      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      return `data.txns.filter(function(t){return true${mFilter};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;
+    },
+
+    // ── Math tools — all arithmetic happens here, never in LLM text ──────────
+
+    // compare_expenses(month1, month2) — {month1,value1,month2,value2,change,changePercent}
+    compare_expenses:(args={})=>{
+      const m1=args.month1||new Date().toISOString().slice(0,7);
+      const m2=args.month2||new Date().toISOString().slice(0,7);
+      return `(function(){
+        function total(m){return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
+        var v1=total('${m1}'),v2=total('${m2}');
+        var change=v2-v1;
+        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
+        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
+      })()`.replace(/\n\s*/g," ");
+    },
+    // compare_income(month1, month2) — same shape for income
+    compare_income:(args={})=>{
+      const m1=args.month1||new Date().toISOString().slice(0,7);
+      const m2=args.month2||new Date().toISOString().slice(0,7);
+      return `(function(){
+        function total(m){return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
+        var v1=total('${m1}'),v2=total('${m2}');
+        var change=v2-v1;
+        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
+        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
+      })()`.replace(/\n\s*/g," ");
+    },
+    // compare_net(month1, month2) — net position comparison
+    compare_net:(args={})=>{
+      const m1=args.month1||new Date().toISOString().slice(0,7);
+      const m2=args.month2||new Date().toISOString().slice(0,7);
+      return `(function(){
+        function net(m){var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;}
+        var v1=net('${m1}'),v2=net('${m2}');
+        var change=v2-v1;
+        var pct=v1!==0?Math.round((change/Math.abs(v1))*1000)/10:null;
+        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
+      })()`.replace(/\n\s*/g," ");
+    },
+    // savings_rate(month?) — {income, expenses, saved, rate%} — what % of income was saved
+    savings_rate:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';var inc=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {month:m,income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;
+    },
+    // expense_share(category, month?) — what % of total spending is one category
+    expense_share:(args={})=>{
+      const cat=args.category||"";
+      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      return `(function(){var cat='${cat.replace(/'/g,"\\'")}';var txns=data.txns.filter(function(t){return t.type==='expense'${mFilter};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;
+    },
+  };
+
+  // Build compact system prompt — just tool names, no raw JS examples
+  const buildSystemPrompt=()=>{
+    const curMonth=new Date().toISOString().slice(0,7);
+    return `You are SpendTracker Assistant. Answer finance questions by calling the tools below. NEVER invent or estimate numbers — only state values returned by tools.
+
+RULES:
+- Always call a tool before answering any financial question.
+- Never refuse. Never say "I can't" — just call the right tool.
+- After getting results, respond in 1-2 sentences using ONLY the returned values.
+
+AVAILABLE TOOLS:
+expenses(month) — total expenses for a month. month = YYYY-MM
+income(month) — total income for a month
+net(month) — income minus expenses
+categories(month?) — expenses by category; omit month for all-time
+top_category(month?) — highest-spend category
+monthly(months?) — income & expenses per month, last N months (default 6)
+bills(type?) — "total" = sum; default = list [{name,value}]
+portfolio(type?) — "total" = portfolio value; default = holdings [{name,value}]
+merchants(month?, limit?) — top merchants by spend
+transactions(month?, limit?) — recent transactions
+
+MATH TOOLS (use these instead of doing any arithmetic yourself):
+compare_expenses(month1, month2) — {value1, value2, change, changePercent}
+compare_income(month1, month2) — same shape for income
+compare_net(month1, month2) — net position comparison
+savings_rate(month?) — {income, expenses, saved, rate%}
+expense_share(category, month?) — what % of spending is one category
+
+navigate(tab) — go to page (home/bills/history/stocks/budget/networth/settings)
+
+RULES:
+- NEVER do arithmetic. Always call a math tool instead.
+- Call exactly ONE tool per response.
+- After getting results, report the returned values directly in 1-2 sentences.
+
+HOW TO CALL:
+<tool>{"name":"TOOL_NAME","args":{"param":"value"}}</tool>
+
+EXAMPLES:
+User: what did I spend in ${curMonth}
+<tool>{"name":"expenses","args":{"month":"${curMonth}"}}</tool>
+
+User: how did my expenses change from 2026-05 to 2026-06
+<tool>{"name":"compare_expenses","args":{"month1":"2026-05","month2":"2026-06"}}</tool>
+
+User: what is my savings rate this month
+<tool>{"name":"savings_rate","args":{"month":"${curMonth}"}}</tool>
+
+User: what percent of spending is food
+<tool>{"name":"expense_share","args":{"category":"Food","month":"${curMonth}"}}</tool>
+
+Current month: ${curMonth}`;
+  };
+
+  const executeTool=async(tool)=>{
+    const{name,args}=tool;
+    if(name==="navigate"){
+      onNavigate(args.tab);
+      return{success:true,navigatedTo:args.tab};
+    }
+    // Named library tool — look up the JS generator and run it
+    if(TOOL_LIBRARY[name]){
+      try{
+        const js=TOOL_LIBRARY[name](args||{});
+        const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:js})});
+        const d=await r.json();
+        return{id:name,result:d.result,error:d.error};
+      }catch(e){return{id:name,error:e.message};}
+    }
+    // Legacy raw query tool (fallback only)
+    if(name==="query"){
+      try{
+        const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:args.js})});
+        const d=await r.json();
+        return{id:args.id||"result",result:d.result,error:d.error};
+      }catch(e){return{id:args.id||"result",error:e.message};}
+    }
+    if(name==="chart"){
+      return{widget:{id:uid(),type:args.type,title:args.title,data:args.data||[],xKey:args.xKey||"name",yKey:args.yKey||"value",multiKeys:args.multiKeys,format:args.format,color:args.color,colors:args.colors}};
+    }
+    if(name==="metric"){
+      return{widget:{id:uid(),type:"metric",title:args.title,value:args.value,label:args.label,format:args.format||"number"}};
+    }
+    if(name==="table"){
+      return{widget:{id:uid(),type:"table",title:args.title,columns:args.columns||[],rows:args.rows||[],format:args.format}};
+    }
+    return{error:"Unknown tool: "+name};
+  };
+
+  // Returns true if text contains financial figures that may be hallucinated
+  const looksLikeFinancialClaim=text=>/\$[\d,]+|\d[\d,]*\.\d{2}|\b\d{3,}[\d,]*\b/.test(text);
+
+  // ─── Preloaded queries: instant answers for known question patterns ──────────
+  // Each entry has: test(msg)→bool, and either action() for side-effects
+  // or queries:[{label, chartType, js(), buildWidget?(result)→widget}]
+  // The fast-path runs these BEFORE hitting the LLM, making responses instant.
+  const PRELOADED_QUERIES=[
+    // Navigate
+    {
+      test:msg=>/navigate.*net.?worth|go.*net.?worth/i.test(msg),
+      action:()=>{ onNavigate("networth"); setMessages(prev=>[...prev,{role:"assistant",display:"Navigating to Net Worth…",content:"",widgets:[]}]); }
+    },
+    // Spending this month
+    {
+      test:msg=>/(how much|total).*(spent|spend|spending)|spent.*(this month|month)/i.test(msg),
+      queries:[{
+        label:"Spent This Month",chartType:null,
+        js:()=>TOOL_LIBRARY.expenses({month:new Date().toISOString().slice(0,7)}),
+      }]
+    },
+    // Monthly income vs expenses (bar) — check before generic "income" or "bar"
+    {
+      test:msg=>/monthly.*(income|expense)|income.*vs.*expense|expense.*vs.*income|income.*expense.*bar|monthly.*bar/i.test(msg),
+      queries:[{
+        label:"Monthly Income vs Expenses",chartType:"bar",multiSeries:true,
+        js:()=>TOOL_LIBRARY.monthly({months:8}),
+        buildWidget:(result)=>({id:uid(),type:"bar",title:"Monthly Income vs Expenses",data:result,xKey:"name",multiKeys:["Income","Expenses"],format:"currency"})
+      }]
+    },
+    // Spending by category (pie)
+    {
+      test:msg=>/categor|pie chart|breakdown/i.test(msg),
+      queries:[{
+        label:"Spending by Category",chartType:"pie",
+        js:()=>TOOL_LIBRARY.categories({}),
+      }]
+    },
+    // Net position this month
+    {
+      test:msg=>/net.*(position|worth|this month)|what.*net/i.test(msg),
+      queries:[
+        {label:"Income This Month",chartType:null,
+          js:()=>TOOL_LIBRARY.income({month:new Date().toISOString().slice(0,7)}),
+        },
+        {label:"Expenses This Month",chartType:null,
+          js:()=>TOOL_LIBRARY.expenses({month:new Date().toISOString().slice(0,7)}),
+        },
+        {label:"Net Position This Month",chartType:null,
+          js:()=>TOOL_LIBRARY.net({month:new Date().toISOString().slice(0,7)}),
+        },
+      ]
+    },
+    // Bills
+    {
+      test:msg=>/bill/i.test(msg),
+      queries:[
+        {label:"Monthly Bills Total",chartType:null,js:()=>TOOL_LIBRARY.bills({type:"total"})},
+        {label:"Bills Breakdown",chartType:"bar",js:()=>TOOL_LIBRARY.bills({})},
+      ]
+    },
+    // Portfolio value
+    {
+      test:msg=>/portfolio|stock.*value|total.*stock/i.test(msg),
+      queries:[
+        {label:"Total Portfolio Value",chartType:null,js:()=>TOOL_LIBRARY.portfolio({type:"total"})},
+        {label:"Holdings by Value",chartType:"bar",js:()=>TOOL_LIBRARY.portfolio({})},
+      ]
+    },
+  ];
+
+  const runAgent=async(userMsg)=>{
+    setLoading(true);setError(null);
+    const userEntry={role:"user",display:userMsg,content:userMsg,widgets:[]};
+    setMessages(prev=>[...prev,userEntry]);
+
+    // ── Fast path: preloaded queries bypass the LLM entirely ──────────────────
+    const preloaded=PRELOADED_QUERIES.find(p=>p.test(userMsg));
+    if(preloaded){
+      if(preloaded.action){
+        preloaded.action();
+      } else {
+        const widgets=[];
+        for(const q of preloaded.queries){
+          try{
+            const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q.js()})});
+            const d=await r.json();
+            if(d.result!==undefined&&!d.error){
+              const w=q.buildWidget?q.buildWidget(d.result):autoWidget(uid(),q.label,d.result,q.chartType);
+              if(w) widgets.push(w);
+            }
+          }catch(e){}
+        }
+        if(widgets.length>0){
+          setMessages(prev=>[...prev,{role:"assistant",display:null,content:"",widgets}]);
+        }
+      }
+      setLoading(false);
+      setTimeout(()=>inputRef.current?.focus(),50);
+      return;
+    }
+    // ── End fast path ──────────────────────────────────────────────────────────
+
+    const systemPrompt=buildSystemPrompt();
+    const histForLLM=[
+      {role:"system",content:systemPrompt},
+      ...messages.map(m=>({role:m.role,content:m.content})),
+      {role:"user",content:userMsg}
+    ];
+
+    let llmMsgs=[...histForLLM];
+    const MAX_ITER=3;
+    let iter=0;
+    let queriesRan=0;
+    let queriesSucceeded=0;
+    const preferredChartType=detectChartType(userMsg); // honour user's explicit chart preference
+
+    try{
+      while(iter<MAX_ITER){
+        iter++;
+        const res=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:llmMsgs,options:{num_predict:400,temperature:0.1}})});
+        if(!res.ok){const e=await res.json();throw new Error(e.error||"LLM error");}
+        const llmData=await res.json();
+        const assistantText=llmData.message?.content||"(no response)";
+        const toolCalls=parseToolCalls(assistantText);
+        // Strip tool tags, code fences, and all meta/privacy boilerplate
+        let cleanText=assistantText
+          .replace(/<tool>[\s\S]*?<\/tool>/g,"")
+          .replace(/```[\w]*\n?[\s\S]*?```/g,"")   // closed code fences
+          .replace(/```[\s\S]*/g,"")                // unclosed code fences → strip to end
+          .replace(/\(this placeholder[^)]*\)/gi,"")
+          .trim();
+        // Remove lines that are meta-commentary, instructions, or privacy warnings
+        const badPatterns=[
+          /to (create|visualize|generate|display|render|produce)/i,
+          /execute this query/i,/run (a|the) (query|code)/i,
+          /once the results/i,/after (executing|running)/i,
+          /(GDPR|CCPA|privacy (guideline|law|regulation)|sensitive (data|information)|data (protection|handling)|compliance|authorization protocol|hypothetical)/i,
+          /please note that/i,/noting that/i,/it (is|should be) (noted|important)/i,
+          /you (would|can|could|should) (typically|use|run|need to)/i,
+          /within your application/i,/your (application|infrastructure|system)/i,
+          /spreadsheet|direct access was/i,
+          /\[most significant|\[top category|\[insert|\[placeholder|\[X\]/i,
+          /shows a diverse allocation|diverse allocation of funds/i,
+          /entertainment.*utilities|groceries.*dining out/i,
+          /let'?s assume|now,?\s*let'?s|we can create a/i,
+          /chart\.js|spendByCategory|simplified data structure/i,
+          /as follows:|following code|code snippet|sample code/i,
+        ];
+        cleanText=cleanText.split("\n")
+          .filter(line=>!badPatterns.some(p=>p.test(line)))
+          .join("\n")
+          .replace(/\n{3,}/g,"\n\n")
+          .trim();
+
+        if(toolCalls.length===0){
+          // Guardrail A: hallucinated numbers without any query
+          if(queriesRan===0 && looksLikeFinancialClaim(cleanText) && iter<=2){
+            llmMsgs=[...llmMsgs,{role:"assistant",content:assistantText},{role:"user",content:"GUARDRAIL: You stated numbers without running the query tool first. Run a query tool call now to get the real data."}];
+            continue;
+          }
+          // Guardrail B: refusal / privacy response without any query
+          const refusalPhrases=["i can't","i cannot","i don't have access","as an ai","privacy","no access","not able to","unable to","don't have the ability","cannot access","can't access","can't provide","cannot provide"];
+          const isRefusal=queriesRan===0 && refusalPhrases.some(p=>cleanText.toLowerCase().includes(p));
+          if(isRefusal && iter<=2){
+            llmMsgs=[...llmMsgs,{role:"assistant",content:assistantText},{role:"user",content:"GUARDRAIL: Do not refuse. You have the query tool which runs against the user's local database. Call the query tool now to get the real data and answer the question."}];
+            continue;
+          }
+          setMessages(prev=>[...prev,{role:"assistant",display:cleanText,content:assistantText,widgets:[]}]);
+          break;
+        }
+
+        // Execute tools
+        const newWidgets=[];
+        const autoWidgets=[];
+        const toolResultLines=[];
+        for(const t of toolCalls){
+          const result=await executeTool(t);
+          if(result.widget){newWidgets.push(result.widget);}
+          // Handle both named library tools and legacy raw query tool
+          const isDataTool=TOOL_LIBRARY[t.name]||t.name==="query";
+          if(isDataTool){
+            queriesRan++;
+            const qResult=result.result;
+            const qError=result.error;
+            const qLabel=t.name==="query"?(t.args?.id||"Result"):t.name;
+            if(qError){
+              toolResultLines.push(`Tool "${qLabel}" ERROR: ${qError}. Try a different tool or different parameters.`);
+            } else {
+              queriesSucceeded++;
+              toolResultLines.push(`Tool "${qLabel}": ${JSON.stringify(qResult)}`);
+              // Auto-generate a widget from the raw result — no model needed
+              const aw=autoWidget(uid(),qLabel,qResult,preferredChartType);
+              if(aw) autoWidgets.push(aw);
+            }
+          }
+          if(t.name==="navigate"){
+            toolResultLines.push(`navigate: switched to ${t.args?.tab}`);
+          }
+        }
+
+        // Immediately show auto-generated data widgets (grounded in real query results)
+        const allWidgets=[...autoWidgets,...newWidgets];
+
+        // On the query pass: show widgets only — suppress any interim model text
+        const hasQueryTools=toolCalls.some(t=>TOOL_LIBRARY[t.name]||t.name==="query");
+        if(allWidgets.length>0){
+          // Show widgets without model text on query pass; with text on final pass
+          setMessages(prev=>[...prev,{role:"assistant",display:hasQueryTools?null:cleanText||null,content:assistantText,widgets:allWidgets}]);
+        } else if(!hasQueryTools&&cleanText){
+          setMessages(prev=>[...prev,{role:"assistant",display:cleanText,content:assistantText,widgets:[]}]);
+        }
+
+        // If no data tools were called (only navigate/chart/etc), done
+        if(!hasQueryTools) break;
+
+        // After successful queries, generate a brief client-side summary from widgets
+        // instead of looping back to the model (which causes context overflow + hallucinations)
+        if(queriesSucceeded>0){
+          const summaryLines=allWidgets.map(w=>{
+            if(w.type==="metric"){
+              const val=w.format==="currency"?"$"+Number(w.value).toFixed(2):Number(w.value).toFixed(2);
+              return `**${w.title}:** ${val}`;
+            }
+            if(w.type==="pie"||w.type==="bar"||w.type==="line"||w.type==="area"){
+              const top=w.data&&w.data[0];
+              return top?`Top category: **${top.name}** at $${Number(top.value).toFixed(2)}`:`Here is your ${w.title} breakdown.`;
+            }
+            if(w.type==="table"&&w.rows&&w.rows.length>0){
+              return `Found ${w.rows.length} results.`;
+            }
+            return null;
+          }).filter(Boolean);
+          // Update last message to include summary text if we have it
+          if(summaryLines.length>0){
+            const summaryText=summaryLines.join("\n");
+            setMessages(prev=>{
+              const copy=[...prev];
+              // Find the last assistant message we just added and give it display text
+              for(let idx=copy.length-1;idx>=0;idx--){
+                if(copy[idx].role==="assistant"){
+                  copy[idx]={...copy[idx],display:summaryText};
+                  break;
+                }
+              }
+              return copy;
+            });
+          }
+          break;
+        }
+        // No successful queries yet — feed results back for model to retry/fix its query
+        llmMsgs=[
+          ...llmMsgs,
+          {role:"assistant",content:assistantText},
+          {role:"user",content:`QUERY RESULTS:\n${toolResultLines.join("\n")}\n\nIf there were errors, fix the JavaScript and try again with a corrected query call.`}
+        ];
+      }
+    }catch(e){
+      setError(e.message);
+      setMessages(prev=>[...prev,{role:"assistant",display:"⚠ "+e.message,content:"",widgets:[]}]);
+    }
+
+    // Last-resort fallback: if no query succeeded (refused, errored, or never tried)
+    // run a reliable pre-built query directly — no model involvement
+    // Also clear any model text shown, since it's boilerplate not real data
+    if(queriesSucceeded===0){
+      setMessages(prev=>{
+        const copy=[...prev];
+        for(let i=copy.length-1;i>=0;i--){
+          if(copy[i].role==="assistant"&&copy[i].display){
+            copy[i]={...copy[i],display:null};
+            break;
+          }
+        }
+        return copy;
+      });
+      const q=userMsg.toLowerCase();
+      const curM=new Date().toISOString().slice(0,7);
+      // Ordered by specificity — first match wins
+      const FALLBACKS=[
+        {
+          test:q=>q.includes("most")&&(q.includes("categor")||q.includes("spend")),
+          js:`(function(){var acc={};data.txns.filter(function(t){return t.type==='expense';}).forEach(function(t){var c=t.category||'Other';acc[c]=(acc[c]||0)+t.amount;});var sorted=Object.entries(acc).sort(function(a,b){return b[1]-a[1];});return sorted.map(function(e){return {name:e[0],value:e[1]};});})()`,
+          label:"Spending by category"
+        },
+        {
+          test:q=>q.includes("categor")||q.includes("breakdown"),
+          js:`(function(){var acc={};data.txns.filter(function(t){return t.type==='expense';}).forEach(function(t){var c=t.category||'Other';acc[c]=(acc[c]||0)+t.amount;});return Object.entries(acc).sort(function(a,b){return b[1]-a[1];}).map(function(e){return {name:e[0],value:e[1]};});})()`,
+          label:"Spending by category"
+        },
+        {
+          test:q=>(q.includes("spend")||q.includes("spent"))&&q.includes("month"),
+          js:`(function(){var m='${curM}';return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`,
+          label:"Spending this month"
+        },
+        {
+          test:q=>q.includes("income")&&q.includes("month"),
+          js:`(function(){var m='${curM}';return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`,
+          label:"Income this month"
+        },
+        {
+          test:q=>q.includes("bill"),
+          js:`data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};})`,
+          label:"Monthly bills"
+        },
+        {
+          test:q=>q.includes("net")||(q.includes("income")&&q.includes("expense")),
+          js:`(function(){var m='${curM}';var inc=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return inc-exp;})()`,
+          label:"Net position this month"
+        },
+        {
+          test:q=>q.includes("spend")||q.includes("spent"),
+          js:`data.txns.filter(function(t){return t.type==='expense';}).reduce(function(s,t){return s+t.amount;},0)`,
+          label:"Total spending"
+        },
+        {
+          test:q=>q.includes("income"),
+          js:`data.txns.filter(function(t){return t.type==='income';}).reduce(function(s,t){return s+t.amount;},0)`,
+          label:"Total income"
+        },
+      ];
+      const match=FALLBACKS.find(f=>f.test(q));
+      if(match){
+        try{
+          const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:match.js})});
+          const d=await r.json();
+          if(d.result!==undefined&&!d.error){
+            const aw=autoWidget(uid(),match.label,d.result,preferredChartType);
+            if(aw) setMessages(prev=>[...prev,{role:"assistant",display:null,content:"",widgets:[aw]}]);
+          }
+        }catch{}
+      }
+    }
+
+    setLoading(false);
+    setTimeout(()=>inputRef.current?.focus(),50);
+  };
+
+  const send=()=>{
+    const msg=input.trim();
+    if(!msg||loading)return;
+    setInput("");
+    runAgent(msg);
+  };
+
+  const SUGGESTIONS=["How much have I spent this month?","Show spending by category as a pie chart","What's my net position?","Show my monthly income vs expenses as a bar chart","How much do I pay in bills per month?","What's my total portfolio value?","Navigate to net worth"];
+
+  const hasMsgs=messages.length>0;
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",minHeight:500}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexShrink:0}}>
+        <div>
+          <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Insights &amp; Analytics</h2>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>Local processing only · powered by {settings?.ollamaModel||"phi3:mini"}</div>
+        </div>
+        {(widgets.length>0||hasMsgs)&&(
+          <div style={{display:"flex",gap:8}}>
+            {widgets.length>0&&<button onClick={()=>onSetWidgets([])} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>Clear Charts</button>}
+            {hasMsgs&&<button onClick={()=>setMessages([])} style={{padding:"6px 12px",borderRadius:8,border:"1px solid #e2e8f0",background:"#f8fafc",color:"#64748b",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>Clear Chat</button>}
+          </div>
+        )}
+      </div>
+
+      {/* Pinned widgets board */}
+      {widgets.length>0&&(
+        <div style={{marginBottom:16,flexShrink:0}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Pinned Charts</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
+            {widgets.map(w=><InsightWidget key={`pin-${w.id}`} w={w} onRemove={id=>onSetWidgets(prev=>prev.filter(x=>x.id!==id))}/>)}
+          </div>
+        </div>
+      )}
+
+      {/* Chat area */}
+      <div style={{flex:1,overflowY:"auto",marginBottom:12,display:"flex",flexDirection:"column",gap:12}}>
+        {/* Welcome / suggestions */}
+        {!hasMsgs&&(
+          <div style={{...CA,textAlign:"center",padding:"32px 24px"}}>
+            <div style={{fontWeight:700,fontSize:16,color:"#1E293B",marginBottom:6}}>Ask anything about your finances</div>
+            <div style={{fontSize:13,color:"#64748b",marginBottom:20}}>Runs locally — your data stays on your machine.</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"}}>
+              {SUGGESTIONS.map(s=>(
+                <button key={s} onClick={()=>{setInput(s);inputRef.current?.focus();}} style={{padding:"7px 14px",borderRadius:20,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:500}}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Messages */}
+        {messages.map((m,i)=>{
+          const isUser=m.role==="user";
+          const hasWidgets=m.widgets&&m.widgets.length>0;
+          const isMetricOnly=hasWidgets&&m.widgets.every(w=>w.type==="metric")&&!m.display;
+          return(
+            <div key={i} style={{display:"flex",flexDirection:"column",alignItems:isUser?"flex-end":"flex-start",gap:10}}>
+              {/* User bubble */}
+              {isUser&&m.display&&(
+                <div style={{maxWidth:"72%",padding:"9px 15px",borderRadius:"18px 18px 4px 18px",background:"linear-gradient(135deg,#0284C7,#0369a1)",color:"#fff",fontSize:13,lineHeight:1.6,boxShadow:"0 1px 6px rgba(2,132,199,0.25)"}}>
+                  {m.display}
+                </div>
+              )}
+              {/* Assistant text bubble */}
+              {!isUser&&m.display&&(
+                <div style={{maxWidth:"82%",padding:"12px 16px",borderRadius:"4px 18px 18px 18px",background:"#fff",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1px solid #e2e8f0"}}>
+                  <RenderMD text={m.display}/>
+                </div>
+              )}
+              {/* Widgets — full-width standalone cards */}
+              {hasWidgets&&(
+                <div style={{width:"100%",display:"grid",gridTemplateColumns:isMetricOnly?"repeat(auto-fill,minmax(180px,1fr))":"1fr",gap:10}}>
+                  {m.widgets.map(w=>(
+                    <div key={`msg-${i}-${w.id}`} style={{position:"relative"}}>
+                      <InsightWidget w={w} onRemove={id=>setMessages(prev=>prev.map(msg=>({...msg,widgets:(msg.widgets||[]).filter(x=>x.id!==id)})))}/>
+                      <button
+                        onClick={()=>onSetWidgets(prev=>[...prev,w])}
+                        title="Pin to board"
+                        style={{position:"absolute",top:8,right:32,background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:6,padding:"2px 8px",cursor:"pointer",fontSize:10,color:"#0284C7",fontFamily:"inherit",fontWeight:600}}
+                      >Pin</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Loading indicator */}
+        {loading&&(
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",gap:4}}>
+              {[0,1,2].map(i=><span key={i} style={{width:7,height:7,borderRadius:"50%",background:"#0284C7",display:"inline-block",animation:`bounce 1.2s ${i*0.2}s infinite`}}/>)}
+            </div>
+            <span style={{fontSize:12,color:"#94a3b8"}}>Thinking…</span>
+          </div>
+        )}
+        <div ref={chatEndRef}/>
+      </div>
+
+      {/* Input bar */}
+      <div style={{flexShrink:0,display:"flex",gap:10,alignItems:"flex-end",background:"#fff",borderRadius:14,border:"1.5px solid #e2e8f0",padding:"10px 14px",boxShadow:"0 2px 8px rgba(0,0,0,0.06)"}}>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+          placeholder="Ask anything… e.g. 'Show my spending by category' or 'Navigate to net worth'"
+          style={{flex:1,border:"none",outline:"none",resize:"none",fontSize:13,fontFamily:"inherit",lineHeight:1.5,maxHeight:120,minHeight:24,overflow:"auto",background:"transparent",color:"#1E293B"}}
+          rows={1}
+          disabled={loading}
+        />
+        <button onClick={send} disabled={loading||!input.trim()} style={{flexShrink:0,padding:"8px 18px",borderRadius:10,border:"none",background:loading||!input.trim()?"#e2e8f0":"linear-gradient(135deg,#0284C7,#0369a1)",color:loading||!input.trim()?"#94a3b8":"#fff",cursor:loading||!input.trim()?"not-allowed":"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit",transition:"all .15s"}}>
+          Send
+        </button>
+      </div>
+
+      <style>{`@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}`}</style>
+    </div>
+  );
+}
+
+// ── Sidebar nav data ─────────────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { k:"dashboard", l:"Home",           icon:"⊞", desc:"Overview of your finances — spending, income, budgets and upcoming bills at a glance.", alwaysShow:true },
+  { k:"insights",  l:"Insights",       icon:"◈", desc:"Ask questions about your data and get charts and answers powered by a local AI model.", alwaysShow:true },
+  { k:"bills",     l:"Bills",          icon:"◷", desc:"Track recurring bills, mark them paid each month, and see what's still outstanding." },
+  { k:"goals",     l:"Goals",          icon:"◎", desc:"Set savings goals with a target amount and date, and track your progress over time." },
+  { k:"networth",  l:"Net Worth",      icon:"◈", desc:"Track accounts, assets and liabilities to see your overall financial position." },
+  { k:"stocks",    l:"Stocks",         icon:"◉", desc:"Monitor your stock and ETF holdings with live prices in CAD and USD." },
+  { k:"expected",  l:"Expected Income",icon:"◑", desc:"Schedule future income payments and mark them received when they land." },
+  { k:"history",   l:"History",        icon:"≡",  desc:"Browse, search and bulk-edit all your past transactions." },
+  { k:"vacations", l:"Vacations",      icon:"◷", desc:"Budget and track spending for trips separately from your main expenses." },
+  { k:"categories",l:"Categories",     icon:"▦", desc:"Define spending categories and set monthly budget caps with progress alerts." },
+  { k:"manual",    l:"Add Expense",    icon:"+", desc:"Log a one-off or recurring expense directly into your transaction history." },
+  { k:"income",    l:"Add Income",     icon:"+", desc:"Record a one-off or recurring income entry." },
+  { k:"folder",    l:"Folder Sync",    icon:"▤", desc:"Point the app at a local folder of receipts and import them all at once." },
+  { k:"upload",    l:"Upload Receipts",icon:"↑", desc:"Upload individual receipt photos or PDFs and extract the details automatically." },
+  { k:"settings",  l:"Settings",       icon:"⚙", desc:"Configure your name, Ollama model, and developer options.", isBottom:true },
+];
+
+// ── Sidebar component ─────────────────────────────────────────────────────────
+function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew }) {
+  const [flyoutOpen, setFlyoutOpen] = useState(false);
+  const [hoveredApp, setHoveredApp] = useState(null);
+  const flyoutRef = useRef(null);
+  const appsButtonRef = useRef(null);
+  const flyoutTimer = useRef(null);
+
+  const appItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom);
+  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"⚙", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
+  const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom), ...devItems];
+  const pinnedItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom && favourites.includes(n.k));
+
+  const badge = k => {
+    if (k==="expected" && pendingCount>0) return pendingCount;
+    if (k==="bills" && unpaidBillCount>0) return unpaidBillCount;
+    return null;
+  };
+
+  const [flyoutTop, setFlyoutTop] = useState(0);
+  const openFlyout = () => {
+    clearTimeout(flyoutTimer.current);
+    if (appsButtonRef.current) {
+      const r = appsButtonRef.current.getBoundingClientRect();
+      setFlyoutTop(r.top);
+    }
+    setFlyoutOpen(true);
+  };
+  const closeFlyout = () => { flyoutTimer.current = setTimeout(()=>setFlyoutOpen(false), 120); };
+
+  const NavBtn = ({ item, indent=false }) => {
+    const b = badge(item.k);
+    const active = view === item.k;
+    return (
+      <button
+        onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
+        title={item.desc}
+        style={{
+          display:"flex", alignItems:"center", gap:10, width:"100%",
+          padding: indent ? "7px 14px 7px 20px" : "7px 14px",
+          borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500,
+          background: active ? "rgba(2,132,199,0.12)" : "transparent",
+          color: active ? "#0284C7" : "#334155",
+          textAlign:"left", fontFamily:"inherit", position:"relative",
+          transition:"background 0.12s, color 0.12s",
+        }}
+        onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(0,0,0,0.04)"; }}
+        onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}
+      >
+        <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>{item.icon}</span>
+        <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.l}</span>
+        {b && <span style={{ minWidth:16,height:16,borderRadius:8,background:item.k==="bills"?"#dc2626":"#06B6D4",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px",flexShrink:0 }}>{b}</span>}
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #e2e8f0", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none" }}>
+      {/* Logo */}
+      <div style={{ padding:"0 14px", height:56, display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid #f1f5f9", flexShrink:0 }}>
+        <div style={{ width:28, height:28, borderRadius:8, background:"linear-gradient(135deg,#0284C7,#0369a1)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <span style={{ color:"#fff", fontWeight:900, fontSize:13 }}>S</span>
+        </div>
+        <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>SpendTracker</span>
+        <button onClick={onShowWhatsNew} title="What's new" style={{ marginLeft:"auto", background:"#f0f9ff", border:"1px solid #bae6fd", cursor:"pointer", padding:"3px 7px", borderRadius:12, fontSize:10, color:"#0284C7", fontFamily:"inherit", fontWeight:600, flexShrink:0, whiteSpace:"nowrap" }}>New</button>
+      </div>
+
+      {/* Scrollable nav */}
+      <div style={{ flex:1, overflowY:"auto", padding:"8px 6px", display:"flex", flexDirection:"column", gap:1 }}>
+        {/* Always-visible: Home + Insights */}
+        {NAV_ITEMS.filter(n=>n.alwaysShow).map(item=>(
+          <NavBtn key={item.k} item={item} />
+        ))}
+
+        {/* Favourites */}
+        {pinnedItems.length > 0 && (
+          <>
+            <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"10px 14px 4px" }}>Favourites</div>
+            {pinnedItems.map(item=><NavBtn key={item.k} item={item} />)}
+          </>
+        )}
+
+        {/* Applications flyout trigger */}
+        <div
+          ref={appsButtonRef}
+          onMouseEnter={openFlyout}
+          onMouseLeave={closeFlyout}
+          style={{ position:"relative", marginTop:4 }}
+        >
+          <button
+            style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"7px 14px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500, background: flyoutOpen ? "rgba(2,132,199,0.08)" : "transparent", color: flyoutOpen ? "#0284C7" : "#334155", textAlign:"left", fontFamily:"inherit", transition:"background 0.12s" }}
+            onMouseEnter={e=>{ openFlyout(); e.currentTarget.style.background="rgba(2,132,199,0.08)"; e.currentTarget.style.color="#0284C7"; }}
+            onMouseLeave={e=>{ closeFlyout(); if(!flyoutOpen){ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="#334155"; } }}
+          >
+            <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>▦</span>
+            <span style={{ flex:1 }}>Applications</span>
+            <span style={{ fontSize:11, opacity:0.5 }}>›</span>
+          </button>
+
+          {/* Flyout panel */}
+          {flyoutOpen && (
+            <div
+              ref={flyoutRef}
+              onMouseEnter={openFlyout}
+              onMouseLeave={closeFlyout}
+              style={{ position:"fixed", left:220, top:flyoutTop, background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, boxShadow:"0 8px 32px rgba(15,23,42,0.14)", width:260, padding:"8px 6px", zIndex:40, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
+            >
+              <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"4px 12px 8px" }}>All Applications</div>
+              {appItems.map(item => {
+                const isFav = favourites.includes(item.k);
+                return (
+                  <div
+                    key={item.k}
+                    onMouseEnter={() => setHoveredApp(item.k)}
+                    onMouseLeave={() => setHoveredApp(null)}
+                    style={{ display:"flex", alignItems:"center", gap:4, borderRadius:8, padding:"2px 4px 2px 8px", background: hoveredApp===item.k ? "#f8fafc" : "transparent", transition:"background 0.1s" }}
+                  >
+                    <button
+                      onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
+                      style={{ display:"flex", alignItems:"center", gap:9, flex:1, padding:"6px 6px 6px 0", border:"none", background:"transparent", cursor:"pointer", fontSize:13, fontWeight: view===item.k ? 600 : 500, color: view===item.k ? "#0284C7" : "#1e293b", textAlign:"left", fontFamily:"inherit" }}
+                    >
+                      <span style={{ fontSize:13, width:18, textAlign:"center", flexShrink:0, opacity:0.6 }}>{item.icon}</span>
+                      <div style={{ flex:1 }}>
+                        <div style={{ lineHeight:1.3 }}>{item.l}</div>
+                        {hoveredApp===item.k && <div style={{ fontSize:11, color:"#64748b", marginTop:2, lineHeight:1.4 }}>{item.desc}</div>}
+                      </div>
+                    </button>
+                    {/* Star / favourite toggle */}
+                    <button
+                      onClick={() => onToggleFavourite(item.k)}
+                      title={isFav ? "Remove from favourites" : "Add to favourites"}
+                      style={{ background:"none", border:"none", cursor:"pointer", fontSize:14, color: isFav ? "#f59e0b" : "#cbd5e1", padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
+                      onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#94a3b8"}
+                      onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":"#cbd5e1"}
+                    >★</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom: settings / dev */}
+      <div style={{ padding:"8px 6px", borderTop:"1px solid #f1f5f9", display:"flex", flexDirection:"column", gap:1, flexShrink:0 }}>
+        {bottomItems.map(item => <NavBtn key={item.k} item={item} />)}
+      </div>
+    </div>
+  );
+}
+
 function WhatsNewModal({onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
@@ -1313,6 +3782,20 @@ export default function App(){
   const [vacations,setVacations]=useState([]);
   const [vacationTxns,setVacationTxns]=useState([]);
   const [receiptFPs,setReceiptFPs]=useState(new Set());
+  const [bills,setBills]=useState([]);
+  const [billPayments,setBillPayments]=useState([]);
+  const [goals,setGoals]=useState([]);
+  const [accounts,setAccounts]=useState([]);
+  const [accountHistory,setAccountHistory]=useState([]);
+  const [holdings,setHoldings]=useState([]);
+  const [stockPrices,setStockPrices]=useState({});
+  const [fxRate,setFxRate]=useState(1.38);
+  const [settings,setSettings]=useState(DEFAULT_SETTINGS);
+  const [schema,setSchema]=useState(DEFAULT_SCHEMA);
+  const [insightWidgets,setInsightWidgets]=useState([]);
+  const [insightMessages,setInsightMessages]=useState([]);
+  const [favourites,setFavourites]=useState(["bills","history","stocks"]);
+  const toggleFavourite=k=>setFavourites(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
@@ -1331,6 +3814,16 @@ export default function App(){
       if(d.vacations) setVacations(d.vacations);
       if(d.vacationTxns) setVacationTxns(d.vacationTxns);
       if(d.receiptFPs) setReceiptFPs(new Set(d.receiptFPs));
+      if(d.bills) setBills(d.bills);
+      if(d.billPayments) setBillPayments(d.billPayments);
+      if(d.goals) setGoals(d.goals);
+      if(d.accounts) setAccounts(d.accounts);
+      if(d.accountHistory) setAccountHistory(d.accountHistory);
+      if(d.holdings) setHoldings(d.holdings);
+      if(d.settings) setSettings({...DEFAULT_SETTINGS,...d.settings});
+      if(d.schema) setSchema(d.schema);
+      if(d.insightMessages) setInsightMessages(d.insightMessages);
+      if(d.insightWidgets) setInsightWidgets(d.insightWidgets);
       setReady(true);
     });
   },[]);
@@ -1342,6 +3835,24 @@ export default function App(){
   const saveVacations=v=>{setVacations(v);saveServerData({vacations:v})};
   const saveVacationTxns=t=>{setVacationTxns(t);saveServerData({vacationTxns:t})};
   const saveReceiptFPs=fps=>{setReceiptFPs(fps);saveServerData({receiptFPs:[...fps]})};
+  const saveBills=b=>{setBills(b);saveServerData({bills:b})};
+  const saveBillPayments=p=>{setBillPayments(p);saveServerData({billPayments:p})};
+  const saveGoals=g=>{setGoals(g);saveServerData({goals:g})};
+  const saveAccounts=a=>{setAccounts(a);saveServerData({accounts:a})};
+  const saveAccountHistory=h=>{setAccountHistory(h);saveServerData({accountHistory:h})};
+  const saveHoldings=h=>{setHoldings(h);saveServerData({holdings:h})};
+  const saveSettings=s=>{setSettings(s);saveServerData({settings:s})};
+  const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
+  // Auto-persist insight chat & widgets whenever they change (skip initial empty load)
+  const insightMsgsReady=useRef(false);
+  useEffect(()=>{if(!insightMsgsReady.current){insightMsgsReady.current=true;return;}saveServerData({insightMessages});},[insightMessages]);
+  const insightWgtsReady=useRef(false);
+  useEffect(()=>{if(!insightWgtsReady.current){insightWgtsReady.current=true;return;}saveServerData({insightWidgets});},[insightWidgets]);
+  const toggleBill=id=>{
+    const paid=billPayments.some(p=>p.billId===id&&p.month===month);
+    if(paid){saveBillPayments(billPayments.filter(p=>!(p.billId===id&&p.month===month)));}
+    else{const b=bills.find(x=>x.id===id);if(b)saveBillPayments([...billPayments,{id:uid(),billId:id,month,paidDate:today(),amount:b.amount}]);}
+  };
 
   const confirmPayment=id=>{
     const item=expected.find(e=>e.id===id);if(!item)return;
@@ -1357,40 +3868,47 @@ export default function App(){
 
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
 
-  const nav=[{k:"dashboard",l:"Dashboard"},{k:"expected",l:"Expected Income"},{k:"folder",l:"Folder Sync"},{k:"upload",l:"Upload Receipts"},{k:"manual",l:"Add Expense"},{k:"income",l:"Add Income"},{k:"history",l:"History"},{k:"vacations",l:"Vacations"},{k:"categories",l:"Categories"}];
   const pendingCount=expected.filter(e=>!e.confirmed).length;
+  const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
 
   return (
-    <div style={{minHeight:"100vh",background:"#f0f9ff",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B"}}>
+    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff"}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
-      <header style={{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",position:"sticky",top:0,zIndex:20,boxShadow:"0 2px 12px rgba(2,132,199,0.3)"}}>
-        <div style={{maxWidth:1140,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",height:56,gap:16}}>
-          <button onClick={()=>setShowWhatsNew(v=>!v)} title="What's New" style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",cursor:"pointer",padding:"4px 10px",borderRadius:20,fontSize:11,color:"#e0f2fe",fontFamily:"inherit",flexShrink:0,display:"flex",alignItems:"center",gap:5,lineHeight:1,fontWeight:500,whiteSpace:"nowrap"}}>✦ <span>What's new</span></button>
-          <span onClick={()=>setView("dashboard")} style={{fontWeight:800,fontSize:15,whiteSpace:"nowrap",color:"#fff",letterSpacing:"-0.3px",flexShrink:0,cursor:"pointer"}}>SpendTracker</span>
-          <nav style={{display:"flex",gap:1,overflowX:"auto",flex:1}}>
-            {nav.map(n=>(
-              <button key={n.k} onClick={()=>setView(n.k)} style={{padding:"6px 13px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,whiteSpace:"nowrap",background:view===n.k?"#fff":"transparent",color:view===n.k?"#0284C7":"rgba(255,255,255,0.75)",flexShrink:0,fontFamily:"inherit",position:"relative",transition:"background 0.15s,color 0.15s"}}>
-                {n.l}
-                {n.k==="expected"&&pendingCount>0&&<span style={{position:"absolute",top:3,right:4,width:13,height:13,borderRadius:"50%",background:"#06B6D4",color:"#fff",fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{pendingCount}</span>}
-              </button>
-            ))}
-          </nav>
-        </div>
-      </header>
-      <main style={{maxWidth:1140,margin:"0 auto",padding:"24px 20px"}}>
+
+      {/* Left sidebar */}
+      <Sidebar
+        view={view}
+        onNavigate={setView}
+        favourites={favourites}
+        onToggleFavourite={toggleFavourite}
+        pendingCount={pendingCount}
+        unpaidBillCount={unpaidBillCount}
+        devMode={settings.devMode}
+        onShowWhatsNew={()=>setShowWhatsNew(v=>!v)}
+      />
+
+      {/* Main content */}
+      <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns}/>}
+        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="manual"&&<RecurringForm title="Add Expense" type="expense" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="income"&&<RecurringForm title="Add Income" type="income" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast}/>}
+        {view==="bills"&&<Bills bills={bills} billPayments={billPayments} onSaveBills={saveBills} onSaveBillPayments={saveBillPayments} cats={cats}/>}
+        {view==="goals"&&<Goals goals={goals} onSaveGoals={saveGoals}/>}
+        {view==="networth"&&<NetWorth accounts={accounts} accountHistory={accountHistory} onSaveAccounts={saveAccounts} onSaveAccountHistory={saveAccountHistory} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
+        {view==="stocks"&&<Stocks holdings={holdings} onSaveHoldings={saveHoldings} onPricesUpdate={setStockPrices} onFxRateUpdate={setFxRate}/>}
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
         {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets}/>}
-      </main>
+        {view==="settings"&&<Settings settings={settings} onSave={saveSettings}/>}
+        {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
+        {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
+      </div>
     </div>
   );
 }

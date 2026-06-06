@@ -7,7 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.SERVER_PORT || process.env.PORT || 3001;
 const DATA_FILE = join(__dirname, "data.json");
 
 function readData() {
@@ -41,6 +41,104 @@ app.post("/api/messages", async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// Proxy Yahoo Finance quotes via v8 chart endpoint (v7 quote API is restricted)
+app.get("/api/stocks", async (req, res) => {
+  const { symbols } = req.query;
+  if (!symbols) return res.json({ quotes: [] });
+  const tickers = symbols.split(",").map(s => s.trim()).filter(Boolean);
+  try {
+    const quotes = await Promise.all(tickers.map(async symbol => {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
+      const data = await r.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta) return null;
+      const prev = meta.chartPreviousClose ?? meta.previousClose ?? null;
+      const price = meta.regularMarketPrice ?? null;
+      const change = price != null && prev != null ? price - prev : null;
+      const changePercent = change != null && prev > 0 ? (change / prev) * 100 : null;
+      return {
+        symbol: meta.symbol || symbol,
+        name: meta.shortName || meta.symbol || symbol,
+        price,
+        change,
+        changePercent,
+        prevClose: prev,
+        currency: meta.currency || "USD",
+        marketState: meta.marketState || "CLOSED",
+      };
+    }));
+    res.json({ quotes: quotes.filter(Boolean) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Yahoo Finance historical chart data
+app.get("/api/stocks/history", async (req, res) => {
+  const { symbol, range = "1mo", interval = "1d" } = req.query;
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
+    const data = await r.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return res.status(404).json({ error: "No data" });
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators?.quote?.[0]?.close || [];
+    const points = timestamps.map((ts, i) => ({
+      date: new Date(ts * 1000).toISOString().split("T")[0],
+      close: closes[i] ?? null,
+    })).filter(p => p.close !== null);
+    res.json({ symbol, points });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Ollama proxy — keeps AI processing fully local ───────────────────────────
+const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
+
+// List available models (used by Settings connection test)
+app.get("/api/llm/models", async (_req, res) => {
+  try {
+    const r = await fetch(`${OLLAMA_BASE}/api/tags`);
+    if (!r.ok) return res.status(r.status).json({ error: "Ollama not reachable" });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(503).json({ error: "Ollama not running: " + err.message });
+  }
+});
+
+// Chat completion (stream:false — returns full response)
+app.post("/api/llm/chat", async (req, res) => {
+  try {
+    const r = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...req.body, stream: false }),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: "Ollama error " + r.status });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(503).json({ error: "Ollama not running: " + err.message });
+  }
+});
+
+// Execute a schema measure query against data.json
+app.post("/api/llm/query", (req, res) => {
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: "query required" });
+  try {
+    const data = readData();
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("data", `"use strict"; return (${query});`);
+    res.json({ result: fn(data) });
+  } catch (err) {
+    res.status(400).json({ error: "Query error: " + err.message });
   }
 });
 
