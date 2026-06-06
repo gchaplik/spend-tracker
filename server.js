@@ -99,6 +99,49 @@ app.get("/api/stocks/history", async (req, res) => {
   }
 });
 
+// ── Ollama proxy — keeps AI processing fully local ───────────────────────────
+const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
+
+// List available models (used by Settings connection test)
+app.get("/api/llm/models", async (_req, res) => {
+  try {
+    const r = await fetch(`${OLLAMA_BASE}/api/tags`);
+    if (!r.ok) return res.status(r.status).json({ error: "Ollama not reachable" });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(503).json({ error: "Ollama not running: " + err.message });
+  }
+});
+
+// Chat completion (stream:false — returns full response)
+app.post("/api/llm/chat", async (req, res) => {
+  try {
+    const r = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...req.body, stream: false }),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: "Ollama error " + r.status });
+    res.json(await r.json());
+  } catch (err) {
+    res.status(503).json({ error: "Ollama not running: " + err.message });
+  }
+});
+
+// Execute a schema measure query against data.json
+app.post("/api/llm/query", (req, res) => {
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: "query required" });
+  try {
+    const data = readData();
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("data", `"use strict"; return (${query});`);
+    res.json({ result: fn(data) });
+  } catch (err) {
+    res.status(400).json({ error: "Query error: " + err.message });
+  }
+});
+
 // Serve built frontend in production
 const distPath = join(__dirname, "dist");
 if (existsSync(distPath)) {
