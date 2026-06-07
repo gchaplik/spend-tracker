@@ -2223,6 +2223,66 @@ const DEFAULT_SCHEMA={views:{
       total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of (cost basis × shares) for all holdings with a known cost basis",       query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)"},
       total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",                                       query:"data.holdings.reduce((s,h)=>s+h.shares,0)"},
     }
+  },
+  vacations:{
+    label:"Vacations",description:"Vacation budgets and date ranges",source:"vacations",
+    dimensions:{
+      name:      {type:"string", label:"Name",       description:"Vacation name (e.g. Paris 2026)",field:"name"},
+      start_date:{type:"date",   label:"Start Date", description:"Vacation start date",field:"startDate"},
+      end_date:  {type:"date",   label:"End Date",   description:"Vacation end date",field:"endDate"},
+      budget:    {type:"currency",label:"Budget",    description:"Total budget for the vacation in CAD",field:"budget"},
+      notes:     {type:"string", label:"Notes",      description:"Optional notes about the vacation",field:"notes"},
+    },
+    measures:{
+      count:        {type:"count",   label:"Count",          description:"Total number of vacations",                                             query:"data.vacations.length"},
+      total_budget: {type:"sum",     label:"Total Budget",   description:"Sum of all vacation budgets",                                          query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)"},
+      total_spent:  {type:"sum",     label:"Total Spent",    description:"Sum of all vacation transaction amounts",                              query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
+      total_remaining:{type:"subtract",label:"Total Remaining",description:"Total vacation budgets minus total vacation spending",              query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)-(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
+    }
+  },
+  vacation_txns:{
+    label:"Vacation Transactions",description:"Individual spending entries recorded against a vacation",source:"vacationTxns",
+    dimensions:{
+      vacation_id:{type:"string", label:"Vacation ID",description:"ID of the parent vacation",field:"vacationId"},
+      date:       {type:"date",   label:"Date",        description:"Date the vacation expense occurred",field:"date"},
+      amount:     {type:"currency",label:"Amount",     description:"Expense amount in CAD",field:"amount"},
+      category:   {type:"string", label:"Category",   description:"Spending category (e.g. Dining, Transport, Accommodation)",field:"category"},
+      merchant:   {type:"string", label:"Merchant",   description:"Merchant or vendor name",field:"merchant"},
+      note:       {type:"string", label:"Note",       description:"Optional note for the expense",field:"note"},
+    },
+    measures:{
+      count:      {type:"count",label:"Count",      description:"Total vacation transactions",                                query:"(data.vacationTxns||[]).length"},
+      total:      {type:"sum",  label:"Total Spent",description:"Total amount spent across all vacation transactions",       query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
+      avg_txn:    {type:"divide",label:"Avg per Txn",description:"Average vacation transaction amount",                    query:"(()=>{const t=data.vacationTxns||[];return t.length?t.reduce((s,x)=>s+x.amount,0)/t.length:0})()"},
+    }
+  },
+  bill_payments:{
+    label:"Bill Payments",description:"History of bills marked as paid each month",source:"billPayments",
+    dimensions:{
+      bill_id:   {type:"string", label:"Bill ID",   description:"ID of the parent bill",field:"billId"},
+      month:     {type:"string", label:"Month",     description:"Month the bill was paid (YYYY-MM)",field:"month"},
+      amount:    {type:"currency",label:"Amount",   description:"Amount paid",field:"amount"},
+      paid_date: {type:"date",   label:"Paid Date", description:"Date the payment was recorded",field:"paidDate"},
+      note:      {type:"string", label:"Note",      description:"Optional payment note",field:"note"},
+    },
+    measures:{
+      count:        {type:"count",label:"Payment Count",  description:"Total bill payment records",                           query:"(data.billPayments||[]).length"},
+      total_paid:   {type:"sum",  label:"Total Paid",     description:"Sum of all recorded bill payments",                   query:"(data.billPayments||[]).reduce((s,p)=>s+p.amount,0)"},
+      avg_payment:  {type:"divide",label:"Avg Payment",  description:"Average bill payment amount",                        query:"(()=>{const p=data.billPayments||[];return p.length?p.reduce((s,x)=>s+x.amount,0)/p.length:0})()"},
+    }
+  },
+  account_history:{
+    label:"Account History",description:"Point-in-time account balance snapshots",source:"accountHistory",
+    dimensions:{
+      date:      {type:"date",   label:"Date",       description:"Date the balance snapshot was recorded",field:"date"},
+      balance:   {type:"currency",label:"Balance",   description:"Account balance at the snapshot date in CAD",field:"balance"},
+      account_id:{type:"string", label:"Account ID", description:"ID of the account this snapshot belongs to",field:"accountId"},
+      note:      {type:"string", label:"Note",       description:"Optional note about this balance entry",field:"note"},
+    },
+    measures:{
+      count:       {type:"count",label:"Snapshots",      description:"Total number of balance snapshots",                   query:"(data.accountHistory||[]).length"},
+      latest_total:{type:"sum",  label:"Latest Balance", description:"Sum of the most recent balance entry per account",   query:"(()=>{const h=data.accountHistory||[];const byAcc={};h.forEach(e=>{if(!byAcc[e.accountId||'default']||e.date>byAcc[e.accountId||'default'].date)byAcc[e.accountId||'default']=e;});return Object.values(byAcc).reduce((s,e)=>s+e.balance,0)})()"},
+    }
   }
 }};
 
@@ -2549,7 +2609,7 @@ function DataModel({schema,onSave}){
         <Fld label="Key (field name)"><input style={IS} value={dimForm.key||""} onChange={e=>setDimForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="field_key"/></Fld>
         <Fld label="Label (display name)"><input style={IS} value={dimForm.label||""} onChange={e=>setDimForm(p=>({...p,label:e.target.value}))} placeholder="Field Label"/></Fld>
         <Fld label="Data Type"><select style={{...IS,background:"#fff"}} value={dimForm.type||"string"} onChange={e=>setDimForm(p=>({...p,type:e.target.value}))}>{DIM_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></Fld>
-        <Fld label="Source Field (JSON key)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="fieldName in data.json"/></Fld>
+        <Fld label="Source Field (SQLite column)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="columnName in SQLite table"/></Fld>
       </div>
       <Fld label="Description"><input style={IS} value={dimForm.description||""} onChange={e=>setDimForm(p=>({...p,description:e.target.value}))} placeholder="What does this field represent?"/></Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
@@ -2568,7 +2628,7 @@ function DataModel({schema,onSave}){
         <Fld label="Type"><select style={{...IS,background:"#fff"}} value={msrForm.type||"sum"} onChange={e=>setMsrForm(p=>({...p,type:e.target.value}))}>{MEASURE_TYPES.map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select></Fld>
       </div>
       <Fld label="Description"><input style={IS} value={msrForm.description||""} onChange={e=>setMsrForm(p=>({...p,description:e.target.value}))} placeholder="What does this measure calculate?"/></Fld>
-      <Fld label="Query (JavaScript — 'data' refers to the full data.json object)">
+      <Fld label="Query (JavaScript — 'data' is the full SQLite dataset: txns, bills, vacations, holdings, expected, goals, accounts, billPayments, vacationTxns, accountHistory)">
         <textarea style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,minHeight:64,resize:"vertical"}} value={msrForm.query||""} onChange={e=>setMsrForm(p=>({...p,query:e.target.value}))} placeholder={"e.g. data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"}/>
       </Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
@@ -2621,7 +2681,7 @@ function DataModel({schema,onSave}){
               <div style={{...CA,padding:12}}>
                 <Fld label="Key"><input style={IS} value={newViewForm.key} onChange={e=>setNewViewForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="view_key" autoFocus/></Fld>
                 <Fld label="Label"><input style={IS} value={newViewForm.label} onChange={e=>setNewViewForm(p=>({...p,label:e.target.value}))} placeholder="Display Name"/></Fld>
-                <Fld label="Source (data.json key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns"/></Fld>
+                <Fld label="Source (SQLite table key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns, bills, vacations, holdings"/></Fld>
                 <Fld label="Description"><input style={IS} value={newViewForm.description} onChange={e=>setNewViewForm(p=>({...p,description:e.target.value}))} placeholder="What is this view?"/></Fld>
                 <div style={{display:"flex",gap:6,marginTop:8}}>
                   <Btn sm onClick={saveNewView}>Add</Btn>
