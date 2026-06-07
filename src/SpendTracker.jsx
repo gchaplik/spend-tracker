@@ -1,30 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell, ReferenceLine, PieChart, Pie, AreaChart, Area } from "recharts";
+import { DEFAULT_CATS, COLORS, CADENCES, NAV_ITEMS, DEFAULT_SETTINGS } from "./constants/index.js";
+import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/formatters.js";
+import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
+import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
 
-const DEFAULT_CATS = ["Groceries","Dining","Transport","Utilities","Entertainment","Health","Shopping","Fuel","Other"];
-const COLORS = ["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#84cc16","#6b7280","#f97316"];
-const CADENCES = [
-  {v:"once",l:"One-time"},{v:"weekly",l:"Weekly"},{v:"biweekly",l:"Bi-weekly (every 2 weeks)"},
-  {v:"every15",l:"Every 15 days"},{v:"monthly",l:"Monthly"},{v:"bimonthly",l:"Every 2 months"},
-  {v:"quarterly",l:"Quarterly"},{v:"annually",l:"Annually"},
-];
-
-const fmt = n => new Intl.NumberFormat("en-CA",{style:"currency",currency:"CAD"}).format(n||0);
-const fmtUSD = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(n||0);
-const today = () => new Date().toISOString().split("T")[0];
-const uid = () => Math.random().toString(36).slice(2)+Date.now().toString(36);
-const toB64 = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
-const cLabel = v => (CADENCES.find(c=>c.v===v)||{l:v}).l;
-const isPdf = mtype => mtype === "application/pdf";
-
-let _serverData = null;
-
-const fpHash = b64 => {
-  let h = 0;
-  const step = Math.max(1, b64.length >> 10);
-  for (let i = 0; i < b64.length; i += step) h = (Math.imul(31, h) + b64.charCodeAt(i)) | 0;
-  return b64.length + '_' + h;
-};
 // receiptFPs is now persisted in data.json via App state; these are no-ops kept for safety
 const loadFPs = () => new Set();
 const saveFPs = () => {};
@@ -39,34 +19,6 @@ const _idb = () => new Promise((res, rej) => {
 const idbPut = async (key, val) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readwrite'); tx.objectStore('handles').put(val,key); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); };
 const idbGet = async (key) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readonly'); const req=tx.objectStore('handles').get(key); req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error); }); };
 const idbDel = async (key) => { const db = await _idb(); return new Promise((res,rej) => { const tx=db.transaction('handles','readwrite'); tx.objectStore('handles').delete(key); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); };
-
-async function loadServerData() {
-  const res = await fetch("/api/data");
-  _serverData = await res.json();
-  return _serverData;
-}
-
-async function saveServerData(patch) {
-  if (!_serverData) _serverData = await fetch("/api/data").then(r => r.json());
-  _serverData = { ..._serverData, ...patch };
-  await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(_serverData) });
-}
-
-function buildDates(start,cadence,count) {
-  const out=[start]; let cur=new Date(start+"T12:00:00");
-  for(let i=1;i<count;i++){
-    const n=new Date(cur);
-    if(cadence==="weekly") n.setDate(n.getDate()+7);
-    else if(cadence==="biweekly") n.setDate(n.getDate()+14);
-    else if(cadence==="every15") n.setDate(n.getDate()+15);
-    else if(cadence==="monthly") n.setMonth(n.getMonth()+1);
-    else if(cadence==="bimonthly") n.setMonth(n.getMonth()+2);
-    else if(cadence==="quarterly") n.setMonth(n.getMonth()+3);
-    else if(cadence==="annually") n.setFullYear(n.getFullYear()+1);
-    out.push(n.toISOString().split("T")[0]); cur=n;
-  }
-  return out;
-}
 
 async function extractReceipt(b64, mtype, cats) {
   const res = await fetch("/api/messages", {
@@ -187,7 +139,7 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
   );
 }
 
-function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={},fxRate=1.38,inDepthMode=false,onSelectItem=()=>{}}){
+function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={},fxRate=1.38}){
   const opts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const mt=txns.filter(t=>t.date&&t.date.startsWith(month));
@@ -195,9 +147,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   const txnSpending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
   // Paid bills for this month count as spending
   const paidBillsTotal=billPayments.filter(p=>p.month===month).reduce((s,p)=>s+p.amount,0);
-  // Vacation transactions in this month count as spending
-  const vacationSpending=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((s,t)=>s+t.amount,0);
-  const spending=txnSpending+paidBillsTotal+vacationSpending;
+  const spending=txnSpending+paidBillsTotal;
   const mExp=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(month));
   const pendingExp=mExp.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0);
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
@@ -267,7 +217,6 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       </div>
 
       {/* Hero — Net Position */}
-      <SelectableWrapper item={{id:"net-position",label:`Net Position · ${ml(month)}`,llmContext:`Net Position ${month}: ${fmt(actNet)} actual, ${fmt(projNet)} projected, ${fmt(pendingExp)} pending income`}} inDepthMode={inDepthMode} onSelectItem={onSelectItem}>
       <div style={{...CA,padding:"28px 32px",marginBottom:14,borderLeft:`4px solid ${actNet>=0?GREEN:RED}`,background:actNet>=0?"linear-gradient(135deg,#f0fdf4 0%,#fff 60%)":"linear-gradient(135deg,#fff1f2 0%,#fff 60%)"}}>
         <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:10}}>Net Position · {ml(month)}</div>
         <div style={{display:"flex",alignItems:"flex-end",gap:24,flexWrap:"wrap"}}>
@@ -278,7 +227,6 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
           </div>
         </div>
       </div>
-      </SelectableWrapper>
 
       {/* Net worth strip */}
       {(accounts.length>0||holdings.length>0)&&(
@@ -294,14 +242,11 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       )}
       {/* Three stat cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
-        <SelectableWrapper item={{id:"stat-income",label:`Income · ${ml(month)}`,llmContext:`Income ${month}: ${fmt(actualIncome)}`}} inDepthMode={inDepthMode} onSelectItem={onSelectItem}>
         <div style={{...CA,padding:"20px 22px"}}>
           <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Income</div>
           <div style={{fontSize:28,fontWeight:800,color:GREEN,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(actualIncome)}</div>
           {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
         </div>
-        </SelectableWrapper>
-        <SelectableWrapper item={{id:"stat-spending",label:`Spending · ${ml(month)}`,llmContext:`Spending ${month}: ${fmt(spending)}, budget: ${fmt(budgetTotal)}, remaining: ${fmt(budgetRemaining)}`}} inDepthMode={inDepthMode} onSelectItem={onSelectItem}>
         <div style={{...CA,padding:"20px 22px"}}>
           <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Spending</div>
           <div style={{fontSize:28,fontWeight:800,color:RED,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(spending)}</div>
@@ -309,8 +254,6 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
           {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
           {vacSpend>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
         </div>
-        </SelectableWrapper>
-        <SelectableWrapper item={{id:"stat-expected",label:`Expected Income · ${ml(month)}`,llmContext:`Expected Income ${month}: ${fmt(totalExp)} total, ${fmt(pendingExp)} pending`}} inDepthMode={inDepthMode} onSelectItem={onSelectItem}>
         <div style={{...CA,padding:"20px 22px"}}>
           <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Expected Income</div>
           <div style={{fontSize:28,fontWeight:800,color:YELLOW,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(totalExp)}</div>
@@ -318,7 +261,6 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
             ?<div style={{fontSize:11,color:YELLOW,fontWeight:600,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
             :mExp.length>0&&<div style={{fontSize:11,color:GREEN,fontWeight:600,marginTop:6}}>All received ✓</div>}
         </div>
-        </SelectableWrapper>
       </div>
 
       {/* Expected Income widget */}
@@ -2188,103 +2130,170 @@ const DIM_TYPES=["string","number","date","boolean","currency"];
 
 const DEFAULT_SCHEMA={views:{
   transactions:{
-    label:"Transactions",description:"All income and expense transactions",source:"txns",
+    label:"Transactions",description:"All income and expense transactions",source:"txns",table:"transactions",
     dimensions:{
-      date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",field:"date"},
-      amount:  {type:"currency",label:"Amount",  description:"Transaction amount in CAD",field:"amount"},
-      category:{type:"string", label:"Category", description:"Spending / income category (e.g. Groceries, Dining)",field:"category"},
-      type:    {type:"string", label:"Type",     description:"'income' or 'expense'",field:"type"},
-      merchant:{type:"string", label:"Merchant", description:"Merchant name or income source",field:"merchant"},
-      note:    {type:"string", label:"Note",     description:"Optional transaction note",field:"note"},
+      date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",   field:"date",    sql:"${TABLE}.date"},
+      month:   {type:"string", label:"Month",    description:"Year-month of the transaction",   field:"date",    sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      amount:  {type:"currency",label:"Amount",  description:"Transaction amount in CAD",       field:"amount",  sql:"${TABLE}.amount"},
+      category:{type:"string", label:"Category", description:"Spending / income category",      field:"category",sql:"${TABLE}.category"},
+      type:    {type:"string", label:"Type",     description:"'income' or 'expense'",           field:"type",    sql:"${TABLE}.type"},
+      merchant:{type:"string", label:"Merchant", description:"Merchant name or income source",  field:"merchant",sql:"${TABLE}.merchant"},
+      note:    {type:"string", label:"Note",     description:"Optional transaction note",       field:"note",    sql:"${TABLE}.note"},
     },
     measures:{
-      count:          {type:"count",   label:"Count",         description:"Total number of transactions",                        query:"data.txns.length"},
-      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                         query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
-      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                          query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)"},
-      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",                  query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
-      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",             query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()"},
-      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",              query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()"},
-      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses × 100 ÷ total income (spend %)",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()"},
+      count:          {type:"count",   label:"Count",         description:"Total number of transactions",              query:"data.txns.length",                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
+      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                       sql:"SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)"},
+      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                 query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                        sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END)"},
+      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",         query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                   sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE -${TABLE}.amount END)"},
+      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",    query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()",                                                                                                                                                                                                                       sql:"AVG(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE NULL END)"},
+      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()",                                                                                                                                                                                                                        sql:"AVG(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE NULL END)"},
+      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses ÷ total income × 100 (%)",  query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()",                                                                                                                                        sql:"ROUND(SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)*100.0/NULLIF(SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END),0),1)"},
     }
   },
   bills:{
-    label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",
+    label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",table:"bills",
     dimensions:{
-      name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",field:"name"},
-      amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",field:"amount"},
-      category:{type:"string", label:"Category", description:"Bill category",field:"category"},
-      due_day: {type:"number", label:"Due Day",  description:"Day of month the bill is due (1–31)",field:"dueDay"},
-      active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",field:"active"},
+      name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",         field:"name",    sql:"${TABLE}.name"},
+      amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",             field:"amount",  sql:"${TABLE}.amount"},
+      category:{type:"string", label:"Category", description:"Bill category",                          field:"category",sql:"${TABLE}.category"},
+      due_day: {type:"number", label:"Due Day",  description:"Day of month the bill is due (1–31)",    field:"dueDay",  sql:"${TABLE}.dueDay"},
+      active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",   field:"active",  sql:"${TABLE}.active"},
     },
     measures:{
-      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                                           query:"data.bills.filter(b=>b.active!==false).length"},
-      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)"},
-      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12"},
-      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",                                      query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()"},
+      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                     query:"data.bills.filter(b=>b.active!==false).length",                                                                                                            sql:"COUNT(*) FILTER (WHERE ${TABLE}.active=1)"},
+      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)",                                                                                       sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)"},
+      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12",                                                                                    sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)*12"},
+      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",               query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()",                                        sql:"AVG(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE NULL END)"},
     }
   },
   expected_income:{
-    label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",
+    label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",table:"expected_income",
     dimensions:{
-      source:       {type:"string", label:"Source",       description:"Income source / payer name",field:"source"},
-      amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",field:"amount"},
-      expected_date:{type:"date",   label:"Expected Date",description:"When the payment is expected",field:"expectedDate"},
-      confirmed:    {type:"boolean",label:"Confirmed",    description:"Whether the payment has been received",field:"confirmed"},
-      cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency: monthly, weekly, biweekly, quarterly, etc.",field:"cadence"},
+      source:       {type:"string", label:"Source",       description:"Income source / payer name",                     field:"source",      sql:"${TABLE}.source"},
+      amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",                 field:"amount",      sql:"${TABLE}.amount"},
+      expected_date:{type:"date",   label:"Expected Date",description:"When the payment is expected",                   field:"expectedDate",sql:"${TABLE}.expectedDate"},
+      month:        {type:"string", label:"Month",        description:"Year-month the payment is expected",             field:"expectedDate",sql:"strftime('%Y-%m', ${TABLE}.expectedDate)"},
+      confirmed:    {type:"boolean",label:"Confirmed",    description:"Whether the payment has been received",          field:"confirmed",   sql:"${TABLE}.confirmed"},
+      cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency",                          field:"cadence",     sql:"${TABLE}.cadence"},
     },
     measures:{
-      count_pending:   {type:"count",label:"Pending Count",  description:"Number of unconfirmed upcoming payments",             query:"data.expected.filter(e=>!e.confirmed).length"},
-      total_pending:   {type:"sum",  label:"Total Pending",  description:"Sum of all unconfirmed expected amounts",             query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)"},
-      total_confirmed: {type:"sum",  label:"Total Confirmed",description:"Sum of all confirmed received payments",             query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)"},
-      confirmation_rate:{type:"divide",label:"Confirmation %",description:"% of payments confirmed (confirmed ÷ total × 100)",query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()"},
+      count_pending:    {type:"count",  label:"Pending Count",   description:"Number of unconfirmed upcoming payments",       query:"data.expected.filter(e=>!e.confirmed).length",                                                                                                                                               sql:"COUNT(*) FILTER (WHERE ${TABLE}.confirmed=0)"},
+      total_pending:    {type:"sum",    label:"Total Pending",   description:"Sum of all unconfirmed expected amounts",       query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                           sql:"SUM(CASE WHEN ${TABLE}.confirmed=0 THEN ${TABLE}.amount ELSE 0 END)"},
+      total_confirmed:  {type:"sum",    label:"Total Confirmed", description:"Sum of all confirmed received payments",        query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                            sql:"SUM(CASE WHEN ${TABLE}.confirmed=1 THEN ${TABLE}.amount ELSE 0 END)"},
+      confirmation_rate:{type:"divide", label:"Confirmation %",  description:"% of payments confirmed",                      query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()",                                                                              sql:"ROUND(SUM(${TABLE}.confirmed)*100.0/NULLIF(COUNT(*),0),1)"},
     }
   },
   goals:{
-    label:"Goals",description:"Financial savings goals and progress",source:"goals",
+    label:"Goals",description:"Financial savings goals and progress",source:"goals",table:"goals",
     dimensions:{
-      name:          {type:"string", label:"Name",           description:"Goal name",field:"name"},
-      target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",field:"targetAmount"},
-      current_amount:{type:"currency",label:"Current Amount",description:"Amount saved so far in CAD",field:"currentAmount"},
-      deadline:      {type:"date",   label:"Deadline",       description:"Target completion date",field:"deadline"},
+      name:          {type:"string", label:"Name",           description:"Goal name",                                   field:"name",          sql:"${TABLE}.name"},
+      target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",                   field:"targetAmount",  sql:"${TABLE}.targetAmount"},
+      current_amount:{type:"currency",label:"Current Amount",description:"Amount saved so far in CAD",                  field:"currentAmount", sql:"${TABLE}.currentAmount"},
+      deadline:      {type:"date",   label:"Deadline",       description:"Target completion date",                      field:"deadline",      sql:"${TABLE}.deadline"},
+      progress_pct:  {type:"number", label:"Progress %",     description:"Completion % — currentAmount/targetAmount×100",field:"currentAmount", sql:"ROUND(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0),1)"},
     },
     measures:{
-      count:           {type:"count",   label:"Count",           description:"Total number of goals",                                         query:"data.goals.length"},
-      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",                               query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)"},
-      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved across goals",               query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)"},
-      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",                       query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)"},
-      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion percentage across all goals",              query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()"},
+      count:           {type:"count",   label:"Count",           description:"Total number of goals",                    query:"data.goals.length",                                                                                                                                        sql:"COUNT(*)"},
+      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",           query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)",                                                                                                            sql:"SUM(${TABLE}.targetAmount)"},
+      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved",         query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)",                                                                                                           sql:"SUM(${TABLE}.currentAmount)"},
+      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",   query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)",                                                                                          sql:"SUM(${TABLE}.targetAmount-${TABLE}.currentAmount)"},
+      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion % across all goals",   query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()",           sql:"ROUND(AVG(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0)),1)"},
     }
   },
   accounts:{
-    label:"Accounts",description:"Bank and financial accounts",source:"accounts",
+    label:"Accounts",description:"Bank and financial accounts",source:"accounts",table:"accounts",
     dimensions:{
-      name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",field:"name"},
-      type:   {type:"string", label:"Type",    description:"Account type: chequing, savings, credit_card, loan, mortgage, investment, property, other_asset, other_liability",field:"type"},
-      balance:{type:"currency",label:"Balance",description:"Current account balance in CAD (positive for assets, negative for debts)",field:"balance"},
+      name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",    field:"name",   sql:"${TABLE}.name"},
+      type:   {type:"string", label:"Type",    description:"chequing, savings, credit_card, loan, etc",field:"type",   sql:"${TABLE}.type"},
+      balance:{type:"currency",label:"Balance",description:"Current balance in CAD",                   field:"balance",sql:"${TABLE}.balance"},
     },
     measures:{
-      count:             {type:"count",   label:"Count",              description:"Total number of accounts",                                          query:"data.accounts.length"},
-      total_assets:      {type:"sum",     label:"Total Assets",       description:"Sum of all asset account balances",                                query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
-      total_liabilities: {type:"sum",     label:"Total Liabilities",  description:"Sum of all liability balances (credit cards, loans, mortgages)",  query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
-      net_worth:         {type:"subtract",label:"Net Worth",          description:"Total assets minus total liabilities",                            query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
+      count:             {type:"count",   label:"Count",             description:"Total number of accounts",                                                                                                                          query:"data.accounts.length",                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
+      total_assets:      {type:"sum",     label:"Total Assets",      description:"Sum of asset account balances",                                                                                                                     query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                 sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance ELSE 0 END)"},
+      total_liabilities: {type:"sum",     label:"Total Liabilities", description:"Sum of liability balances",                                                                                                                        query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                             sql:"SUM(CASE WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN ${TABLE}.balance ELSE 0 END)"},
+      net_worth:         {type:"subtract",label:"Net Worth",         description:"Total assets minus total liabilities",                                                                                                              query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                          sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN -${TABLE}.balance ELSE 0 END)"},
     }
   },
   holdings:{
-    label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",
+    label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",table:"holdings",
     dimensions:{
-      ticker:    {type:"string", label:"Ticker",     description:"Stock ticker symbol — append .TO for Canadian stocks (e.g. TSLA, XEQT.TO)",field:"ticker"},
-      shares:    {type:"number", label:"Shares",     description:"Number of shares held",field:"shares"},
-      cost_basis:{type:"currency",label:"Cost Basis",description:"Weighted average purchase price per share in native currency",field:"costBasis"},
+      ticker:    {type:"string", label:"Ticker",     description:"Stock ticker (e.g. TSLA, XEQT.TO)",            field:"ticker",   sql:"${TABLE}.ticker"},
+      shares:    {type:"number", label:"Shares",     description:"Number of shares held",                        field:"shares",   sql:"${TABLE}.shares"},
+      cost_basis:{type:"currency",label:"Cost Basis",description:"Weighted average purchase price per share",    field:"costBasis",sql:"${TABLE}.costBasis"},
+      total_cost:{type:"currency",label:"Total Cost",description:"Cost basis × shares for this holding",         field:"costBasis",sql:"${TABLE}.costBasis * ${TABLE}.shares"},
     },
     measures:{
-      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",                                           query:"data.holdings.length"},
-      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of (cost basis × shares) for all holdings with a known cost basis",       query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)"},
-      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",                                       query:"data.holdings.reduce((s,h)=>s+h.shares,0)"},
+      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",         query:"data.holdings.length",                                                                                                                                                                                    sql:"COUNT(*)"},
+      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of cost basis × shares for all holdings",query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)",                                                                                                                   sql:"SUM(${TABLE}.costBasis * ${TABLE}.shares)"},
+      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",    query:"data.holdings.reduce((s,h)=>s+h.shares,0)",                                                                                                                                                               sql:"SUM(${TABLE}.shares)"},
+    }
+  },
+  vacations:{
+    label:"Vacations",description:"Vacation budgets and date ranges",source:"vacations",table:"vacations",
+    dimensions:{
+      name:      {type:"string", label:"Name",       description:"Vacation name (e.g. Paris 2026)",  field:"name",      sql:"${TABLE}.name"},
+      start_date:{type:"date",   label:"Start Date", description:"Vacation start date",              field:"startDate", sql:"${TABLE}.startDate"},
+      end_date:  {type:"date",   label:"End Date",   description:"Vacation end date",                field:"endDate",   sql:"${TABLE}.endDate"},
+      budget:    {type:"currency",label:"Budget",    description:"Total budget in CAD",              field:"budget",    sql:"${TABLE}.budget"},
+      notes:     {type:"string", label:"Notes",      description:"Optional notes",                   field:"notes",     sql:"${TABLE}.notes"},
+    },
+    measures:{
+      count:          {type:"count",   label:"Count",           description:"Total number of vacations",                              query:"data.vacations.length",                                                                                                                                                               sql:"COUNT(*)"},
+      total_budget:   {type:"sum",     label:"Total Budget",    description:"Sum of all vacation budgets",                            query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)",                                                                                                                                   sql:"SUM(${TABLE}.budget)"},
+      total_spent:    {type:"sum",     label:"Total Spent",     description:"Sum of all vacation transaction amounts",                query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                sql:"(SELECT SUM(vt.amount) FROM vacation_txns vt)"},
+      total_remaining:{type:"subtract",label:"Total Remaining", description:"Total budgets minus total spending",                     query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)-(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                             sql:"SUM(${TABLE}.budget)-(SELECT COALESCE(SUM(vt.amount),0) FROM vacation_txns vt)"},
+    }
+  },
+  vacation_txns:{
+    label:"Vacation Transactions",description:"Individual spending entries recorded against a vacation",source:"vacationTxns",table:"vacation_txns",
+    dimensions:{
+      vacation_id:{type:"string", label:"Vacation ID",description:"ID of the parent vacation",                     field:"vacationId",sql:"${TABLE}.vacationId"},
+      date:       {type:"date",   label:"Date",        description:"Date the vacation expense occurred",           field:"date",      sql:"${TABLE}.date"},
+      month:      {type:"string", label:"Month",       description:"Year-month of the expense",                    field:"date",      sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      amount:     {type:"currency",label:"Amount",     description:"Expense amount in CAD",                        field:"amount",    sql:"${TABLE}.amount"},
+      category:   {type:"string", label:"Category",   description:"Spending category",                            field:"category",  sql:"${TABLE}.category"},
+      merchant:   {type:"string", label:"Merchant",   description:"Merchant or vendor name",                      field:"merchant",  sql:"${TABLE}.merchant"},
+      note:       {type:"string", label:"Note",       description:"Optional note",                                field:"note",      sql:"${TABLE}.note"},
+    },
+    measures:{
+      count:  {type:"count", label:"Count",       description:"Total vacation transactions",                       query:"(data.vacationTxns||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
+      total:  {type:"sum",   label:"Total Spent", description:"Total amount spent across all vacation transactions",query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                                  sql:"SUM(${TABLE}.amount)"},
+      avg_txn:{type:"divide",label:"Avg per Txn", description:"Average vacation transaction amount",              query:"(()=>{const t=data.vacationTxns||[];return t.length?t.reduce((s,x)=>s+x.amount,0)/t.length:0})()",                                                                                                     sql:"AVG(${TABLE}.amount)"},
+    }
+  },
+  bill_payments:{
+    label:"Bill Payments",description:"History of bills marked as paid each month",source:"billPayments",table:"bill_payments",
+    dimensions:{
+      bill_id:  {type:"string", label:"Bill ID",   description:"ID of the parent bill",                            field:"billId",  sql:"${TABLE}.billId"},
+      month:    {type:"string", label:"Month",     description:"Month the bill was paid (YYYY-MM)",                field:"month",   sql:"${TABLE}.month"},
+      amount:   {type:"currency",label:"Amount",   description:"Amount paid",                                     field:"amount",  sql:"${TABLE}.amount"},
+      paid_date:{type:"date",   label:"Paid Date", description:"Date the payment was recorded",                   field:"paidDate",sql:"${TABLE}.paidDate"},
+      note:     {type:"string", label:"Note",      description:"Optional payment note",                           field:"note",    sql:"${TABLE}.note"},
+    },
+    measures:{
+      count:      {type:"count", label:"Payment Count",description:"Total bill payment records",                  query:"(data.billPayments||[]).length",                                                                                                                                                                           sql:"COUNT(*)"},
+      total_paid: {type:"sum",   label:"Total Paid",   description:"Sum of all recorded bill payments",           query:"(data.billPayments||[]).reduce((s,p)=>s+p.amount,0)",                                                                                                                                                    sql:"SUM(${TABLE}.amount)"},
+      avg_payment:{type:"divide",label:"Avg Payment",  description:"Average bill payment amount",                query:"(()=>{const p=data.billPayments||[];return p.length?p.reduce((s,x)=>s+x.amount,0)/p.length:0})()",                                                                                                      sql:"AVG(${TABLE}.amount)"},
+    }
+  },
+  account_history:{
+    label:"Account History",description:"Point-in-time account balance snapshots",source:"accountHistory",table:"account_history",
+    dimensions:{
+      date:      {type:"date",   label:"Date",       description:"Date the balance snapshot was recorded",         field:"date",     sql:"${TABLE}.date"},
+      month:     {type:"string", label:"Month",      description:"Year-month of the snapshot",                    field:"date",     sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      balance:   {type:"currency",label:"Balance",   description:"Account balance at the snapshot date in CAD",   field:"balance",  sql:"${TABLE}.balance"},
+      account_id:{type:"string", label:"Account ID", description:"ID of the account this snapshot belongs to",   field:"accountId",sql:"${TABLE}.accountId"},
+      note:      {type:"string", label:"Note",       description:"Optional note about this balance entry",        field:"note",     sql:"${TABLE}.note"},
+    },
+    measures:{
+      count:       {type:"count",label:"Snapshots",      description:"Total number of balance snapshots",         query:"(data.accountHistory||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
+      total_balance:{type:"sum", label:"Total Balance",  description:"Sum of all balance values in the table",   query:"(data.accountHistory||[]).reduce((s,e)=>s+e.balance,0)",                                                                                                                                                   sql:"SUM(${TABLE}.balance)"},
+      latest_total:{type:"sum",  label:"Latest Snapshot",description:"Sum of the most recent balance per account",query:"(()=>{const h=data.accountHistory||[];const byAcc={};h.forEach(e=>{if(!byAcc[e.accountId||'default']||e.date>byAcc[e.accountId||'default'].date)byAcc[e.accountId||'default']=e;});return Object.values(byAcc).reduce((s,e)=>s+e.balance,0)})()", sql:"SUM(${TABLE}.balance) FILTER (WHERE ${TABLE}.date=(SELECT MAX(ah2.date) FROM account_history ah2 WHERE ah2.accountId=${TABLE}.accountId))"},
     }
   }
 }};
 
-const DEFAULT_SETTINGS={name:"",ollamaUrl:"http://localhost:11434",ollamaModel:"phi3:mini",devMode:false,globalChatModel:"ollama",jarvisVoice:true};
+// DEFAULT_SETTINGS imported from ./constants/index.js
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS COMPONENT
@@ -2295,6 +2304,43 @@ function Settings({settings,onSave}){
   const [testing,setTesting]=useState(false);
   const [copied,setCopied]=useState("");
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+
+  // Gemini key state
+  const [geminiKeyInput,setGeminiKeyInput]=useState("");
+  const [geminiKeySet,setGeminiKeySet]=useState(null); // null=loading, bool
+  const [geminiKeySource,setGeminiKeySource]=useState("none");
+  const [geminiSaving,setGeminiSaving]=useState(false);
+  const [geminiMsg,setGeminiMsg]=useState(null); // {type:"ok"|"err", text}
+
+  useEffect(()=>{
+    fetch("/api/config/gemini-key").then(r=>r.json()).then(d=>{
+      setGeminiKeySet(d.set);
+      setGeminiKeySource(d.source||"none");
+    }).catch(()=>setGeminiKeySet(false));
+  },[]);
+
+  const saveGeminiKey=async()=>{
+    if(!geminiKeyInput.trim()){return;}
+    setGeminiSaving(true);setGeminiMsg(null);
+    try{
+      const r=await fetch("/api/config/gemini-key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:geminiKeyInput.trim()})});
+      if(r.ok){setGeminiKeySet(true);setGeminiKeySource("db");setGeminiKeyInput("");setGeminiMsg({type:"ok",text:"Key saved — Gemini AI is now active."});}
+      else{const d=await r.json();setGeminiMsg({type:"err",text:d.error||"Failed to save key."});}
+    }catch(e){setGeminiMsg({type:"err",text:e.message});}
+    setGeminiSaving(false);
+    setTimeout(()=>setGeminiMsg(null),4000);
+  };
+
+  const resetGeminiKey=async()=>{
+    setGeminiSaving(true);setGeminiMsg(null);
+    try{
+      await fetch("/api/config/gemini-key",{method:"DELETE"});
+      setGeminiKeySet(false);setGeminiKeySource("none");setGeminiKeyInput("");
+      setGeminiMsg({type:"ok",text:"Key removed."});
+    }catch(e){setGeminiMsg({type:"err",text:e.message});}
+    setGeminiSaving(false);
+    setTimeout(()=>setGeminiMsg(null),3000);
+  };
 
   const save=()=>onSave(f);
 
@@ -2352,8 +2398,50 @@ function Settings({settings,onSave}){
 
         </div>
 
-        {/* Right column — Ollama */}
+        {/* Right column — Gemini + Ollama */}
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+          {/* Gemini API Key */}
+          <div style={{...CA,border:geminiKeySet?"1px solid #bbf7d0":"1px solid #e2e8f0",background:geminiKeySet?"linear-gradient(135deg,#f0fdf4,#f7fffe)":"#fff"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Gemini API Key</div>
+              {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking…</span>
+               :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Active{geminiKeySource==="env"?" (env)":""}</span>
+               :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"2px 8px"}}>Not set</span>}
+            </div>
+            <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.6}}>Used for receipt scanning and Jarvis AI. Keys are stored server-side and never exposed to the browser.</div>
+            {!geminiKeySet&&<>
+              <Fld label="Paste your key">
+                <input
+                  type="password"
+                  style={{...IS,letterSpacing:geminiKeyInput?"0.15em":"normal",fontFamily:geminiKeyInput?"monospace":"inherit"}}
+                  value={geminiKeyInput}
+                  onChange={e=>setGeminiKeyInput(e.target.value)}
+                  placeholder="AIza…"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </Fld>
+              <div style={{display:"flex",gap:8,marginTop:4}}>
+                <button onClick={saveGeminiKey} disabled={geminiSaving||!geminiKeyInput.trim()} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:geminiSaving||!geminiKeyInput.trim()?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||!geminiKeyInput.trim()?0.5:1}}>
+                  {geminiSaving?"Saving…":"Save Key"}
+                </button>
+              </div>
+            </>}
+            {geminiKeySet&&<div style={{display:"flex",gap:8,marginTop:4}}>
+              <div style={{flex:1,fontSize:12,color:"#64748b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"8px 12px",letterSpacing:"0.2em",fontFamily:"monospace"}}>
+                {"•".repeat(32)}
+              </div>
+              <button onClick={resetGeminiKey} disabled={geminiSaving||geminiKeySource==="env"} title={geminiKeySource==="env"?"Key comes from .env file — remove GEMINI_API_KEY from .env to reset":""} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:geminiSaving||geminiKeySource==="env"?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||geminiKeySource==="env"?0.5:1,whiteSpace:"nowrap",flexShrink:0}}>
+                {geminiSaving?"…":"Reset Key"}
+              </button>
+            </div>}
+            {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px",fontWeight:500}}>
+              {geminiMsg.type==="ok"?"✓ ":"✗ "}{geminiMsg.text}
+            </div>}
+            <div style={{marginTop:10,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
+          </div>
+
           <div style={CA}>
             <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Local AI (Ollama)</div>
             <div style={{fontSize:11,color:"#64748b",marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
@@ -2373,35 +2461,6 @@ function Settings({settings,onSave}){
             </div>
             {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontWeight:500}}>✓ Ollama is running and reachable</div>}
             {ollamaStatus==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px"}}>✗ Could not reach Ollama — see install steps below</div>}
-          </div>
-
-          {/* Global Chat Model */}
-          <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Assistant (Global Chat)</div>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.6}}>Which AI powers the floating assistant on every page.</div>
-            <div style={{display:"flex",gap:8,marginBottom:4}}>
-              {["gemini","ollama"].map(m=>(
-                <button key={m} onClick={()=>{set("globalChatModel",m);setTimeout(()=>onSave({...f,globalChatModel:m}),50);}}
-                  style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid",borderColor:f.globalChatModel===m?"#0284C7":"#e2e8f0",background:f.globalChatModel===m?"#eff6ff":"#f8fafc",color:f.globalChatModel===m?"#0284C7":"#64748b",cursor:"pointer",fontSize:12,fontWeight:f.globalChatModel===m?700:500,fontFamily:"inherit",transition:"all .15s"}}>
-                  {m==="gemini"?"Gemini (cloud)":"Ollama (local)"}
-                </button>
-              ))}
-            </div>
-            {f.globalChatModel==="gemini"&&<div style={{fontSize:11,color:"#0369a1",background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:8,padding:"7px 10px",marginTop:4}}>Requires GEMINI_API_KEY set in your environment.</div>}
-          </div>
-
-          {/* Jarvis Voice */}
-          <div style={{...CA,background:f.jarvisVoice?"linear-gradient(135deg,#fafafa,#f0f9ff)":"#fff",border:f.jarvisVoice?"1px solid #bae6fd":"1px solid #e2e8f0"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Jarvis Voice</div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Jarvis speaks responses aloud using your device's text-to-speech</div>
-              </div>
-              <button onClick={()=>{set("jarvisVoice",!f.jarvisVoice);setTimeout(()=>onSave({...f,jarvisVoice:!f.jarvisVoice}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.jarvisVoice?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-                <span style={{position:"absolute",top:3,left:f.jarvisVoice?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-              </button>
-            </div>
-            {f.jarvisVoice&&<div style={{fontSize:11,color:"#0369a1",background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:8,padding:"7px 10px"}}>Uses a British English voice (Daniel/UK) when available for the Jarvis effect.</div>}
           </div>
 
           {/* Install instructions */}
@@ -2454,7 +2513,7 @@ function DataModel({schema,onSave}){
   const [dimForm,setDimForm]=useState({});
   const [msrForm,setMsrForm]=useState({});
   const [addingView,setAddingView]=useState(false);
-  const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:""});
+  const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:"",table:""});
 
   const views=schema.views;
   const vKeys=Object.keys(views);
@@ -2535,7 +2594,7 @@ function DataModel({schema,onSave}){
   // Add view
   const saveNewView=()=>{
     if(!newViewForm.key.trim()||!newViewForm.source.trim())return;
-    onSave({...schema,views:{...views,[newViewForm.key.trim()]:{label:newViewForm.label||newViewForm.key,description:newViewForm.description,source:newViewForm.source.trim(),dimensions:{},measures:{}}}});
+    onSave({...schema,views:{...views,[newViewForm.key.trim()]:{label:newViewForm.label||newViewForm.key,description:newViewForm.description,source:newViewForm.source.trim(),table:newViewForm.table.trim()||newViewForm.source.trim(),dimensions:{},measures:{}}}});
     setActiveView(newViewForm.key.trim());
     setAddingView(false);
     setNewViewForm({key:"",label:"",description:"",source:""});
@@ -2557,9 +2616,12 @@ function DataModel({schema,onSave}){
         <Fld label="Key (field name)"><input style={IS} value={dimForm.key||""} onChange={e=>setDimForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="field_key"/></Fld>
         <Fld label="Label (display name)"><input style={IS} value={dimForm.label||""} onChange={e=>setDimForm(p=>({...p,label:e.target.value}))} placeholder="Field Label"/></Fld>
         <Fld label="Data Type"><select style={{...IS,background:"#fff"}} value={dimForm.type||"string"} onChange={e=>setDimForm(p=>({...p,type:e.target.value}))}>{DIM_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></Fld>
-        <Fld label="Source Field (JSON key)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="fieldName in data.json"/></Fld>
+        <Fld label="Source Field (SQLite column)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="columnName in SQLite table"/></Fld>
       </div>
       <Fld label="Description"><input style={IS} value={dimForm.description||""} onChange={e=>setDimForm(p=>({...p,description:e.target.value}))} placeholder="What does this field represent?"/></Fld>
+      <Fld label="SQL Expression (use ${TABLE} for the table reference, e.g. ${TABLE}.date or strftime('%Y-%m', ${TABLE}.date))">
+        <input style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11}} value={dimForm.sql||""} onChange={e=>setDimForm(p=>({...p,sql:e.target.value}))} placeholder={"e.g. ${TABLE}.amount"}/>
+      </Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <Btn sm onClick={saveDim}>Save</Btn>
         <Btn sm v="secondary" onClick={()=>setEditingDim(null)}>Cancel</Btn>
@@ -2576,8 +2638,11 @@ function DataModel({schema,onSave}){
         <Fld label="Type"><select style={{...IS,background:"#fff"}} value={msrForm.type||"sum"} onChange={e=>setMsrForm(p=>({...p,type:e.target.value}))}>{MEASURE_TYPES.map(m=><option key={m.v} value={m.v}>{m.l}</option>)}</select></Fld>
       </div>
       <Fld label="Description"><input style={IS} value={msrForm.description||""} onChange={e=>setMsrForm(p=>({...p,description:e.target.value}))} placeholder="What does this measure calculate?"/></Fld>
-      <Fld label="Query (JavaScript — 'data' refers to the full data.json object)">
+      <Fld label="Query (JavaScript — 'data' is the full SQLite dataset: txns, bills, vacations, holdings, expected, goals, accounts, billPayments, vacationTxns, accountHistory)">
         <textarea style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,minHeight:64,resize:"vertical"}} value={msrForm.query||""} onChange={e=>setMsrForm(p=>({...p,query:e.target.value}))} placeholder={"e.g. data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"}/>
+      </Fld>
+      <Fld label="SQL Expression (use ${TABLE} for the table reference, e.g. SUM(${TABLE}.amount) or COUNT(*))">
+        <input style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11}} value={msrForm.sql||""} onChange={e=>setMsrForm(p=>({...p,sql:e.target.value}))} placeholder={"e.g. SUM(${TABLE}.amount)"}/>
       </Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <Btn sm onClick={saveMsr}>Save</Btn>
@@ -2622,6 +2687,7 @@ function DataModel({schema,onSave}){
               <button key={vk} onClick={()=>{setActiveView(vk);setEditingDim(null);setEditingMsr(null);}} style={{textAlign:"left",padding:"10px 12px",borderRadius:10,border:"1.5px solid "+(activeView===vk?"#0284C7":"#e2e8f0"),background:activeView===vk?"#eff6ff":"#fff",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
                 <div style={{fontWeight:600,fontSize:12,color:activeView===vk?"#0284C7":"#1E293B"}}>{views[vk].label}</div>
                 <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>source: <code style={{fontSize:10}}>{views[vk].source}</code></div>
+                {views[vk].table&&<div style={{fontSize:10,color:"#94a3b8"}}>table: <code style={{fontSize:10}}>{views[vk].table}</code></div>}
                 <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{Object.keys(views[vk].dimensions||{}).length}d · {Object.keys(views[vk].measures||{}).length}m</div>
               </button>
             ))}
@@ -2629,7 +2695,8 @@ function DataModel({schema,onSave}){
               <div style={{...CA,padding:12}}>
                 <Fld label="Key"><input style={IS} value={newViewForm.key} onChange={e=>setNewViewForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="view_key" autoFocus/></Fld>
                 <Fld label="Label"><input style={IS} value={newViewForm.label} onChange={e=>setNewViewForm(p=>({...p,label:e.target.value}))} placeholder="Display Name"/></Fld>
-                <Fld label="Source (data.json key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns"/></Fld>
+                <Fld label="Source (SQLite table key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns, bills, vacations, holdings"/></Fld>
+                <Fld label="SQLite Table Name"><input style={IS} value={newViewForm.table} onChange={e=>setNewViewForm(p=>({...p,table:e.target.value}))} placeholder="e.g. transactions, bills, vacation_txns"/></Fld>
                 <Fld label="Description"><input style={IS} value={newViewForm.description} onChange={e=>setNewViewForm(p=>({...p,description:e.target.value}))} placeholder="What is this view?"/></Fld>
                 <div style={{display:"flex",gap:6,marginTop:8}}>
                   <Btn sm onClick={saveNewView}>Add</Btn>
@@ -2942,56 +3009,6 @@ function autoWidget(id,label,result,preferredType){
   return{id:uid(),type:chartType,title:label,data,xKey:"name",yKey:"value",format:"currency"};
 }
 
-// ─── Shared tool helpers — used by Insights (local copies shadow these) and GlobalChat ─
-const _df=(args={},field='t.date')=>{
-  if(args.month)  return `${field}&&${field}.slice(0,7)==='${args.month}'`;
-  if(args.from||args.to){const f=args.from||'0000-00',t=args.to||'9999-99';return `${field}&&${field}.slice(0,7)>='${f}'&&${field}.slice(0,7)<='${t}'`;}
-  return 'true';
-};
-const _label=(args={})=>{
-  if(args.month) return args.month;
-  if(args.from&&args.to) return `${args.from} – ${args.to}`;
-  if(args.from) return `from ${args.from}`;
-  if(args.to) return `up to ${args.to}`;
-  return 'All Time';
-};
-const TOOL_LIBRARY={
-  expenses:(a={})=>{const df=_df(a);return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;},
-  income:(a={})=>{const df=_df(a);return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;},
-  net:(a={})=>{const df=_df(a);return `(function(){var df=function(t){return ${df};};var i=data.txns.filter(function(t){return t.type==='income'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);return Math.round((i-e)*100)/100;})()`;},
-  categories:(a={})=>{const df=_df(a);return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;},
-  top_category:(a={})=>{const df=_df(a);return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:Math.round(s[0][1]*100)/100}:null;})()`;},
-  monthly:(a={})=>{const n=a.months||99;const df=_df(a,'d');const rf=(a.from||a.to)?`var d=t.date?t.date.slice(0,7):null;if(!d||!(${df}))return;`:`var d=t.date?t.date.slice(0,7):null;if(!d)return;`;return `(function(){var mo={};data.txns.forEach(function(t){${rf}if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;},
-  bills:(a={})=>{if(a.type==="total")return `Math.round(data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)*100)/100`;return `data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};}).sort(function(a,b){return b.value-a.value;})`;},
-  portfolio:(a={})=>{if(a.type==="total")return `(function(){if(!data.holdings||!data.holdings.length)return 0;return Math.round(data.holdings.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0)*100)/100;})()`;return `(function(){if(!data.holdings||!data.holdings.length)return [];return data.holdings.map(function(h){return {name:h.ticker||h.symbol||'?',value:Math.round((h.shares||0)*(h.price||h.currentPrice||0)*100)/100};}).sort(function(a,b){return b.value-a.value;});})()`;},
-  merchants:(a={})=>{const df=_df(a);const n=a.limit||10;return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;},
-  transactions:(a={})=>{const df=_df(a);const n=a.limit||10;return `data.txns.filter(function(t){return ${df};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;},
-  pending_income:(a={})=>{const df=_df(a,'e.expectedDate');return `(function(){var items=(data.expected||[]).filter(function(e){return !e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.expectedDate};})};})()`;},
-  confirmed_income:(a={})=>{const df=_df(a,'e.expectedDate');return `(function(){var items=(data.expected||[]).filter(function(e){return e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.confirmedDate||e.expectedDate};})};})()`;},
-  all_expected_income:(a={})=>{const df=_df(a,'e.expectedDate');return `(function(){var items=(data.expected||[]).filter(function(e){return ${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);var pending=items.filter(function(e){return !e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);var confirmed=items.filter(function(e){return e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,pending:Math.round(pending*100)/100,confirmed:Math.round(confirmed*100)/100,items:items.map(function(e){return {name:e.source+(e.confirmed?' ✓':' ?'),value:e.amount,date:e.expectedDate};})};})()`;},
-  budgets:()=>`Object.entries(data.catBudgets||{}).map(function(e){return {name:e[0],value:e[1]};}).sort(function(a,b){return b.value-a.value;})`,
-  budget_vs_actual:(a={})=>{const df=_df(a);return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};var cats=Array.from(new Set(Object.keys(budgets).concat(Object.keys(spent))));return cats.map(function(c){var b=budgets[c]||0;var s=Math.round((spent[c]||0)*100)/100;var rem=Math.round((b-s)*100)/100;var pct=b>0?Math.round((s/b)*1000)/10:null;return {name:c,budget:b,spent:s,remaining:rem,percentUsed:pct};}).sort(function(a,b){return (b.percentUsed||0)-(a.percentUsed||0);});})()`;},
-  budget_remaining:(a={})=>{const cat=(a.category||"").replace(/'/g,"\\'");const df=_df(a);return `(function(){var cat='${cat}';var budget=(data.catBudgets||{})[cat]||0;var spent=data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).reduce(function(s,t){return s+t.amount;},0);var remaining=budget-spent;var pct=budget>0?Math.round((spent/budget)*1000)/10:null;return {category:cat,budget:Math.round(budget*100)/100,spent:Math.round(spent*100)/100,remaining:Math.round(remaining*100)/100,percentUsed:pct};})()`;},
-  over_budget:(a={})=>{const df=_df(a);return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};return Object.keys(budgets).filter(function(c){return (spent[c]||0)>budgets[c];}).map(function(c){return {name:c,budget:Math.round(budgets[c]*100)/100,spent:Math.round(spent[c]*100)/100,over:Math.round((spent[c]-budgets[c])*100)/100};}).sort(function(a,b){return b.over-a.over;});})()`;},
-  bills_due:(a={})=>{const m=a.month||new Date().toISOString().slice(0,7);return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return b.active!==false&&!paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay,category:b.category};}).sort(function(a,b){return a.dueDay-b.dueDay;});})()`;},
-  bills_paid:(a={})=>{const m=a.month||new Date().toISOString().slice(0,7);return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay};});})()`;},
-  holdings_detail:()=>`(function(){return (data.holdings||[]).map(function(h){var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var gainPct=cost>0?Math.round((gain/cost)*1000)/10:null;return {name:h.ticker||h.symbol||'?',shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:gainPct};}).sort(function(a,b){return b.marketValue-a.marketValue;});})()`,
-  portfolio_gain:()=>`(function(){var total=0,cost=0;(data.holdings||[]).forEach(function(h){var price=h.price||h.currentPrice||0;total+=(h.shares||0)*price;cost+=(h.shares||0)*(h.costBasis||0);});var gain=total-cost;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {marketValue:Math.round(total*100)/100,totalCost:Math.round(cost*100)/100,gain:Math.round(gain*100)/100,gainPercent:pct};})()`,
-  holding:(a={})=>{const t=(a.ticker||"").replace(/'/g,"\\'");return `(function(){var t='${t}';var h=(data.holdings||[]).find(function(h){return (h.ticker||h.symbol||'').toUpperCase()===t.toUpperCase();});if(!h)return null;var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {ticker:h.ticker||h.symbol,shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:pct};})()`;},
-  vacations:()=>`(data.vacations||[]).map(function(v){return {name:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget};})`,
-  vacation_spending:(a={})=>{const name=(a.name||"").replace(/'/g,"\\'");return `(function(){var name='${name}';var v=(data.vacations||[]).find(function(v){return v.name.toLowerCase().includes(name.toLowerCase());});if(!v)return null;var txns=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date>=v.startDate&&t.date<=v.endDate;});var total=txns.reduce(function(s,t){return s+t.amount;},0);var rem=v.budget-total;return {vacation:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget,spent:Math.round(total*100)/100,remaining:Math.round(rem*100)/100,transactions:txns.map(function(t){return {name:t.merchant||t.description||'?',value:t.amount,date:t.date,category:t.category};})};})()`;},
-  account_balance:()=>`(function(){var h=(data.accountHistory||[]).slice().sort(function(a,b){return b.date.localeCompare(a.date);});return h.length?{balance:h[0].balance,date:h[0].date}:null;})()`,
-  balance_history:(a={})=>{const df=_df(a,'h.date');return `(data.accountHistory||[]).filter(function(h){return ${df};}).slice().sort(function(a,b){return a.date.localeCompare(b.date);}).map(function(h){return {name:h.date,value:h.balance};})`;},
-  txns_by_category:(a={})=>{const cat=(a.category||"").replace(/'/g,"\\'");const df=_df(a);return `(function(){var cat='${cat}';return data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};});})()`;},
-  txns_by_merchant:(a={})=>{const merch=(a.merchant||"").replace(/'/g,"\\'");const df=_df(a);return `(function(){var m='${merch}';return data.txns.filter(function(t){return (t.merchant||t.description||'').toLowerCase().includes(m.toLowerCase())&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,type:t.type};});})()`;},
-  largest_expenses:(a={})=>{const df=_df(a);const n=a.limit||10;return `data.txns.filter(function(t){return t.type==='expense'&&${df};}).slice().sort(function(a,b){return b.amount-a.amount;}).slice(0,${n}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};})`;},
-  compare_expenses:(a={})=>{const m1=a.month1||new Date().toISOString().slice(0,7);const m2=a.month2||new Date().toISOString().slice(0,7);return `(function(){function total(m){return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}var v1=total('${m1}'),v2=total('${m2}');var change=v2-v1;var pct=v1!==0?Math.round((change/v1)*1000)/10:null;return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};})()`;},
-  compare_income:(a={})=>{const m1=a.month1||new Date().toISOString().slice(0,7);const m2=a.month2||new Date().toISOString().slice(0,7);return `(function(){function total(m){return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}var v1=total('${m1}'),v2=total('${m2}');var change=v2-v1;var pct=v1!==0?Math.round((change/v1)*1000)/10:null;return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};})()`;},
-  compare_net:(a={})=>{const m1=a.month1||new Date().toISOString().slice(0,7);const m2=a.month2||new Date().toISOString().slice(0,7);return `(function(){function net(m){var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;}var v1=net('${m1}'),v2=net('${m2}');var change=v2-v1;var pct=v1!==0?Math.round((change/Math.abs(v1))*1000)/10:null;return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};})()`;},
-  savings_rate:(a={})=>{const df=_df(a);const label=_label(a);return `(function(){var inc=data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {period:'${label}',income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;},
-  expense_share:(a={})=>{const cat=(a.category||"").replace(/'/g,"\\'");const df=_df(a);return `(function(){var cat='${cat}';var txns=data.txns.filter(function(t){return t.type==='expense'&&${df};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;},
-};
-
 function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSetMessages}){
   const setMessages = onSetMessages;
   const [input,setInput]=useState("");
@@ -3004,233 +3021,200 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
 
   // ─── Tool library: named functions the LLM can call by name + params ──────────
   // The LLM never writes JavaScript — it just picks a tool name and fills params.
-  // _df(args, field?) — generates a JS date-filter expression for use inside template strings.
-  // Supports: month (exact), from+to (range), or neither (all-time).
-  // field defaults to 't.date'; use 'e.expectedDate' for expected-income tools.
-  const _df=(args={},field='t.date')=>{
-    if(args.month)  return `${field}&&${field}.slice(0,7)==='${args.month}'`;
-    if(args.from||args.to){
-      const f=args.from||'0000-00', t=args.to||'9999-99';
-      return `${field}&&${field}.slice(0,7)>='${f}'&&${field}.slice(0,7)<='${t}'`;
-    }
-    return 'true';
-  };
-  // _label(args) — human-readable period label for widget titles
-  const _label=(args={})=>{
-    if(args.month) return args.month;
-    if(args.from&&args.to) return `${args.from} – ${args.to}`;
-    if(args.from) return `from ${args.from}`;
-    if(args.to)   return `up to ${args.to}`;
-    return 'All Time';
-  };
+  // _df and _label are imported from ./utils/dateUtils.js
+
+  // Helper: wrap a SQL string in the __SQL__: marker that executeTool/preloaded runner detect
+  const _sql=(sqlStr,params=[])=>`__SQL__:${JSON.stringify({sql:sqlStr,params})}`;
 
   const TOOL_LIBRARY={
     // ── Spending & Income ──────────────────────────────────────────────────────
-    // expenses(month?|from?,to?) — total expenses. single month OR range
+    // expenses(month?|from?,to?) — total expenses. single month OR date range
     expenses:(args={})=>{
-      const df=_df(args);
-      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='expense' AND ${df}`);
     },
     // income(month?|from?,to?) — total income
     income:(args={})=>{
-      const df=_df(args);
-      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='income' AND ${df}`);
     },
     // net(month?|from?,to?) — income minus expenses
     net:(args={})=>{
-      const df=_df(args);
-      return `(function(){var df=function(t){return ${df};};var i=data.txns.filter(function(t){return t.type==='income'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);return Math.round((i-e)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as value FROM transactions WHERE ${df}`);
     },
     // categories(month?|from?,to?) — expense totals grouped by category
     categories:(args={})=>{
-      const df=_df(args);
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC`);
     },
     // top_category(month?|from?,to?) — single highest-spend category
     top_category:(args={})=>{
-      const df=_df(args);
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:Math.round(s[0][1]*100)/100}:null;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC LIMIT 1`);
     },
     // monthly(months?|from?,to?) — income & expenses per month
     monthly:(args={})=>{
       const n=args.months||99;
-      const df=_df(args,'d');
-      const rangeFilter=(args.from||args.to)?`var d=t.date?t.date.slice(0,7):null;if(!d||!(${df}))return;`:`var d=t.date?t.date.slice(0,7):null;if(!d)return;`;
-      return `(function(){var mo={};data.txns.forEach(function(t){${rangeFilter}if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT strftime('%Y-%m',date) as name, ROUND(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),2) as Income, ROUND(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),2) as Expenses FROM transactions WHERE ${df} GROUP BY strftime('%Y-%m',date) ORDER BY name LIMIT ${n}`);
     },
     // bills(type?) — "total"=sum, default=list [{name,value}]
     bills:(args={})=>{
-      if(args.type==="total")
-        return `Math.round(data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)*100)/100`;
-      return `data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};}).sort(function(a,b){return b.value-a.value;})`;
+      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM bills WHERE active=1`);
+      return _sql(`SELECT name, amount as value FROM bills WHERE active=1 ORDER BY amount DESC`);
     },
-    // portfolio(type?) — "total"=value, default=holdings [{name,value}]
+    // portfolio(type?) — cost-basis total or holdings list (live price not in DB)
     portfolio:(args={})=>{
-      if(args.type==="total")
-        return `(function(){if(!data.holdings||!data.holdings.length)return 0;return Math.round(data.holdings.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0)*100)/100;})()`;
-      return `(function(){if(!data.holdings||!data.holdings.length)return [];return data.holdings.map(function(h){return {name:h.ticker||h.symbol||'?',value:Math.round((h.shares||0)*(h.price||h.currentPrice||0)*100)/100};}).sort(function(a,b){return b.value-a.value;});})()`;
+      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as value FROM holdings WHERE costBasis IS NOT NULL`);
+      return _sql(`SELECT ticker as name, ROUND(costBasis*shares,2) as value, shares, costBasis FROM holdings WHERE costBasis IS NOT NULL ORDER BY value DESC`);
     },
     // merchants(month?|from?,to?, limit?) — top merchants by spend
     merchants:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
+      return _sql(`SELECT COALESCE(merchant,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(merchant,'Other') ORDER BY value DESC LIMIT ${n}`);
     },
-    // transactions(month?|from?,to?, limit?) — recent transactions
+    // transactions(month?|from?,to?, limit?) — recent transactions list
     transactions:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `data.txns.filter(function(t){return ${df};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type, category FROM transactions WHERE ${df} ORDER BY date DESC LIMIT ${n}`);
     },
 
     // ── Expected Income ────────────────────────────────────────────────────────
-    // pending_income(month?|from?,to?) — unconfirmed expected income
+    // pending_income(month?|from?,to?) — unconfirmed expected income items
     pending_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return !e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, expectedDate as date FROM expected_income WHERE confirmed=0 AND ${df} ORDER BY expectedDate`);
     },
-    // confirmed_income(month?|from?,to?) — confirmed expected income
+    // confirmed_income(month?|from?,to?) — confirmed received payments
     confirmed_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.confirmedDate||e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, COALESCE(confirmedDate,expectedDate) as date FROM expected_income WHERE confirmed=1 AND ${df} ORDER BY expectedDate`);
     },
-    // all_expected_income(month?|from?,to?) — all expected income with status
+    // all_expected_income(month?|from?,to?) — all expected income with confirmation status
     all_expected_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return ${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);var pending=items.filter(function(e){return !e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);var confirmed=items.filter(function(e){return e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,pending:Math.round(pending*100)/100,confirmed:Math.round(confirmed*100)/100,items:items.map(function(e){return {name:e.source+(e.confirmed?' ✓':' ?'),value:e.amount,date:e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, expectedDate, confirmed, confirmedDate FROM expected_income WHERE ${df} ORDER BY expectedDate`);
     },
 
     // ── Budgets ────────────────────────────────────────────────────────────────
     // budgets() — all category budgets
-    budgets:()=>`Object.entries(data.catBudgets||{}).map(function(e){return {name:e[0],value:e[1]};}).sort(function(a,b){return b.value-a.value;})`,
+    budgets:()=>_sql(`SELECT category as name, budget as value FROM cat_budgets ORDER BY budget DESC`),
     // budget_vs_actual(month?|from?,to?) — category budget vs actual spend
     budget_vs_actual:(args={})=>{
-      const df=_df(args);
-      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};var cats=Array.from(new Set(Object.keys(budgets).concat(Object.keys(spent))));return cats.map(function(c){var b=budgets[c]||0;var s=Math.round((spent[c]||0)*100)/100;var rem=Math.round((b-s)*100)/100;var pct=b>0?Math.round((s/b)*1000)/10:null;return {name:c,budget:b,spent:s,remaining:rem,percentUsed:pct};}).sort(function(a,b){return (b.percentUsed||0)-(a.percentUsed||0);});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category ORDER BY percentUsed DESC NULLS LAST`);
     },
     // budget_remaining(category, month?|from?,to?) — remaining budget for one category
     budget_remaining:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';var budget=(data.catBudgets||{})[cat]||0;var spent=data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).reduce(function(s,t){return s+t.amount;},0);var remaining=budget-spent;var pct=budget>0?Math.round((spent/budget)*1000)/10:null;return {category:cat,budget:Math.round(budget*100)/100,spent:Math.round(spent*100)/100,remaining:Math.round(remaining*100)/100,percentUsed:pct};})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT SUM(amount) as spent FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df}) t ON 1=1 WHERE cb.category='${cat}'`);
     },
-    // over_budget(month?|from?,to?) — categories exceeding their budget
+    // over_budget(month?|from?,to?) — categories where actual spend exceeds budget
     over_budget:(args={})=>{
-      const df=_df(args);
-      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};return Object.keys(budgets).filter(function(c){return (spent[c]||0)>budgets[c];}).map(function(c){return {name:c,budget:Math.round(budgets[c]*100)/100,spent:Math.round(spent[c]*100)/100,over:Math.round((spent[c]-budgets[c])*100)/100};}).sort(function(a,b){return b.over-a.over;});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
     },
 
     // ── Bills ─────────────────────────────────────────────────────────────────
-    // bills_due(month?|from?,to?) — unpaid bills; range returns unpaid across all months in window
+    // bills_due(month?) — bills not yet paid this month
     bills_due:(args={})=>{
       const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return b.active!==false&&!paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay,category:b.category};}).sort(function(a,b){return a.dueDay-b.dueDay;});})()`;
+      return _sql(`SELECT b.name, b.amount as value, b.dueDay, b.category FROM bills b WHERE b.active=1 AND b.id NOT IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
     },
-    // bills_paid(month?) — paid bills this month
+    // bills_paid(month?) — bills paid this month
     bills_paid:(args={})=>{
       const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay};});})()`;
+      return _sql(`SELECT b.name, b.amount as value, b.dueDay FROM bills b WHERE b.active=1 AND b.id IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
     },
 
     // ── Holdings / Portfolio ───────────────────────────────────────────────────
-    // holdings_detail() — each holding with cost basis, market value, gain/loss
-    holdings_detail:()=>`(function(){return (data.holdings||[]).map(function(h){var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var gainPct=cost>0?Math.round((gain/cost)*1000)/10:null;return {name:h.ticker||h.symbol||'?',shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:gainPct};}).sort(function(a,b){return b.marketValue-a.marketValue;});})()`,
-    // portfolio_gain() — total unrealised gain/loss
-    portfolio_gain:()=>`(function(){var total=0,cost=0;(data.holdings||[]).forEach(function(h){var price=h.price||h.currentPrice||0;total+=(h.shares||0)*price;cost+=(h.shares||0)*(h.costBasis||0);});var gain=total-cost;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {marketValue:Math.round(total*100)/100,totalCost:Math.round(cost*100)/100,gain:Math.round(gain*100)/100,gainPercent:pct};})()`,
+    // holdings_detail() — each holding with shares, cost basis, total cost
+    holdings_detail:()=>_sql(`SELECT ticker as name, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings ORDER BY totalCost DESC NULLS LAST`),
+    // portfolio_gain() — total portfolio cost basis (market price not stored in DB)
+    portfolio_gain:()=>_sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as totalCost, COUNT(*) as holdings, ROUND(AVG(costBasis),2) as avgCostBasis FROM holdings WHERE costBasis IS NOT NULL`),
     // holding(ticker) — detail for one ticker
     holding:(args={})=>{
-      const t=(args.ticker||"").replace(/'/g,"\\'");
-      return `(function(){var t='${t}';var h=(data.holdings||[]).find(function(h){return (h.ticker||h.symbol||'').toUpperCase()===t.toUpperCase();});if(!h)return null;var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {ticker:h.ticker||h.symbol,shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:pct};})()`;
+      const t=(args.ticker||"").replace(/'/g,"''");
+      return _sql(`SELECT ticker, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings WHERE UPPER(ticker)=UPPER('${t}') LIMIT 1`);
     },
 
     // ── Vacations ─────────────────────────────────────────────────────────────
-    // vacations() — all vacations: [{name, startDate, endDate, budget}]
-    vacations:()=>`(data.vacations||[]).map(function(v){return {name:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget};})`,
-    // vacation_spending(name) — actual spend vs budget for a named vacation
+    // vacations() — all vacations with dates and budgets
+    vacations:()=>_sql(`SELECT name, startDate, endDate, budget FROM vacations ORDER BY startDate`),
+    // vacation_spending(name) — budget vs actual spend for a named vacation
     vacation_spending:(args={})=>{
-      const name=(args.name||"").replace(/'/g,"\\'");
-      return `(function(){var name='${name}';var v=(data.vacations||[]).find(function(v){return v.name.toLowerCase().includes(name.toLowerCase());});if(!v)return null;var txns=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date>=v.startDate&&t.date<=v.endDate;});var total=txns.reduce(function(s,t){return s+t.amount;},0);var rem=v.budget-total;return {vacation:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget,spent:Math.round(total*100)/100,remaining:Math.round(rem*100)/100,transactions:txns.map(function(t){return {name:t.merchant||t.description||'?',value:t.amount,date:t.date,category:t.category};})};})()`;
+      const name=(args.name||"").replace(/'/g,"''");
+      return _sql(`SELECT v.name, v.startDate, v.endDate, v.budget, ROUND(COALESCE(SUM(vt.amount),0),2) as spent, ROUND(v.budget-COALESCE(SUM(vt.amount),0),2) as remaining FROM vacations v LEFT JOIN vacation_txns vt ON vt.vacationId=v.id WHERE LOWER(v.name) LIKE LOWER('%${name}%') GROUP BY v.id ORDER BY v.startDate`);
     },
 
     // ── Account History ────────────────────────────────────────────────────────
     // account_balance() — most recent balance snapshot
-    account_balance:()=>`(function(){var h=(data.accountHistory||[]).slice().sort(function(a,b){return b.date.localeCompare(a.date);});return h.length?{balance:h[0].balance,date:h[0].date}:null;})()`,
-    // balance_history(from?,to?) — balance snapshots over time
+    account_balance:()=>_sql(`SELECT date, balance as value FROM account_history ORDER BY date DESC LIMIT 1`),
+    // balance_history(from?,to?) — all balance snapshots ordered by date
     balance_history:(args={})=>{
-      const df=_df(args,'h.date');
-      return `(data.accountHistory||[]).filter(function(h){return ${df};}).slice().sort(function(a,b){return a.date.localeCompare(b.date);}).map(function(h){return {name:h.date,value:h.balance};})`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT date as name, balance as value FROM account_history WHERE ${df} ORDER BY date`);
     },
 
     // ── Transactions (extended) ────────────────────────────────────────────────
     // txns_by_category(category, month?|from?,to?) — all transactions in a category
     txns_by_category:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';return data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};});})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, category FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df} ORDER BY date DESC`);
     },
     // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
     txns_by_merchant:(args={})=>{
-      const merch=(args.merchant||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var m='${merch}';return data.txns.filter(function(t){return (t.merchant||t.description||'').toLowerCase().includes(m.toLowerCase())&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,type:t.type};});})()`;
+      const merch=(args.merchant||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type FROM transactions WHERE LOWER(COALESCE(merchant,'')) LIKE LOWER('%${merch}%') AND ${df} ORDER BY date DESC`);
     },
     // largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
     largest_expenses:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `data.txns.filter(function(t){return t.type==='expense'&&${df};}).slice().sort(function(a,b){return b.amount-a.amount;}).slice(0,${n}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};})`;
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, COALESCE(category,'Other') as category FROM transactions WHERE type='expense' AND ${df} ORDER BY amount DESC LIMIT ${n}`);
     },
 
-    // ── Math tools — all arithmetic happens here, never in LLM text ──────────
-
+    // ── Math / Comparison tools ────────────────────────────────────────────────
     // compare_expenses(month1, month2) — {month1,value1,month2,value2,change,changePercent}
     compare_expenses:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function total(m){return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
-        var v1=total('${m1}'),v2=total('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='expense' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
     // compare_income(month1, month2) — same shape for income
     compare_income:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function total(m){return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
-        var v1=total('${m1}'),v2=total('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
     // compare_net(month1, month2) — net position comparison
     compare_net:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function net(m){var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;}
-        var v1=net('${m1}'),v2=net('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/Math.abs(v1))*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value2 FROM transactions WHERE strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
-    // savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
+    // savings_rate(month?|from?,to?) — {period, income, expenses, saved, rate%}
     savings_rate:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const label=_label(args);
-      return `(function(){var inc=data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {period:'${label}',income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;
+      return _sql(`SELECT '${label}' as period, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0),2) as income, ROUND(COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),2) as expenses, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as saved, CASE WHEN SUM(CASE WHEN type='income' THEN amount ELSE 0 END)>0 THEN ROUND(SUM(CASE WHEN type='income' THEN amount ELSE -amount END)*100.0/SUM(CASE WHEN type='income' THEN amount ELSE 0 END),1) ELSE NULL END as rate FROM transactions WHERE ${df}`);
     },
     // expense_share(category, month?|from?,to?) — what % of spending is one category
     expense_share:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';var txns=data.txns.filter(function(t){return t.type==='expense'&&${df};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT '${cat}' as category, ROUND(COALESCE(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END),0),2) as amount, ROUND(COALESCE(SUM(amount),0),2) as total, CASE WHEN SUM(amount)>0 THEN ROUND(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END)*100.0/SUM(amount),1) ELSE NULL END as percent FROM transactions WHERE type='expense' AND ${df}`);
     },
+
+    // ── Raw SQL ────────────────────────────────────────────────────────────────
+    // sql_query(sql, params?) — execute any SELECT directly against SQLite
+    sql_query:(args={})=>_sql(args.sql||'SELECT 1', args.params||[]),
   };
 
   // Build compact system prompt — just tool names, no raw JS examples
@@ -3304,6 +3288,9 @@ compare_net(month1, month2) — net position comparison
 savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
 expense_share(category, month?|from?,to?) — what % of spending is one category
 
+SQL:
+sql_query(sql, params?) — execute any SELECT against SQLite for custom analysis
+
 NAVIGATION:
 navigate(tab) — home/bills/history/stocks/budget/networth/settings
 
@@ -3339,6 +3326,17 @@ User: total expenses from January to March 2026
 User: what was my savings rate for Q1 2026
 <tool>{"name":"savings_rate","args":{"from":"2026-01","to":"2026-03"}}</tool>
 
+SQL TOOL — use when no named tool fits:
+sql_query(sql, params?) — run any SELECT against SQLite.
+${Object.entries((schema&&schema.views)||{}).map(([,v])=>{
+  const tbl=v.table||v.source||'?';
+  const fields=Object.entries(v.dimensions||{}).filter(([,d])=>d.sql).map(([dk,d])=>`${dk}:${d.sql.replace(/\$\{TABLE\}/g,tbl)}`);
+  return `${tbl}: ${fields.join(', ')}`;
+}).join('\n')}
+Example:
+User: expenses by category in 2026-05
+<tool>{"name":"sql_query","args":{"sql":"SELECT category, ROUND(SUM(amount),2) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)='2026-05' GROUP BY category ORDER BY total DESC"}}</tool>
+
 Current month: ${curMonth}`;
   };
 
@@ -3348,13 +3346,17 @@ Current month: ${curMonth}`;
       onNavigate(args.tab);
       return{success:true,navigatedTo:args.tab};
     }
-    // Named library tool — look up the JS generator and run it
+    // Named library tool — all tools now return __SQL__: markers
     if(TOOL_LIBRARY[name]){
       try{
-        const js=TOOL_LIBRARY[name](args||{});
-        const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:js})});
+        const marker=TOOL_LIBRARY[name](args||{});
+        const{sql,params}=JSON.parse(marker.slice(8));
+        const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
         const d=await r.json();
-        return{id:name,result:d.result,error:d.error};
+        if(d.error)return{id:name,error:d.error};
+        // Normalize: 1 row × 1 column → scalar value (e.g. expenses → 1234.56)
+        if(d.rows.length===1&&d.columns.length===1)return{id:name,result:d.rows[0][d.columns[0]]};
+        return{id:name,result:d.rows,columns:d.columns,count:d.count};
       }catch(e){return{id:name,error:e.message};}
     }
     // Legacy raw query tool (fallback only)
@@ -3476,12 +3478,23 @@ Current month: ${curMonth}`;
         const widgets=[];
         for(const q of preloaded.queries){
           try{
-            const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q.js()})});
-            const d=await r.json();
-            if(d.result!==undefined&&!d.error){
-              const w=q.buildWidget?q.buildWidget(d.result):autoWidget(uid(),q.label,d.result,q.chartType);
-              if(w) widgets.push(w);
+            const marker=q.js();
+            let result;
+            if(typeof marker==="string"&&marker.startsWith("__SQL__:")){
+              const{sql,params}=JSON.parse(marker.slice(8));
+              const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
+              const d=await r.json();
+              if(d.error)continue;
+              // Normalize single-value result to scalar
+              result=d.rows.length===1&&d.columns.length===1?d.rows[0][d.columns[0]]:d.rows;
+            } else {
+              const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:marker})});
+              const d=await r.json();
+              if(d.result===undefined||d.error)continue;
+              result=d.result;
             }
+            const w=q.buildWidget?q.buildWidget(result):autoWidget(uid(),q.label,result,q.chartType);
+            if(w) widgets.push(w);
           }catch(e){}
         }
         if(widgets.length>0){
@@ -3855,24 +3868,7 @@ Current month: ${curMonth}`;
   );
 }
 
-// ── Sidebar nav data ─────────────────────────────────────────────────────────
-const NAV_ITEMS = [
-  { k:"dashboard", l:"Home",           icon:"⊞", desc:"Overview of your finances — spending, income, budgets and upcoming bills at a glance.", alwaysShow:true },
-  { k:"insights",  l:"Insights",       icon:"◈", desc:"Ask questions about your data and get charts and answers powered by a local AI model.", alwaysShow:true },
-  { k:"bills",     l:"Bills",          icon:"◷", desc:"Track recurring bills, mark them paid each month, and see what's still outstanding." },
-  { k:"goals",     l:"Goals",          icon:"◎", desc:"Set savings goals with a target amount and date, and track your progress over time." },
-  { k:"networth",  l:"Net Worth",      icon:"◈", desc:"Track accounts, assets and liabilities to see your overall financial position." },
-  { k:"stocks",    l:"Stocks",         icon:"◉", desc:"Monitor your stock and ETF holdings with live prices in CAD and USD." },
-  { k:"expected",  l:"Expected Income",icon:"◑", desc:"Schedule future income payments and mark them received when they land." },
-  { k:"history",   l:"History",        icon:"≡",  desc:"Browse, search and bulk-edit all your past transactions." },
-  { k:"vacations", l:"Vacations",      icon:"◷", desc:"Budget and track spending for trips separately from your main expenses." },
-  { k:"categories",l:"Categories",     icon:"▦", desc:"Define spending categories and set monthly budget caps with progress alerts." },
-  { k:"manual",    l:"Add Expense",    icon:"+", desc:"Log a one-off or recurring expense directly into your transaction history." },
-  { k:"income",    l:"Add Income",     icon:"+", desc:"Record a one-off or recurring income entry." },
-  { k:"folder",    l:"Folder Sync",    icon:"▤", desc:"Point the app at a local folder of receipts and import them all at once." },
-  { k:"upload",    l:"Upload Receipts",icon:"↑", desc:"Upload individual receipt photos or PDFs and extract the details automatically." },
-  { k:"settings",  l:"Settings",       icon:"⚙", desc:"Configure your name, Ollama model, and developer options.", isBottom:true },
-];
+// NAV_ITEMS imported from ./constants/index.js
 
 // ── Sidebar component ─────────────────────────────────────────────────────────
 function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew }) {
@@ -4052,446 +4048,6 @@ function WhatsNewModal({onClose}){
   );
 }
 
-// ─── In-Depth Mode selectable wrapper ──────────────────────────────────────
-function SelectableWrapper({item,inDepthMode,onSelectItem,children}){
-  if(!inDepthMode) return children;
-  return (
-    <div
-      onClick={e=>{e.stopPropagation();onSelectItem(item);}}
-      style={{position:"relative",cursor:"crosshair",outline:"2px dashed #93c5fd",borderRadius:8,transition:"outline-color .15s"}}
-      onMouseEnter={e=>e.currentTarget.style.outlineColor="#0284C7"}
-      onMouseLeave={e=>e.currentTarget.style.outlineColor="#93c5fd"}
-    >
-      {children}
-      <div style={{position:"absolute",top:6,right:6,width:20,height:20,borderRadius:"50%",background:"#0284C7",color:"#fff",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,pointerEvents:"none",zIndex:10,boxShadow:"0 2px 6px rgba(2,132,199,0.45)"}}>+</div>
-    </div>
-  );
-}
-
-// ─── Global Chat FAB + slide-up panel ───────────────────────────────────────
-function GlobalChat({view,onNavigate,settings,inDepthMode,onSetInDepthMode,selectedItems,onSetSelectedItems,open,onSetOpen}){
-  const [input,setInput]=useState("");
-  const [messages,setMessages]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [listening,setListening]=useState(false);
-  const [speaking,setSpeaking]=useState(false);
-  const msgsEndRef=useRef(null);
-  const inputRef=useRef(null);
-
-  useEffect(()=>{msgsEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
-  useEffect(()=>{if(open) setTimeout(()=>inputRef.current?.focus(),100);},[open]);
-
-  const TODAY=new Date().toISOString().slice(0,10);
-  const sysPrompt=`You are Jarvis, a sharp financial AI. Speak like Jarvis from Iron Man: concise, precise, no pleasantries.
-RULES: Call one tool before answering any data question. NEVER invent numbers. Reply in ONE short sentence using only the returned values. No preamble, no sign-off.
-TODAY: ${TODAY}
-Tool call format: <tool>{"name":"expenses","args":{"month":"2026-06"}}</tool>
-DATE ARGS: month="YYYY-MM" or from/to="YYYY-MM"
-TOOLS: expenses, income, net, categories, top_category, monthly, merchants, transactions, txns_by_category(category), txns_by_merchant(merchant), largest_expenses, budgets, budget_vs_actual, budget_remaining(category), over_budget, pending_income, confirmed_income, all_expected_income, bills, bills_due, bills_paid, portfolio, holdings_detail, portfolio_gain, holding(ticker), vacations, vacation_spending(name), account_balance, balance_history, compare_expenses(month1,month2), compare_income, compare_net, savings_rate, expense_share(category), navigate(tab)
-TABS: dashboard, history, bills, stocks, networth, settings, expected, categories, vacations, goals`;
-
-  const callLLM=async(msgs)=>{
-    const model=settings?.globalChatModel||"gemini";
-    if(model==="gemini"){
-      const r=await fetch("/api/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:sysPrompt}]},contents:msgs.map(m=>({role:m.role==="assistant"?"model":m.role,parts:[{text:m.content}]})),generationConfig:{maxOutputTokens:512}})});
-      const d=await r.json();
-      if(!r.ok) throw new Error(d.error?.message||"Gemini error");
-      return d.candidates?.[0]?.content?.parts?.[0]?.text||"No response.";
-    } else {
-      const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:[{role:"system",content:sysPrompt},...msgs],stream:false})});
-      const d=await r.json();
-      return d.message?.content||"No response.";
-    }
-  };
-
-  const execTool=async(name,args={})=>{
-    const fn=TOOL_LIBRARY[name];
-    if(!fn) return null;
-    const js=fn(args);
-    const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:js})});
-    const d=await r.json();
-    return d.result??d.error??null;
-  };
-
-
-  const fmtCurrency=v=>"$"+Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-
-  const renderWidget=(w)=>{
-    if(!w) return null;
-    if(w.type==="metric") return (
-      <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"10px 14px",marginTop:6}}>
-        <div style={{fontSize:10,color:"#64748b",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>{w.title}</div>
-        <div style={{fontSize:20,fontWeight:800,color:"#0284C7",marginTop:2}}>{w.format==="currency"?fmtCurrency(w.value):w.value}</div>
-      </div>
-    );
-    const rows=w.rows||(w.data?.map(d=>[d.name,d.value]))||[];
-    const cols=w.columns||["Name","Value"];
-    if(!rows.length) return null;
-    return (
-      <div style={{marginTop:6,overflowX:"auto",borderRadius:8,border:"1px solid #e2e8f0"}}>
-        <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
-          <thead><tr>{cols.map(c=><th key={c} style={{textAlign:"left",padding:"6px 10px",color:"#64748b",borderBottom:"1px solid #e2e8f0",fontWeight:600,fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",background:"#f8fafc"}}>{c}</th>)}</tr></thead>
-          <tbody>{rows.slice(0,8).map((row,i)=><tr key={i} style={{borderBottom:i<rows.length-1?"1px solid #f1f5f9":""}}>{(Array.isArray(row)?row:[row]).map((cell,j)=><td key={j} style={{padding:"5px 10px",color:"#1e293b"}}>{typeof cell==="number"?fmtCurrency(cell):cell}</td>)}</tr>)}</tbody>
-        </table>
-      </div>
-    );
-  };
-
-  // Build a reply text directly from tool result data — no LLM, no hallucination
-  const buildToolSummary=(name,args,result)=>{
-    const fmt=v=>typeof v==='number'?'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):String(v??'');
-    const period=args.month?` for ${args.month}`:args.from?` from ${args.from} to ${args.to||'now'}`:'';
-    if(result===null||result===undefined) return 'No data found.';
-    // Scalar
-    if(typeof result==='number') return `${name==='expenses'?'Total spending':name==='income'?'Total income':name==='net'?'Net position':name==='bills'?'Bills total':'Result'}${period}: ${fmt(result)}.`;
-    // Known shapes
-    if(name==='savings_rate') return `Savings rate${period}: ${result.rate??'N/A'}% — saved ${fmt(result.saved)} of ${fmt(result.income)} income.`;
-    if(name==='compare_expenses'||name==='compare_income'||name==='compare_net') return `${result.month1}: ${fmt(result.value1)} → ${result.month2}: ${fmt(result.value2)} (${result.change>=0?'+':''}${fmt(result.change)}, ${result.changePercent!=null?result.changePercent+'%':'N/A'}).`;
-    if(name==='expense_share') return `${result.category} is ${result.percent??'N/A'}% of total spending${period} (${fmt(result.amount)} of ${fmt(result.total)}).`;
-    if(name==='budget_remaining') return `${result.category}: spent ${fmt(result.spent)} of ${fmt(result.budget)} budget, ${fmt(result.remaining)} remaining (${result.percentUsed??0}% used).`;
-    if(name==='account_balance') return result?`Account balance as of ${result.date}: ${fmt(result.balance)}.`:'No balance data found.';
-    if(name==='portfolio_gain') return `Portfolio: ${fmt(result.marketValue)} market value, ${result.gain>=0?'+':''}${fmt(result.gain)} gain (${result.gainPercent!=null?result.gainPercent+'%':'N/A'}).`;
-    if(name==='holding') return result?`${result.ticker}: ${result.shares} shares, market value ${fmt(result.marketValue)}, gain ${result.gain>=0?'+':''}${fmt(result.gain)}.`:'Ticker not found.';
-    if(name==='top_category') return result?`Top spending category${period}: ${result.name} at ${fmt(result.value)}.`:'No spending data found.';
-    if((name==='pending_income'||name==='confirmed_income'||name==='all_expected_income')&&typeof result?.total==='number'){
-      const label=name==='pending_income'?'Pending':name==='confirmed_income'?'Confirmed':'Total expected';
-      return `${label} income${period}: ${fmt(result.total)} across ${result.items?.length??0} item(s).`;
-    }
-    // Arrays
-    if(Array.isArray(result)){
-      if(!result.length) return `No results found${period}.`;
-      const top=result[0];
-      if(name==='categories') return `Top spending categories${period}: ${result.slice(0,3).map(r=>`${r.name} (${fmt(r.value)})`).join(', ')}.`;
-      if(name==='over_budget') return `${result.length} categor${result.length===1?'y':'ies'} over budget: ${result.map(r=>r.name).join(', ')}.`;
-      if(name==='largest_expenses'||name==='txns_by_category'||name==='txns_by_merchant') return `Top result: ${top.name} — ${fmt(top.value)}.`;
-      if(name==='merchants') return `Top merchant${period}: ${top.name} (${fmt(top.value)}).`;
-      if(name==='bills') return `${result.length} active bill(s) totalling ${fmt(result.reduce((s,b)=>s+b.value,0))}.`;
-      if(name==='bills_due') return result.length?`${result.length} bill(s) due: ${result.map(b=>b.name).join(', ')}.`:'All bills paid this month.';
-      if(name==='bills_paid') return result.length?`${result.length} bill(s) paid: ${result.map(b=>b.name).join(', ')}.`:'No bills paid yet this month.';
-      if(name==='holdings_detail') return `${result.length} holding(s). Top: ${top.name} worth ${fmt(top.marketValue)}.`;
-      if(name==='transactions') return `${result.length} transaction(s). Latest: ${top.name} — ${fmt(top.value)}.`;
-      if(name==='budget_vs_actual') return `${result.length} budget categor${result.length===1?'y':'ies'}. Highest spend: ${top.name} — ${fmt(top.spent)} of ${fmt(top.budget)} budget.`;
-      if(name==='monthly') return `${result.length} month(s) of data. Latest: ${result[result.length-1]?.name} — income ${fmt(result[result.length-1]?.Income)}, expenses ${fmt(result[result.length-1]?.Expenses)}.`;
-      return `${result.length} result(s) found.`;
-    }
-    return 'Here is the data.';
-  };
-
-  // Parse tool calls from LLM output — handles multiple formats:
-  // 1. <tool>{...}</tool>  (our intended format)
-  // 2. ```json / ```plaintext code blocks
-  // 3. phi3 {"tool":{"name":"..."}} structure
-  // 4. Raw {"name":"..."} JSON inline
-  const parseToolCall=(text)=>{
-    // Format 1: <tool>...</tool>
-    const xmlM=text.match(/<tool>([\s\S]*?)<\/tool>/);
-    if(xmlM){try{const d=JSON.parse(xmlM[1]);if(d?.name)return d;}catch{}}
-    // Format 2: any code block containing a JSON object with "name" or nested "tool"
-    const blockMs=[...text.matchAll(/```[a-z]*\s*(\{[\s\S]*?\})\s*```/g)];
-    for(const bm of blockMs){
-      try{
-        const d=JSON.parse(bm[1]);
-        if(d?.name) return {name:d.name,args:d.args||d.arguments||d.parameters||{}};
-        if(d?.tool?.name) return {name:d.tool.name,args:d.tool.args||d.tool.arguments||d.tool.parameters||{}};
-      }catch{}
-    }
-    // Format 3: raw JSON object anywhere in text with "name" key
-    const allJson=[...text.matchAll(/(\{[^{}]*"name"\s*:[^{}]*\})/g)];
-    for(const jm of allJson){
-      try{const d=JSON.parse(jm[1]);if(d?.name&&TOOL_LIBRARY[d.name])return{name:d.name,args:d.args||d.arguments||{}};}catch{}
-    }
-    // Format 4: phi3 nested {"tool":...} possibly with surrounding text
-    const nestedM=text.match(/"tool"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/);
-    if(nestedM){const name=nestedM[1];if(TOOL_LIBRARY[name])return{name,args:{}};}
-    return null;
-  };
-
-  const curMonth=new Date().toISOString().slice(0,7);
-
-  // Fast-path: common patterns that skip LLM entirely
-  // Note: more specific patterns must come before broader ones
-  const QUICK=[
-    {test:/main contributors?|top categor|spending categor|categor.*breakdown|breakdown.*categor|where.*spending|what.*spending on|spending by categor/i,
-     name:'categories',args:()=>({month:curMonth}),
-     reply:r=>r?.length?`Your top spending categories this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No spending data yet this month."},
-    {test:/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i,
-     name:'txns_by_category',
-     args:(t)=>{const m=(t||"").match(/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i);const cat=(m?.[1]||m?.[2]||m?.[3]||"").replace(/[?.!]/g,"").trim();return {category:cat,month:curMonth};},
-     reply:r=>{if(!r?.length)return "No transactions found for that category this month.";const top=r.sort((a,b)=>b.value-a.value)[0];return `The most expensive transaction in that category is ${top.name} at $${top.value.toFixed(2)}.`;}},
-    {test:/top merchant|largest expense|biggest expense|biggest spend|top expense/i,
-     name:'largest_expenses',args:()=>({month:curMonth,limit:8}),
-     reply:r=>r?.length?`Your largest expenses this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No expenses found."},
-    {test:/pending income|unconfirmed income|income.*pending|income.*not confirmed/i,
-     name:'pending_income',args:()=>({month:curMonth}),
-     reply:r=>`You have $${Number(r?.total||0).toLocaleString('en-US',{minimumFractionDigits:2})} in pending income this month across ${r?.items?.length||0} item(s).`},
-    {test:/net position|what.*my net|net this month/i,
-     name:'net',args:()=>({month:curMonth}),
-     reply:r=>`Your net position this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-    {test:/how much.*spent|total.*spent|how much.*spending|spent this month|spending this month/i,
-     name:'expenses',args:()=>({month:curMonth}),
-     reply:r=>`You've spent $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})} this month.`},
-    {test:/income this month|how much.*income|total.*income/i,
-     name:'income',args:()=>({month:curMonth}),
-     reply:r=>`Your income this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-    {test:/\bbills?\b.*due|due.*\bbills?\b|monthly bills?|show.*bills?/i,
-     name:'bills',args:()=>({}),
-     reply:r=>r?.length?`Your active bills total $${r.reduce((s,b)=>s+b.value,0).toFixed(2)} across ${r.length} bills.`:"No bills found."},
-    {test:/portfolio.*worth|stock.*value|holdings? value|portfolio total/i,
-     name:'portfolio',args:()=>({type:'total'}),
-     reply:r=>`Your portfolio is currently worth $${Number(r||0).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-  ];
-
-  // Navigate fast-path
-  const NAV_TABS={
-    dashboard:'dashboard',home:'dashboard',
-    bills:'bills',bill:'bills',
-    history:'history',transactions:'history',transaction:'history','spending history':'history',
-    stocks:'stocks',stock:'stocks',portfolio:'stocks',holdings:'stocks',holding:'stocks',
-    'net worth':'networth',networth:'networth',
-    settings:'settings',setting:'settings',preferences:'settings',
-    expected:'expected','expected income':'expected',
-    categories:'categories',category:'categories',budget:'categories',budgets:'categories',
-    vacations:'vacations',vacation:'vacations','vacation tab':'vacations',trips:'vacations',
-    goals:'goals',goal:'goals','savings goals':'goals',
-    insights:'insights',insight:'insights','ai chat':'insights','data model':'datamodel',datamodel:'datamodel',
-  };
-
-  // voiceMode: true when triggered by mic — Jarvis will speak then auto-listen again
-  const voiceModeRef=useRef(false);
-
-  const speakAndResume=useCallback((text)=>{
-    if(!settings?.jarvisVoice||!text){
-      if(voiceModeRef.current) setTimeout(startVoice,300);
-      return;
-    }
-    const synth=window.speechSynthesis;
-    synth.cancel();
-    const utter=new SpeechSynthesisUtterance(text);
-    const loadVoice=()=>{
-      const voices=synth.getVoices();
-      const pick=voices.find(v=>v.name==='Zarvox')
-        ||voices.find(v=>v.name==='Daniel')
-        ||voices.find(v=>v.name.includes('Google UK English Male'))
-        ||voices.find(v=>v.lang==='en-GB'&&!v.name.toLowerCase().includes('female'))
-        ||voices.find(v=>v.lang==='en-GB')
-        ||voices.find(v=>v.lang.startsWith('en')&&!v.name.toLowerCase().includes('female'));
-      if(pick) utter.voice=pick;
-      utter.pitch=0.6;
-      utter.rate=0.95;
-      utter.volume=1;
-      utter.onstart=()=>setSpeaking(true);
-      utter.onend=()=>{ setSpeaking(false); if(voiceModeRef.current) setTimeout(startVoice,400); };
-      utter.onerror=()=>{ setSpeaking(false); if(voiceModeRef.current) setTimeout(startVoice,400); };
-      synth.speak(utter);
-    };
-    if(synth.getVoices().length) loadVoice();
-    else synth.addEventListener('voiceschanged',loadVoice,{once:true});
-  },[settings?.jarvisVoice]);
-
-  const sendText=async(text,isVoice=false)=>{
-    if(!text&&selectedItems.length===0) return;
-    if(isVoice) voiceModeRef.current=true;
-    let userContent=text;
-    if(selectedItems.length>0) userContent="[ATTACHED]\n"+selectedItems.map(i=>i.llmContext).join("\n")+"\n\n"+text;
-    const history=messages.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.fullText||m.text}));
-    const userMsg={role:"user",text,items:[...selectedItems]};
-    setMessages(p=>[...p,userMsg]);
-    setInput("");
-    onSetSelectedItems([]);
-    setLoading(true);
-
-    const reply_=(replyTxt)=>{ speakAndResume(replyTxt); };
-
-    try{
-      // Navigate fast-path
-      const navMatch=text.match(/\bnavigate\s+to\s+([a-z\s]+)/i)||text.match(/\bgo\s+to\s+([a-z\s]+)/i)||text.match(/\bopen\s+([a-z\s]+)/i);
-      if(navMatch){
-        const dest=navMatch[1].trim().toLowerCase();
-        const tab=NAV_TABS[dest]||Object.entries(NAV_TABS).find(([k])=>dest.includes(k))?.[1];
-        if(tab){onNavigate(tab);const navTxt=`Navigating to ${dest}.`;setMessages(p=>[...p,{role:"assistant",text:navTxt}]);reply_(navTxt);setLoading(false);return;}
-      }
-
-      // Quick data fast-path
-      const quick=QUICK.find(q=>q.test.test(text)&&selectedItems.length===0);
-      if(quick){
-        const result=await execTool(quick.name,quick.args(text));
-        const widget=autoWidget(uid(),quick.name,result,null);
-        const quickTxt=quick.reply(result);
-        setMessages(p=>[...p,{role:"assistant",text:quickTxt,widget}]);
-        reply_(quickTxt);
-        setLoading(false);setTimeout(()=>inputRef.current?.focus(),50);return;
-      }
-
-      // LLM path
-      const callMsgs=[...history,{role:"user",content:userContent}];
-      let llmReply=await callLLM(callMsgs);
-      const toolData=parseToolCall(llmReply);
-
-      if(toolData){
-        if(toolData.name==="navigate"){
-          const tab=toolData.args?.tab||"dashboard";
-          onNavigate(tab);
-          const cleanText=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||`Navigating to ${tab}…`;
-          setMessages(p=>[...p,{role:"assistant",text:cleanText,fullText:llmReply}]);
-          reply_(cleanText);
-        } else if(TOOL_LIBRARY[toolData.name]){
-          const result=await execTool(toolData.name,toolData.args||{});
-          const widget=autoWidget(uid(),toolData.name,result,null);
-          const summary=buildToolSummary(toolData.name,toolData.args||{},result);
-          setMessages(p=>[...p,{role:"assistant",text:summary,widget}]);
-          reply_(summary);
-        } else {
-          const fallbackTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim();
-          setMessages(p=>[...p,{role:"assistant",text:fallbackTxt,fullText:llmReply}]);
-          reply_(fallbackTxt);
-        }
-      } else {
-        const plainTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||llmReply;
-        setMessages(p=>[...p,{role:"assistant",text:plainTxt,fullText:llmReply}]);
-        reply_(plainTxt);
-      }
-    }catch(e){
-      setMessages(p=>[...p,{role:"assistant",text:"Error: "+e.message}]);
-      if(voiceModeRef.current) setTimeout(startVoice,400);
-    }
-    setLoading(false);
-    if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
-  };
-
-  const send=()=>sendText(input.trim(),false);
-
-  const recRef=useRef(null);
-  const stopVoice=()=>{
-    voiceModeRef.current=false;
-    window.speechSynthesis?.cancel();
-    setSpeaking(false);
-    if(recRef.current){recRef.current.abort();recRef.current=null;}
-    setListening(false);
-  };
-  const startVoice=()=>{
-    // If Jarvis is speaking, tapping mic cancels speech and stops the loop
-    if(speaking){stopVoice();return;}
-    if(listening){stopVoice();return;}
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){alert("Voice input not supported in this browser.");return;}
-    window.speechSynthesis?.cancel();
-    const rec=new SR();
-    recRef.current=rec;
-    rec.interimResults=false;
-    rec.lang="en-US";
-    rec.onstart=()=>setListening(true);
-    rec.onerror=e=>{
-      if(e.error!=="aborted") setListening(false);
-      recRef.current=null;
-    };
-    rec.onresult=e=>{
-      const transcript=e.results[0][0].transcript.trim();
-      if(!transcript) return;
-      setInput(transcript);
-      sendText(transcript,true);
-    };
-    rec.onend=()=>{setListening(false);recRef.current=null;};
-    rec.start();
-  };
-
-  if(view==="insights") return null;
-
-  return(
-    <>
-      <style>{`@keyframes gcSlideUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes gcDot{0%,80%,100%{transform:scale(0.7);opacity:0.4}40%{transform:scale(1.1);opacity:1}}`}</style>
-
-      {/* FAB */}
-      <button
-        onClick={()=>onSetOpen(!open)}
-        title={open?"Close Jarvis":"Open Jarvis"}
-        style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:open?"#475569":"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:open?18:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 18px rgba(2,132,199,0.5)",zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
-        onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
-        onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-      >{open?"✕":"💬"}</button>
-
-      {/* Panel */}
-      {open&&(
-        <div style={{position:"fixed",bottom:92,right:24,width:390,maxHeight:550,borderRadius:18,background:"#fff",boxShadow:"0 10px 48px rgba(0,0,0,0.2)",zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
-
-          {/* Header */}
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"13px 16px 11px",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(135deg,#f8fafc,#eff6ff)",flexShrink:0}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>💬</div>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}{settings?.jarvisVoice?" · 🔊":""}</div>
-            </div>
-            <button
-              onClick={()=>onSetInDepthMode(!inDepthMode)}
-              title="Toggle In-Depth Mode: click any card to attach as context"
-              style={{padding:"5px 11px",borderRadius:8,border:"1.5px solid",borderColor:inDepthMode?"#0284C7":"#e2e8f0",background:inDepthMode?"#eff6ff":"#fff",color:inDepthMode?"#0284C7":"#94a3b8",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4,transition:"all .15s",flexShrink:0}}
-            >⊕{inDepthMode?" Active":" In-Depth"}</button>
-            {messages.length>0&&<button onClick={()=>setMessages([])} title="Clear chat" style={{padding:"5px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#fff",color:"#94a3b8",fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all .15s",flexShrink:0}} onMouseEnter={e=>{e.currentTarget.style.borderColor="#dc2626";e.currentTarget.style.color="#dc2626";}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#e2e8f0";e.currentTarget.style.color="#94a3b8";}}>✕ Clear</button>}
-          </div>
-
-          {/* Messages */}
-          <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:8,minHeight:0}}>
-            {messages.length===0&&(
-              <div style={{textAlign:"center",color:"#94a3b8",fontSize:12,marginTop:32,lineHeight:1.8}}>
-                At your service.<br/>Ask me anything, or say <em>"navigate to bills"</em>.
-                {inDepthMode&&<div style={{marginTop:8,color:"#0284C7",fontWeight:600,fontSize:11}}>⊕ Click any card on the page to attach it.</div>}
-              </div>
-            )}
-            {messages.map((m,i)=>(
-              <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",gap:4}}>
-                {m.items?.length>0&&(
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4,justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                    {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
-                  </div>
-                )}
-                <div style={{maxWidth:"88%",background:m.role==="user"?"#0284C7":"#f1f5f9",color:m.role==="user"?"#fff":"#1e293b",padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
-                  {m.text}
-                </div>
-                {m.widget&&<div style={{maxWidth:"100%",width:"88%",alignSelf:m.role==="user"?"flex-end":"flex-start"}}>{renderWidget(m.widget)}</div>}
-              </div>
-            ))}
-            {loading&&(
-              <div style={{alignSelf:"flex-start",background:"#f1f5f9",padding:"10px 14px",borderRadius:"14px 14px 14px 2px",display:"flex",gap:5,alignItems:"center"}}>
-                {[0,1,2].map(i=><span key={i} style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8",display:"inline-block",animation:`gcDot 1.2s ${i*0.18}s infinite ease-in-out`}}/>)}
-              </div>
-            )}
-            <div ref={msgsEndRef}/>
-          </div>
-
-          {/* Attached items chips */}
-          {selectedItems.length>0&&(
-            <div style={{padding:"7px 14px",borderTop:"1px solid #f1f5f9",display:"flex",flexWrap:"wrap",gap:5,alignItems:"center",background:"#f8fafc",flexShrink:0}}>
-              <span style={{fontSize:10,color:"#94a3b8",fontWeight:700,letterSpacing:"0.05em",marginRight:2}}>ATTACHED:</span>
-              {selectedItems.map(it=>(
-                <span key={it.id} style={{display:"inline-flex",alignItems:"center",gap:4,background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:11,padding:"3px 8px 3px 9px",borderRadius:12}}>
-                  {it.label}
-                  <button onClick={()=>onSetSelectedItems(p=>p.filter(x=>x.id!==it.id))} style={{background:"none",border:"none",cursor:"pointer",color:"#64748b",fontSize:14,lineHeight:1,padding:"0 0 1px",fontFamily:"inherit",display:"flex",alignItems:"center"}}>×</button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Input */}
-          <div style={{padding:"10px 12px 13px",borderTop:"1px solid #f1f5f9",display:"flex",gap:7,alignItems:"flex-end",flexShrink:0}}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e=>setInput(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
-              placeholder="Ask about your finances…"
-              rows={2}
-              style={{flex:1,resize:"none",border:"1.5px solid #e2e8f0",borderRadius:10,padding:"8px 11px",fontSize:12,fontFamily:"inherit",outline:"none",lineHeight:1.45,color:"#1e293b",background:"#fff",transition:"border-color .15s"}}
-              onFocus={e=>e.target.style.borderColor="#0284C7"}
-              onBlur={e=>e.target.style.borderColor="#e2e8f0"}
-            />
-            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"🔊":"🎤"}</button>
-            <button onClick={send} disabled={loading||(!input.trim()&&selectedItems.length===0)} style={{width:34,height:34,borderRadius:"50%",background:"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:loading||(!input.trim()&&selectedItems.length===0)?0.4:1,transition:"opacity .15s"}}>↑</button>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
 export default function App(){
   const [view,setView]=useState("dashboard");
   const [txns,setTxns]=useState([]);
@@ -4514,15 +4070,12 @@ export default function App(){
   const [insightWidgets,setInsightWidgets]=useState([]);
   const [insightMessages,setInsightMessages]=useState([]);
   const [favourites,setFavourites]=useState(["bills","history","stocks"]);
-  const toggleFavourite=k=>setFavourites(prev=>{const next=prev.includes(k)?prev.filter(x=>x!==k):[...prev,k];saveServerData({favourites:next});return next;});
+  const toggleFavourite=k=>setFavourites(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
   const [showWhatsNew,setShowWhatsNew]=useState(false);
   const [toast,setToast]=useState(null);
-  const [inDepthMode,setInDepthMode]=useState(false);
-  const [selectedItems,setSelectedItems]=useState([]);
-  const [globalChatOpen,setGlobalChatOpen]=useState(false);
   const toastTimer=useRef(null);
   const showToast=(msg,undoFn)=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast({msg,undoFn});toastTimer.current=setTimeout(()=>setToast(null),5000);};
   const dismissToast=()=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast(null);};
@@ -4546,7 +4099,6 @@ export default function App(){
       if(d.schema) setSchema(d.schema);
       if(d.insightMessages) setInsightMessages(d.insightMessages);
       if(d.insightWidgets) setInsightWidgets(d.insightWidgets);
-      if(d.favourites) setFavourites(d.favourites);
       setReady(true);
     });
   },[]);
@@ -4614,7 +4166,7 @@ export default function App(){
       {/* Main content */}
       <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate} inDepthMode={inDepthMode} onSelectItem={item=>setSelectedItems(p=>[...p.filter(x=>x.id!==item.id),item])}/>}
+        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
@@ -4632,17 +4184,6 @@ export default function App(){
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
         {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
       </div>
-      <GlobalChat
-        view={view}
-        onNavigate={setView}
-        settings={settings}
-        inDepthMode={inDepthMode}
-        onSetInDepthMode={setInDepthMode}
-        selectedItems={selectedItems}
-        onSetSelectedItems={setSelectedItems}
-        open={globalChatOpen}
-        onSetOpen={setGlobalChatOpen}
-      />
     </div>
   );
 }

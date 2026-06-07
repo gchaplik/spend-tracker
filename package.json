@@ -2,12 +2,72 @@
   "name": "spend-tracker",
   "version": "1.0.0",
   "type": "module",
+  "main": "electron/main.mjs",
   "scripts": {
-    "dev": "concurrently \"vite\" \"SERVER_PORT=3001 node server.js\"",
+    "dev": "concurrently \"vite\" \"SERVER_PORT=3001 node server/index.js\"",
     "build": "vite build",
-    "start": "node server.js"
+    "start": "node server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "electron:dev": "concurrently \"vite\" \"SERVER_PORT=3001 node server/index.js\" \"wait-on http://localhost:3001/api/data && electron .\"",
+    "electron:build": "vite build && electron-builder",
+    "electron:build:win": "vite build && electron-builder --win --x64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.spendtracker.app",
+    "productName": "Spend Tracker",
+    "asar": true,
+    "asarUnpack": [
+      "**/better-sqlite3/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "server/**",
+      "electron/**",
+      "node_modules/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "spend.db",
+        "to": "spend.db"
+      },
+      {
+        "from": "data.json",
+        "to": "data.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icons/win/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/icons/mac/icon.icns"
+    }
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "react": "^19.2.7",
@@ -15,8 +75,21 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/ui": "^4.1.8",
+    "canvas": "^3.2.3",
     "concurrently": "^8.2.2",
-    "vite": "^5.4.2"
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8",
+    "electron-icon-builder": "^2.0.1",
+    "jsdom": "^29.1.1",
+    "supertest": "^7.2.2",
+    "vite": "^5.4.2",
+    "vitest": "^4.1.8",
+    "wait-on": "^9.0.10"
   }
 }
