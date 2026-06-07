@@ -3026,38 +3026,45 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
   // Helper: wrap a SQL string in the __SQL__: marker that executeTool/preloaded runner detect
   const _sql=(sqlStr,params=[])=>`__SQL__:${JSON.stringify({sql:sqlStr,params})}`;
 
+  // All expenses = regular transactions + vacation_txns (both count as spending)
+  // Returns a SQL subquery alias usable anywhere you'd write "FROM transactions WHERE type='expense'"
+  const _allExp=(df='1=1')=>
+    `(SELECT amount,date,COALESCE(category,'Other') as category,COALESCE(merchant,'?') as merchant FROM transactions WHERE type='expense' AND ${df} `+
+    `UNION ALL `+
+    `SELECT amount,date,COALESCE(category,'Vacation') as category,COALESCE(merchant,'?') as merchant FROM vacation_txns WHERE ${df})`;
+
   const TOOL_LIBRARY={
     // ── Spending & Income ──────────────────────────────────────────────────────
-    // expenses(month?|from?,to?) — total expenses. single month OR date range
+    // expenses(month?|from?,to?) — total expenses including vacation spending
     expenses:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='expense' AND ${df}`);
+      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM ${_allExp(df)}`);
     },
     // income(month?|from?,to?) — total income
     income:(args={})=>{
       const df=_sqlDf(args);
       return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='income' AND ${df}`);
     },
-    // net(month?|from?,to?) — income minus expenses
+    // net(month?|from?,to?) — income minus all expenses (including vacation)
     net:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as value FROM transactions WHERE ${df}`);
+      return _sql(`SELECT ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as value FROM (SELECT amount,date,'income' as type FROM transactions WHERE type='income' AND ${df} UNION ALL SELECT amount,date,'expense' as type FROM ${_allExp(df)})`);
     },
-    // categories(month?|from?,to?) — expense totals grouped by category
+    // categories(month?|from?,to?) — expense totals grouped by category (includes vacation)
     categories:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC`);
+      return _sql(`SELECT category as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY category ORDER BY value DESC`);
     },
     // top_category(month?|from?,to?) — single highest-spend category
     top_category:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC LIMIT 1`);
+      return _sql(`SELECT category as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY category ORDER BY value DESC LIMIT 1`);
     },
-    // monthly(months?|from?,to?) — income & expenses per month
+    // monthly(months?|from?,to?) — income & expenses per month (expenses include vacation)
     monthly:(args={})=>{
       const n=args.months||99;
       const df=_sqlDf(args);
-      return _sql(`SELECT strftime('%Y-%m',date) as name, ROUND(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),2) as Income, ROUND(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),2) as Expenses FROM transactions WHERE ${df} GROUP BY strftime('%Y-%m',date) ORDER BY name LIMIT ${n}`);
+      return _sql(`SELECT mo as name, ROUND(Income,2) as Income, ROUND(Expenses,2) as Expenses FROM (SELECT strftime('%Y-%m',date) as mo, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as Income, 0 as Expenses FROM transactions WHERE ${df} GROUP BY mo UNION ALL SELECT strftime('%Y-%m',date) as mo, 0 as Income, SUM(amount) as Expenses FROM ${_allExp(df)} GROUP BY mo) GROUP BY mo ORDER BY mo LIMIT ${n}`);
     },
     // bills(type?) — "total"=sum, default=list [{name,value}]
     bills:(args={})=>{
@@ -3069,11 +3076,11 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
       if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as value FROM holdings WHERE costBasis IS NOT NULL`);
       return _sql(`SELECT ticker as name, ROUND(costBasis*shares,2) as value, shares, costBasis FROM holdings WHERE costBasis IS NOT NULL ORDER BY value DESC`);
     },
-    // merchants(month?|from?,to?, limit?) — top merchants by spend
+    // merchants(month?|from?,to?, limit?) — top merchants by spend (includes vacation)
     merchants:(args={})=>{
       const df=_sqlDf(args);
       const n=args.limit||10;
-      return _sql(`SELECT COALESCE(merchant,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(merchant,'Other') ORDER BY value DESC LIMIT ${n}`);
+      return _sql(`SELECT merchant as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY merchant ORDER BY value DESC LIMIT ${n}`);
     },
     // transactions(month?|from?,to?, limit?) — recent transactions list
     transactions:(args={})=>{
@@ -3102,21 +3109,21 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
     // ── Budgets ────────────────────────────────────────────────────────────────
     // budgets() — all category budgets
     budgets:()=>_sql(`SELECT category as name, budget as value FROM cat_budgets ORDER BY budget DESC`),
-    // budget_vs_actual(month?|from?,to?) — category budget vs actual spend
+    // budget_vs_actual(month?|from?,to?) — category budget vs actual spend (includes vacation)
     budget_vs_actual:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category ORDER BY percentUsed DESC NULLS LAST`);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT category as cat, SUM(amount) as spent FROM ${_allExp(df)} GROUP BY cat) t ON t.cat=cb.category ORDER BY percentUsed DESC NULLS LAST`);
     },
     // budget_remaining(category, month?|from?,to?) — remaining budget for one category
     budget_remaining:(args={})=>{
       const cat=(args.category||"").replace(/'/g,"''");
       const df=_sqlDf(args);
-      return _sql(`SELECT cb.category, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT SUM(amount) as spent FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df}) t ON 1=1 WHERE cb.category='${cat}'`);
+      return _sql(`SELECT cb.category, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT SUM(amount) as spent FROM ${_allExp(df)} WHERE category='${cat}') t ON 1=1 WHERE cb.category='${cat}'`);
     },
-    // over_budget(month?|from?,to?) — categories where actual spend exceeds budget
+    // over_budget(month?|from?,to?) — categories where actual spend exceeds budget (includes vacation)
     over_budget:(args={})=>{
       const df=_sqlDf(args);
-      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT category as cat, SUM(amount) as spent FROM ${_allExp(df)} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
     },
 
     // ── Bills ─────────────────────────────────────────────────────────────────
@@ -3161,23 +3168,23 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
     },
 
     // ── Transactions (extended) ────────────────────────────────────────────────
-    // txns_by_category(category, month?|from?,to?) — all transactions in a category
+    // txns_by_category(category, month?|from?,to?) — all transactions in a category (includes vacation)
     txns_by_category:(args={})=>{
       const cat=(args.category||"").replace(/'/g,"''");
       const df=_sqlDf(args);
-      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, category FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df} ORDER BY date DESC`);
+      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value, category FROM ${_allExp(df)} WHERE category='${cat}' ORDER BY date DESC`);
     },
-    // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
+    // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant (includes vacation)
     txns_by_merchant:(args={})=>{
       const merch=(args.merchant||"").replace(/'/g,"''");
       const df=_sqlDf(args);
-      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type FROM transactions WHERE LOWER(COALESCE(merchant,'')) LIKE LOWER('%${merch}%') AND ${df} ORDER BY date DESC`);
+      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value FROM ${_allExp(df)} WHERE LOWER(merchant) LIKE LOWER('%${merch}%') ORDER BY date DESC`);
     },
-    // largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
+    // largest_expenses(month?|from?,to?, limit?) — top N expenses (includes vacation)
     largest_expenses:(args={})=>{
       const df=_sqlDf(args);
       const n=args.limit||10;
-      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, COALESCE(category,'Other') as category FROM transactions WHERE type='expense' AND ${df} ORDER BY amount DESC LIMIT ${n}`);
+      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value, category FROM ${_allExp(df)} ORDER BY amount DESC LIMIT ${n}`);
     },
 
     // ── Math / Comparison tools ────────────────────────────────────────────────
@@ -3185,7 +3192,8 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
     compare_expenses:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='expense' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
+      const src=_allExp(`strftime('%Y-%m',date) IN ('${m1}','${m2}')`);
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM ${src}) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
     // compare_income(month1, month2) — same shape for income
     compare_income:(args={})=>{
@@ -3193,23 +3201,24 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
       const m2=args.month2||new Date().toISOString().slice(0,7);
       return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
-    // compare_net(month1, month2) — net position comparison
+    // compare_net(month1, month2) — net position comparison (expenses include vacation)
     compare_net:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value2 FROM transactions WHERE strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
+      const src=_allExp(`strftime('%Y-%m',date) IN ('${m1}','${m2}')`);
+      return _sql(`WITH inc AS (SELECT strftime('%Y-%m',date) as mo, SUM(amount) as total FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}') GROUP BY mo), exp AS (SELECT strftime('%Y-%m',date) as mo, SUM(amount) as total FROM ${src} GROUP BY mo), v AS (SELECT ROUND(COALESCE((SELECT total FROM inc WHERE mo='${m1}'),0)-COALESCE((SELECT total FROM exp WHERE mo='${m1}'),0),2) as value1, ROUND(COALESCE((SELECT total FROM inc WHERE mo='${m2}'),0)-COALESCE((SELECT total FROM exp WHERE mo='${m2}'),0),2) as value2) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
-    // savings_rate(month?|from?,to?) — {period, income, expenses, saved, rate%}
+    // savings_rate(month?|from?,to?) — {period, income, expenses, saved, rate%} (expenses include vacation)
     savings_rate:(args={})=>{
       const df=_sqlDf(args);
       const label=_label(args);
-      return _sql(`SELECT '${label}' as period, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0),2) as income, ROUND(COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),2) as expenses, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as saved, CASE WHEN SUM(CASE WHEN type='income' THEN amount ELSE 0 END)>0 THEN ROUND(SUM(CASE WHEN type='income' THEN amount ELSE -amount END)*100.0/SUM(CASE WHEN type='income' THEN amount ELSE 0 END),1) ELSE NULL END as rate FROM transactions WHERE ${df}`);
+      return _sql(`WITH inc AS (SELECT ROUND(COALESCE(SUM(amount),0),2) as v FROM transactions WHERE type='income' AND ${df}), exp AS (SELECT ROUND(COALESCE(SUM(amount),0),2) as v FROM ${_allExp(df)}) SELECT '${label}' as period, inc.v as income, exp.v as expenses, ROUND(inc.v-exp.v,2) as saved, CASE WHEN inc.v>0 THEN ROUND((inc.v-exp.v)*100.0/inc.v,1) ELSE NULL END as rate FROM inc, exp`);
     },
-    // expense_share(category, month?|from?,to?) — what % of spending is one category
+    // expense_share(category, month?|from?,to?) — what % of spending is one category (includes vacation)
     expense_share:(args={})=>{
       const cat=(args.category||"").replace(/'/g,"''");
       const df=_sqlDf(args);
-      return _sql(`SELECT '${cat}' as category, ROUND(COALESCE(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END),0),2) as amount, ROUND(COALESCE(SUM(amount),0),2) as total, CASE WHEN SUM(amount)>0 THEN ROUND(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END)*100.0/SUM(amount),1) ELSE NULL END as percent FROM transactions WHERE type='expense' AND ${df}`);
+      return _sql(`SELECT '${cat}' as category, ROUND(COALESCE(SUM(CASE WHEN category='${cat}' THEN amount ELSE 0 END),0),2) as amount, ROUND(COALESCE(SUM(amount),0),2) as total, CASE WHEN SUM(amount)>0 THEN ROUND(SUM(CASE WHEN category='${cat}' THEN amount ELSE 0 END)*100.0/SUM(amount),1) ELSE NULL END as percent FROM ${_allExp(df)}`);
     },
 
     // ── Raw SQL ────────────────────────────────────────────────────────────────
