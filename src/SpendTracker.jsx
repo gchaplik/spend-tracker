@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell, ReferenceLine, PieChart, Pie, AreaChart, Area } from "recharts";
 import { DEFAULT_CATS, COLORS, CADENCES, NAV_ITEMS, DEFAULT_SETTINGS } from "./constants/index.js";
 import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/formatters.js";
-import { buildDates, _df, _label } from "./utils/dateUtils.js";
+import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
 import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
 
 // receiptFPs is now persisted in data.json via App state; these are no-ops kept for safety
@@ -2130,158 +2130,165 @@ const DIM_TYPES=["string","number","date","boolean","currency"];
 
 const DEFAULT_SCHEMA={views:{
   transactions:{
-    label:"Transactions",description:"All income and expense transactions",source:"txns",
+    label:"Transactions",description:"All income and expense transactions",source:"txns",table:"transactions",
     dimensions:{
-      date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",field:"date"},
-      amount:  {type:"currency",label:"Amount",  description:"Transaction amount in CAD",field:"amount"},
-      category:{type:"string", label:"Category", description:"Spending / income category (e.g. Groceries, Dining)",field:"category"},
-      type:    {type:"string", label:"Type",     description:"'income' or 'expense'",field:"type"},
-      merchant:{type:"string", label:"Merchant", description:"Merchant name or income source",field:"merchant"},
-      note:    {type:"string", label:"Note",     description:"Optional transaction note",field:"note"},
+      date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",   field:"date",    sql:"${TABLE}.date"},
+      month:   {type:"string", label:"Month",    description:"Year-month of the transaction",   field:"date",    sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      amount:  {type:"currency",label:"Amount",  description:"Transaction amount in CAD",       field:"amount",  sql:"${TABLE}.amount"},
+      category:{type:"string", label:"Category", description:"Spending / income category",      field:"category",sql:"${TABLE}.category"},
+      type:    {type:"string", label:"Type",     description:"'income' or 'expense'",           field:"type",    sql:"${TABLE}.type"},
+      merchant:{type:"string", label:"Merchant", description:"Merchant name or income source",  field:"merchant",sql:"${TABLE}.merchant"},
+      note:    {type:"string", label:"Note",     description:"Optional transaction note",       field:"note",    sql:"${TABLE}.note"},
     },
     measures:{
-      count:          {type:"count",   label:"Count",         description:"Total number of transactions",                        query:"data.txns.length"},
-      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                         query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
-      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                          query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)"},
-      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",                  query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"},
-      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",             query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()"},
-      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",              query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()"},
-      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses × 100 ÷ total income (spend %)",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()"},
+      count:          {type:"count",   label:"Count",         description:"Total number of transactions",              query:"data.txns.length",                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
+      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                       sql:"SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)"},
+      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                 query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                        sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END)"},
+      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",         query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                   sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE -${TABLE}.amount END)"},
+      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",    query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()",                                                                                                                                                                                                                       sql:"AVG(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE NULL END)"},
+      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()",                                                                                                                                                                                                                        sql:"AVG(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE NULL END)"},
+      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses ÷ total income × 100 (%)",  query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()",                                                                                                                                        sql:"ROUND(SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)*100.0/NULLIF(SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END),0),1)"},
     }
   },
   bills:{
-    label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",
+    label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",table:"bills",
     dimensions:{
-      name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",field:"name"},
-      amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",field:"amount"},
-      category:{type:"string", label:"Category", description:"Bill category",field:"category"},
-      due_day: {type:"number", label:"Due Day",  description:"Day of month the bill is due (1–31)",field:"dueDay"},
-      active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",field:"active"},
+      name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",         field:"name",    sql:"${TABLE}.name"},
+      amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",             field:"amount",  sql:"${TABLE}.amount"},
+      category:{type:"string", label:"Category", description:"Bill category",                          field:"category",sql:"${TABLE}.category"},
+      due_day: {type:"number", label:"Due Day",  description:"Day of month the bill is due (1–31)",    field:"dueDay",  sql:"${TABLE}.dueDay"},
+      active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",   field:"active",  sql:"${TABLE}.active"},
     },
     measures:{
-      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                                           query:"data.bills.filter(b=>b.active!==false).length"},
-      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)"},
-      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",                           query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12"},
-      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",                                      query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()"},
+      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                     query:"data.bills.filter(b=>b.active!==false).length",                                                                                                            sql:"COUNT(*) FILTER (WHERE ${TABLE}.active=1)"},
+      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)",                                                                                       sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)"},
+      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12",                                                                                    sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)*12"},
+      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",               query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()",                                        sql:"AVG(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE NULL END)"},
     }
   },
   expected_income:{
-    label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",
+    label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",table:"expected_income",
     dimensions:{
-      source:       {type:"string", label:"Source",       description:"Income source / payer name",field:"source"},
-      amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",field:"amount"},
-      expected_date:{type:"date",   label:"Expected Date",description:"When the payment is expected",field:"expectedDate"},
-      confirmed:    {type:"boolean",label:"Confirmed",    description:"Whether the payment has been received",field:"confirmed"},
-      cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency: monthly, weekly, biweekly, quarterly, etc.",field:"cadence"},
+      source:       {type:"string", label:"Source",       description:"Income source / payer name",                     field:"source",      sql:"${TABLE}.source"},
+      amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",                 field:"amount",      sql:"${TABLE}.amount"},
+      expected_date:{type:"date",   label:"Expected Date",description:"When the payment is expected",                   field:"expectedDate",sql:"${TABLE}.expectedDate"},
+      month:        {type:"string", label:"Month",        description:"Year-month the payment is expected",             field:"expectedDate",sql:"strftime('%Y-%m', ${TABLE}.expectedDate)"},
+      confirmed:    {type:"boolean",label:"Confirmed",    description:"Whether the payment has been received",          field:"confirmed",   sql:"${TABLE}.confirmed"},
+      cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency",                          field:"cadence",     sql:"${TABLE}.cadence"},
     },
     measures:{
-      count_pending:   {type:"count",label:"Pending Count",  description:"Number of unconfirmed upcoming payments",             query:"data.expected.filter(e=>!e.confirmed).length"},
-      total_pending:   {type:"sum",  label:"Total Pending",  description:"Sum of all unconfirmed expected amounts",             query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)"},
-      total_confirmed: {type:"sum",  label:"Total Confirmed",description:"Sum of all confirmed received payments",             query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)"},
-      confirmation_rate:{type:"divide",label:"Confirmation %",description:"% of payments confirmed (confirmed ÷ total × 100)",query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()"},
+      count_pending:    {type:"count",  label:"Pending Count",   description:"Number of unconfirmed upcoming payments",       query:"data.expected.filter(e=>!e.confirmed).length",                                                                                                                                               sql:"COUNT(*) FILTER (WHERE ${TABLE}.confirmed=0)"},
+      total_pending:    {type:"sum",    label:"Total Pending",   description:"Sum of all unconfirmed expected amounts",       query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                           sql:"SUM(CASE WHEN ${TABLE}.confirmed=0 THEN ${TABLE}.amount ELSE 0 END)"},
+      total_confirmed:  {type:"sum",    label:"Total Confirmed", description:"Sum of all confirmed received payments",        query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                            sql:"SUM(CASE WHEN ${TABLE}.confirmed=1 THEN ${TABLE}.amount ELSE 0 END)"},
+      confirmation_rate:{type:"divide", label:"Confirmation %",  description:"% of payments confirmed",                      query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()",                                                                              sql:"ROUND(SUM(${TABLE}.confirmed)*100.0/NULLIF(COUNT(*),0),1)"},
     }
   },
   goals:{
-    label:"Goals",description:"Financial savings goals and progress",source:"goals",
+    label:"Goals",description:"Financial savings goals and progress",source:"goals",table:"goals",
     dimensions:{
-      name:          {type:"string", label:"Name",           description:"Goal name",field:"name"},
-      target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",field:"targetAmount"},
-      current_amount:{type:"currency",label:"Current Amount",description:"Amount saved so far in CAD",field:"currentAmount"},
-      deadline:      {type:"date",   label:"Deadline",       description:"Target completion date",field:"deadline"},
+      name:          {type:"string", label:"Name",           description:"Goal name",                                   field:"name",          sql:"${TABLE}.name"},
+      target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",                   field:"targetAmount",  sql:"${TABLE}.targetAmount"},
+      current_amount:{type:"currency",label:"Current Amount",description:"Amount saved so far in CAD",                  field:"currentAmount", sql:"${TABLE}.currentAmount"},
+      deadline:      {type:"date",   label:"Deadline",       description:"Target completion date",                      field:"deadline",      sql:"${TABLE}.deadline"},
+      progress_pct:  {type:"number", label:"Progress %",     description:"Completion % — currentAmount/targetAmount×100",field:"currentAmount", sql:"ROUND(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0),1)"},
     },
     measures:{
-      count:           {type:"count",   label:"Count",           description:"Total number of goals",                                         query:"data.goals.length"},
-      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",                               query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)"},
-      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved across goals",               query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)"},
-      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",                       query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)"},
-      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion percentage across all goals",              query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()"},
+      count:           {type:"count",   label:"Count",           description:"Total number of goals",                    query:"data.goals.length",                                                                                                                                        sql:"COUNT(*)"},
+      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",           query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)",                                                                                                            sql:"SUM(${TABLE}.targetAmount)"},
+      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved",         query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)",                                                                                                           sql:"SUM(${TABLE}.currentAmount)"},
+      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",   query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)",                                                                                          sql:"SUM(${TABLE}.targetAmount-${TABLE}.currentAmount)"},
+      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion % across all goals",   query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()",           sql:"ROUND(AVG(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0)),1)"},
     }
   },
   accounts:{
-    label:"Accounts",description:"Bank and financial accounts",source:"accounts",
+    label:"Accounts",description:"Bank and financial accounts",source:"accounts",table:"accounts",
     dimensions:{
-      name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",field:"name"},
-      type:   {type:"string", label:"Type",    description:"Account type: chequing, savings, credit_card, loan, mortgage, investment, property, other_asset, other_liability",field:"type"},
-      balance:{type:"currency",label:"Balance",description:"Current account balance in CAD (positive for assets, negative for debts)",field:"balance"},
+      name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",    field:"name",   sql:"${TABLE}.name"},
+      type:   {type:"string", label:"Type",    description:"chequing, savings, credit_card, loan, etc",field:"type",   sql:"${TABLE}.type"},
+      balance:{type:"currency",label:"Balance",description:"Current balance in CAD",                   field:"balance",sql:"${TABLE}.balance"},
     },
     measures:{
-      count:             {type:"count",   label:"Count",              description:"Total number of accounts",                                          query:"data.accounts.length"},
-      total_assets:      {type:"sum",     label:"Total Assets",       description:"Sum of all asset account balances",                                query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
-      total_liabilities: {type:"sum",     label:"Total Liabilities",  description:"Sum of all liability balances (credit cards, loans, mortgages)",  query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
-      net_worth:         {type:"subtract",label:"Net Worth",          description:"Total assets minus total liabilities",                            query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)"},
+      count:             {type:"count",   label:"Count",             description:"Total number of accounts",                                                                                                                          query:"data.accounts.length",                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
+      total_assets:      {type:"sum",     label:"Total Assets",      description:"Sum of asset account balances",                                                                                                                     query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                 sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance ELSE 0 END)"},
+      total_liabilities: {type:"sum",     label:"Total Liabilities", description:"Sum of liability balances",                                                                                                                        query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                             sql:"SUM(CASE WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN ${TABLE}.balance ELSE 0 END)"},
+      net_worth:         {type:"subtract",label:"Net Worth",         description:"Total assets minus total liabilities",                                                                                                              query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                          sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN -${TABLE}.balance ELSE 0 END)"},
     }
   },
   holdings:{
-    label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",
+    label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",table:"holdings",
     dimensions:{
-      ticker:    {type:"string", label:"Ticker",     description:"Stock ticker symbol — append .TO for Canadian stocks (e.g. TSLA, XEQT.TO)",field:"ticker"},
-      shares:    {type:"number", label:"Shares",     description:"Number of shares held",field:"shares"},
-      cost_basis:{type:"currency",label:"Cost Basis",description:"Weighted average purchase price per share in native currency",field:"costBasis"},
+      ticker:    {type:"string", label:"Ticker",     description:"Stock ticker (e.g. TSLA, XEQT.TO)",            field:"ticker",   sql:"${TABLE}.ticker"},
+      shares:    {type:"number", label:"Shares",     description:"Number of shares held",                        field:"shares",   sql:"${TABLE}.shares"},
+      cost_basis:{type:"currency",label:"Cost Basis",description:"Weighted average purchase price per share",    field:"costBasis",sql:"${TABLE}.costBasis"},
+      total_cost:{type:"currency",label:"Total Cost",description:"Cost basis × shares for this holding",         field:"costBasis",sql:"${TABLE}.costBasis * ${TABLE}.shares"},
     },
     measures:{
-      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",                                           query:"data.holdings.length"},
-      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of (cost basis × shares) for all holdings with a known cost basis",       query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)"},
-      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",                                       query:"data.holdings.reduce((s,h)=>s+h.shares,0)"},
+      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",         query:"data.holdings.length",                                                                                                                                                                                    sql:"COUNT(*)"},
+      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of cost basis × shares for all holdings",query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)",                                                                                                                   sql:"SUM(${TABLE}.costBasis * ${TABLE}.shares)"},
+      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",    query:"data.holdings.reduce((s,h)=>s+h.shares,0)",                                                                                                                                                               sql:"SUM(${TABLE}.shares)"},
     }
   },
   vacations:{
-    label:"Vacations",description:"Vacation budgets and date ranges",source:"vacations",
+    label:"Vacations",description:"Vacation budgets and date ranges",source:"vacations",table:"vacations",
     dimensions:{
-      name:      {type:"string", label:"Name",       description:"Vacation name (e.g. Paris 2026)",field:"name"},
-      start_date:{type:"date",   label:"Start Date", description:"Vacation start date",field:"startDate"},
-      end_date:  {type:"date",   label:"End Date",   description:"Vacation end date",field:"endDate"},
-      budget:    {type:"currency",label:"Budget",    description:"Total budget for the vacation in CAD",field:"budget"},
-      notes:     {type:"string", label:"Notes",      description:"Optional notes about the vacation",field:"notes"},
+      name:      {type:"string", label:"Name",       description:"Vacation name (e.g. Paris 2026)",  field:"name",      sql:"${TABLE}.name"},
+      start_date:{type:"date",   label:"Start Date", description:"Vacation start date",              field:"startDate", sql:"${TABLE}.startDate"},
+      end_date:  {type:"date",   label:"End Date",   description:"Vacation end date",                field:"endDate",   sql:"${TABLE}.endDate"},
+      budget:    {type:"currency",label:"Budget",    description:"Total budget in CAD",              field:"budget",    sql:"${TABLE}.budget"},
+      notes:     {type:"string", label:"Notes",      description:"Optional notes",                   field:"notes",     sql:"${TABLE}.notes"},
     },
     measures:{
-      count:        {type:"count",   label:"Count",          description:"Total number of vacations",                                             query:"data.vacations.length"},
-      total_budget: {type:"sum",     label:"Total Budget",   description:"Sum of all vacation budgets",                                          query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)"},
-      total_spent:  {type:"sum",     label:"Total Spent",    description:"Sum of all vacation transaction amounts",                              query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
-      total_remaining:{type:"subtract",label:"Total Remaining",description:"Total vacation budgets minus total vacation spending",              query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)-(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
+      count:          {type:"count",   label:"Count",           description:"Total number of vacations",                              query:"data.vacations.length",                                                                                                                                                               sql:"COUNT(*)"},
+      total_budget:   {type:"sum",     label:"Total Budget",    description:"Sum of all vacation budgets",                            query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)",                                                                                                                                   sql:"SUM(${TABLE}.budget)"},
+      total_spent:    {type:"sum",     label:"Total Spent",     description:"Sum of all vacation transaction amounts",                query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                sql:"(SELECT SUM(vt.amount) FROM vacation_txns vt)"},
+      total_remaining:{type:"subtract",label:"Total Remaining", description:"Total budgets minus total spending",                     query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)-(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                             sql:"SUM(${TABLE}.budget)-(SELECT COALESCE(SUM(vt.amount),0) FROM vacation_txns vt)"},
     }
   },
   vacation_txns:{
-    label:"Vacation Transactions",description:"Individual spending entries recorded against a vacation",source:"vacationTxns",
+    label:"Vacation Transactions",description:"Individual spending entries recorded against a vacation",source:"vacationTxns",table:"vacation_txns",
     dimensions:{
-      vacation_id:{type:"string", label:"Vacation ID",description:"ID of the parent vacation",field:"vacationId"},
-      date:       {type:"date",   label:"Date",        description:"Date the vacation expense occurred",field:"date"},
-      amount:     {type:"currency",label:"Amount",     description:"Expense amount in CAD",field:"amount"},
-      category:   {type:"string", label:"Category",   description:"Spending category (e.g. Dining, Transport, Accommodation)",field:"category"},
-      merchant:   {type:"string", label:"Merchant",   description:"Merchant or vendor name",field:"merchant"},
-      note:       {type:"string", label:"Note",       description:"Optional note for the expense",field:"note"},
+      vacation_id:{type:"string", label:"Vacation ID",description:"ID of the parent vacation",                     field:"vacationId",sql:"${TABLE}.vacationId"},
+      date:       {type:"date",   label:"Date",        description:"Date the vacation expense occurred",           field:"date",      sql:"${TABLE}.date"},
+      month:      {type:"string", label:"Month",       description:"Year-month of the expense",                    field:"date",      sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      amount:     {type:"currency",label:"Amount",     description:"Expense amount in CAD",                        field:"amount",    sql:"${TABLE}.amount"},
+      category:   {type:"string", label:"Category",   description:"Spending category",                            field:"category",  sql:"${TABLE}.category"},
+      merchant:   {type:"string", label:"Merchant",   description:"Merchant or vendor name",                      field:"merchant",  sql:"${TABLE}.merchant"},
+      note:       {type:"string", label:"Note",       description:"Optional note",                                field:"note",      sql:"${TABLE}.note"},
     },
     measures:{
-      count:      {type:"count",label:"Count",      description:"Total vacation transactions",                                query:"(data.vacationTxns||[]).length"},
-      total:      {type:"sum",  label:"Total Spent",description:"Total amount spent across all vacation transactions",       query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)"},
-      avg_txn:    {type:"divide",label:"Avg per Txn",description:"Average vacation transaction amount",                    query:"(()=>{const t=data.vacationTxns||[];return t.length?t.reduce((s,x)=>s+x.amount,0)/t.length:0})()"},
+      count:  {type:"count", label:"Count",       description:"Total vacation transactions",                       query:"(data.vacationTxns||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
+      total:  {type:"sum",   label:"Total Spent", description:"Total amount spent across all vacation transactions",query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                                  sql:"SUM(${TABLE}.amount)"},
+      avg_txn:{type:"divide",label:"Avg per Txn", description:"Average vacation transaction amount",              query:"(()=>{const t=data.vacationTxns||[];return t.length?t.reduce((s,x)=>s+x.amount,0)/t.length:0})()",                                                                                                     sql:"AVG(${TABLE}.amount)"},
     }
   },
   bill_payments:{
-    label:"Bill Payments",description:"History of bills marked as paid each month",source:"billPayments",
+    label:"Bill Payments",description:"History of bills marked as paid each month",source:"billPayments",table:"bill_payments",
     dimensions:{
-      bill_id:   {type:"string", label:"Bill ID",   description:"ID of the parent bill",field:"billId"},
-      month:     {type:"string", label:"Month",     description:"Month the bill was paid (YYYY-MM)",field:"month"},
-      amount:    {type:"currency",label:"Amount",   description:"Amount paid",field:"amount"},
-      paid_date: {type:"date",   label:"Paid Date", description:"Date the payment was recorded",field:"paidDate"},
-      note:      {type:"string", label:"Note",      description:"Optional payment note",field:"note"},
+      bill_id:  {type:"string", label:"Bill ID",   description:"ID of the parent bill",                            field:"billId",  sql:"${TABLE}.billId"},
+      month:    {type:"string", label:"Month",     description:"Month the bill was paid (YYYY-MM)",                field:"month",   sql:"${TABLE}.month"},
+      amount:   {type:"currency",label:"Amount",   description:"Amount paid",                                     field:"amount",  sql:"${TABLE}.amount"},
+      paid_date:{type:"date",   label:"Paid Date", description:"Date the payment was recorded",                   field:"paidDate",sql:"${TABLE}.paidDate"},
+      note:     {type:"string", label:"Note",      description:"Optional payment note",                           field:"note",    sql:"${TABLE}.note"},
     },
     measures:{
-      count:        {type:"count",label:"Payment Count",  description:"Total bill payment records",                           query:"(data.billPayments||[]).length"},
-      total_paid:   {type:"sum",  label:"Total Paid",     description:"Sum of all recorded bill payments",                   query:"(data.billPayments||[]).reduce((s,p)=>s+p.amount,0)"},
-      avg_payment:  {type:"divide",label:"Avg Payment",  description:"Average bill payment amount",                        query:"(()=>{const p=data.billPayments||[];return p.length?p.reduce((s,x)=>s+x.amount,0)/p.length:0})()"},
+      count:      {type:"count", label:"Payment Count",description:"Total bill payment records",                  query:"(data.billPayments||[]).length",                                                                                                                                                                           sql:"COUNT(*)"},
+      total_paid: {type:"sum",   label:"Total Paid",   description:"Sum of all recorded bill payments",           query:"(data.billPayments||[]).reduce((s,p)=>s+p.amount,0)",                                                                                                                                                    sql:"SUM(${TABLE}.amount)"},
+      avg_payment:{type:"divide",label:"Avg Payment",  description:"Average bill payment amount",                query:"(()=>{const p=data.billPayments||[];return p.length?p.reduce((s,x)=>s+x.amount,0)/p.length:0})()",                                                                                                      sql:"AVG(${TABLE}.amount)"},
     }
   },
   account_history:{
-    label:"Account History",description:"Point-in-time account balance snapshots",source:"accountHistory",
+    label:"Account History",description:"Point-in-time account balance snapshots",source:"accountHistory",table:"account_history",
     dimensions:{
-      date:      {type:"date",   label:"Date",       description:"Date the balance snapshot was recorded",field:"date"},
-      balance:   {type:"currency",label:"Balance",   description:"Account balance at the snapshot date in CAD",field:"balance"},
-      account_id:{type:"string", label:"Account ID", description:"ID of the account this snapshot belongs to",field:"accountId"},
-      note:      {type:"string", label:"Note",       description:"Optional note about this balance entry",field:"note"},
+      date:      {type:"date",   label:"Date",       description:"Date the balance snapshot was recorded",         field:"date",     sql:"${TABLE}.date"},
+      month:     {type:"string", label:"Month",      description:"Year-month of the snapshot",                    field:"date",     sql:"strftime('%Y-%m', ${TABLE}.date)"},
+      balance:   {type:"currency",label:"Balance",   description:"Account balance at the snapshot date in CAD",   field:"balance",  sql:"${TABLE}.balance"},
+      account_id:{type:"string", label:"Account ID", description:"ID of the account this snapshot belongs to",   field:"accountId",sql:"${TABLE}.accountId"},
+      note:      {type:"string", label:"Note",       description:"Optional note about this balance entry",        field:"note",     sql:"${TABLE}.note"},
     },
     measures:{
-      count:       {type:"count",label:"Snapshots",      description:"Total number of balance snapshots",                   query:"(data.accountHistory||[]).length"},
-      latest_total:{type:"sum",  label:"Latest Balance", description:"Sum of the most recent balance entry per account",   query:"(()=>{const h=data.accountHistory||[];const byAcc={};h.forEach(e=>{if(!byAcc[e.accountId||'default']||e.date>byAcc[e.accountId||'default'].date)byAcc[e.accountId||'default']=e;});return Object.values(byAcc).reduce((s,e)=>s+e.balance,0)})()"},
+      count:       {type:"count",label:"Snapshots",      description:"Total number of balance snapshots",         query:"(data.accountHistory||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
+      total_balance:{type:"sum", label:"Total Balance",  description:"Sum of all balance values in the table",   query:"(data.accountHistory||[]).reduce((s,e)=>s+e.balance,0)",                                                                                                                                                   sql:"SUM(${TABLE}.balance)"},
+      latest_total:{type:"sum",  label:"Latest Snapshot",description:"Sum of the most recent balance per account",query:"(()=>{const h=data.accountHistory||[];const byAcc={};h.forEach(e=>{if(!byAcc[e.accountId||'default']||e.date>byAcc[e.accountId||'default'].date)byAcc[e.accountId||'default']=e;});return Object.values(byAcc).reduce((s,e)=>s+e.balance,0)})()", sql:"SUM(${TABLE}.balance) FILTER (WHERE ${TABLE}.date=(SELECT MAX(ah2.date) FROM account_history ah2 WHERE ah2.accountId=${TABLE}.accountId))"},
     }
   }
 }};
@@ -2506,7 +2513,7 @@ function DataModel({schema,onSave}){
   const [dimForm,setDimForm]=useState({});
   const [msrForm,setMsrForm]=useState({});
   const [addingView,setAddingView]=useState(false);
-  const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:""});
+  const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:"",table:""});
 
   const views=schema.views;
   const vKeys=Object.keys(views);
@@ -2587,7 +2594,7 @@ function DataModel({schema,onSave}){
   // Add view
   const saveNewView=()=>{
     if(!newViewForm.key.trim()||!newViewForm.source.trim())return;
-    onSave({...schema,views:{...views,[newViewForm.key.trim()]:{label:newViewForm.label||newViewForm.key,description:newViewForm.description,source:newViewForm.source.trim(),dimensions:{},measures:{}}}});
+    onSave({...schema,views:{...views,[newViewForm.key.trim()]:{label:newViewForm.label||newViewForm.key,description:newViewForm.description,source:newViewForm.source.trim(),table:newViewForm.table.trim()||newViewForm.source.trim(),dimensions:{},measures:{}}}});
     setActiveView(newViewForm.key.trim());
     setAddingView(false);
     setNewViewForm({key:"",label:"",description:"",source:""});
@@ -2612,6 +2619,9 @@ function DataModel({schema,onSave}){
         <Fld label="Source Field (SQLite column)"><input style={IS} value={dimForm.field||""} onChange={e=>setDimForm(p=>({...p,field:e.target.value}))} placeholder="columnName in SQLite table"/></Fld>
       </div>
       <Fld label="Description"><input style={IS} value={dimForm.description||""} onChange={e=>setDimForm(p=>({...p,description:e.target.value}))} placeholder="What does this field represent?"/></Fld>
+      <Fld label="SQL Expression (use ${TABLE} for the table reference, e.g. ${TABLE}.date or strftime('%Y-%m', ${TABLE}.date))">
+        <input style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11}} value={dimForm.sql||""} onChange={e=>setDimForm(p=>({...p,sql:e.target.value}))} placeholder={"e.g. ${TABLE}.amount"}/>
+      </Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <Btn sm onClick={saveDim}>Save</Btn>
         <Btn sm v="secondary" onClick={()=>setEditingDim(null)}>Cancel</Btn>
@@ -2630,6 +2640,9 @@ function DataModel({schema,onSave}){
       <Fld label="Description"><input style={IS} value={msrForm.description||""} onChange={e=>setMsrForm(p=>({...p,description:e.target.value}))} placeholder="What does this measure calculate?"/></Fld>
       <Fld label="Query (JavaScript — 'data' is the full SQLite dataset: txns, bills, vacations, holdings, expected, goals, accounts, billPayments, vacationTxns, accountHistory)">
         <textarea style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,minHeight:64,resize:"vertical"}} value={msrForm.query||""} onChange={e=>setMsrForm(p=>({...p,query:e.target.value}))} placeholder={"e.g. data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)"}/>
+      </Fld>
+      <Fld label="SQL Expression (use ${TABLE} for the table reference, e.g. SUM(${TABLE}.amount) or COUNT(*))">
+        <input style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11}} value={msrForm.sql||""} onChange={e=>setMsrForm(p=>({...p,sql:e.target.value}))} placeholder={"e.g. SUM(${TABLE}.amount)"}/>
       </Fld>
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <Btn sm onClick={saveMsr}>Save</Btn>
@@ -2674,6 +2687,7 @@ function DataModel({schema,onSave}){
               <button key={vk} onClick={()=>{setActiveView(vk);setEditingDim(null);setEditingMsr(null);}} style={{textAlign:"left",padding:"10px 12px",borderRadius:10,border:"1.5px solid "+(activeView===vk?"#0284C7":"#e2e8f0"),background:activeView===vk?"#eff6ff":"#fff",cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
                 <div style={{fontWeight:600,fontSize:12,color:activeView===vk?"#0284C7":"#1E293B"}}>{views[vk].label}</div>
                 <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>source: <code style={{fontSize:10}}>{views[vk].source}</code></div>
+                {views[vk].table&&<div style={{fontSize:10,color:"#94a3b8"}}>table: <code style={{fontSize:10}}>{views[vk].table}</code></div>}
                 <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{Object.keys(views[vk].dimensions||{}).length}d · {Object.keys(views[vk].measures||{}).length}m</div>
               </button>
             ))}
@@ -2682,6 +2696,7 @@ function DataModel({schema,onSave}){
                 <Fld label="Key"><input style={IS} value={newViewForm.key} onChange={e=>setNewViewForm(p=>({...p,key:e.target.value.replace(/\s/g,"_").toLowerCase()}))} placeholder="view_key" autoFocus/></Fld>
                 <Fld label="Label"><input style={IS} value={newViewForm.label} onChange={e=>setNewViewForm(p=>({...p,label:e.target.value}))} placeholder="Display Name"/></Fld>
                 <Fld label="Source (SQLite table key)"><input style={IS} value={newViewForm.source} onChange={e=>setNewViewForm(p=>({...p,source:e.target.value}))} placeholder="e.g. txns, bills, vacations, holdings"/></Fld>
+                <Fld label="SQLite Table Name"><input style={IS} value={newViewForm.table} onChange={e=>setNewViewForm(p=>({...p,table:e.target.value}))} placeholder="e.g. transactions, bills, vacation_txns"/></Fld>
                 <Fld label="Description"><input style={IS} value={newViewForm.description} onChange={e=>setNewViewForm(p=>({...p,description:e.target.value}))} placeholder="What is this view?"/></Fld>
                 <div style={{display:"flex",gap:6,marginTop:8}}>
                   <Btn sm onClick={saveNewView}>Add</Btn>
@@ -3008,213 +3023,198 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
   // The LLM never writes JavaScript — it just picks a tool name and fills params.
   // _df and _label are imported from ./utils/dateUtils.js
 
+  // Helper: wrap a SQL string in the __SQL__: marker that executeTool/preloaded runner detect
+  const _sql=(sqlStr,params=[])=>`__SQL__:${JSON.stringify({sql:sqlStr,params})}`;
+
   const TOOL_LIBRARY={
     // ── Spending & Income ──────────────────────────────────────────────────────
-    // expenses(month?|from?,to?) — total expenses. single month OR range
+    // expenses(month?|from?,to?) — total expenses. single month OR date range
     expenses:(args={})=>{
-      const df=_df(args);
-      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='expense' AND ${df}`);
     },
     // income(month?|from?,to?) — total income
     income:(args={})=>{
-      const df=_df(args);
-      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='income' AND ${df}`);
     },
     // net(month?|from?,to?) — income minus expenses
     net:(args={})=>{
-      const df=_df(args);
-      return `(function(){var df=function(t){return ${df};};var i=data.txns.filter(function(t){return t.type==='income'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);return Math.round((i-e)*100)/100;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as value FROM transactions WHERE ${df}`);
     },
     // categories(month?|from?,to?) — expense totals grouped by category
     categories:(args={})=>{
-      const df=_df(args);
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC`);
     },
     // top_category(month?|from?,to?) — single highest-spend category
     top_category:(args={})=>{
-      const df=_df(args);
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:Math.round(s[0][1]*100)/100}:null;})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(category,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(category,'Other') ORDER BY value DESC LIMIT 1`);
     },
     // monthly(months?|from?,to?) — income & expenses per month
     monthly:(args={})=>{
       const n=args.months||99;
-      const df=_df(args,'d');
-      const rangeFilter=(args.from||args.to)?`var d=t.date?t.date.slice(0,7):null;if(!d||!(${df}))return;`:`var d=t.date?t.date.slice(0,7):null;if(!d)return;`;
-      return `(function(){var mo={};data.txns.forEach(function(t){${rangeFilter}if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT strftime('%Y-%m',date) as name, ROUND(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),2) as Income, ROUND(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),2) as Expenses FROM transactions WHERE ${df} GROUP BY strftime('%Y-%m',date) ORDER BY name LIMIT ${n}`);
     },
     // bills(type?) — "total"=sum, default=list [{name,value}]
     bills:(args={})=>{
-      if(args.type==="total")
-        return `Math.round(data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)*100)/100`;
-      return `data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};}).sort(function(a,b){return b.value-a.value;})`;
+      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM bills WHERE active=1`);
+      return _sql(`SELECT name, amount as value FROM bills WHERE active=1 ORDER BY amount DESC`);
     },
-    // portfolio(type?) — "total"=value, default=holdings [{name,value}]
+    // portfolio(type?) — cost-basis total or holdings list (live price not in DB)
     portfolio:(args={})=>{
-      if(args.type==="total")
-        return `(function(){if(!data.holdings||!data.holdings.length)return 0;return Math.round(data.holdings.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0)*100)/100;})()`;
-      return `(function(){if(!data.holdings||!data.holdings.length)return [];return data.holdings.map(function(h){return {name:h.ticker||h.symbol||'?',value:Math.round((h.shares||0)*(h.price||h.currentPrice||0)*100)/100};}).sort(function(a,b){return b.value-a.value;});})()`;
+      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as value FROM holdings WHERE costBasis IS NOT NULL`);
+      return _sql(`SELECT ticker as name, ROUND(costBasis*shares,2) as value, shares, costBasis FROM holdings WHERE costBasis IS NOT NULL ORDER BY value DESC`);
     },
     // merchants(month?|from?,to?, limit?) — top merchants by spend
     merchants:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
+      return _sql(`SELECT COALESCE(merchant,'Other') as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='expense' AND ${df} GROUP BY COALESCE(merchant,'Other') ORDER BY value DESC LIMIT ${n}`);
     },
-    // transactions(month?|from?,to?, limit?) — recent transactions
+    // transactions(month?|from?,to?, limit?) — recent transactions list
     transactions:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `data.txns.filter(function(t){return ${df};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type, category FROM transactions WHERE ${df} ORDER BY date DESC LIMIT ${n}`);
     },
 
     // ── Expected Income ────────────────────────────────────────────────────────
-    // pending_income(month?|from?,to?) — unconfirmed expected income
+    // pending_income(month?|from?,to?) — unconfirmed expected income items
     pending_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return !e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, expectedDate as date FROM expected_income WHERE confirmed=0 AND ${df} ORDER BY expectedDate`);
     },
-    // confirmed_income(month?|from?,to?) — confirmed expected income
+    // confirmed_income(month?|from?,to?) — confirmed received payments
     confirmed_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.confirmedDate||e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, COALESCE(confirmedDate,expectedDate) as date FROM expected_income WHERE confirmed=1 AND ${df} ORDER BY expectedDate`);
     },
-    // all_expected_income(month?|from?,to?) — all expected income with status
+    // all_expected_income(month?|from?,to?) — all expected income with confirmation status
     all_expected_income:(args={})=>{
-      const df=_df(args,'e.expectedDate');
-      return `(function(){var items=(data.expected||[]).filter(function(e){return ${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);var pending=items.filter(function(e){return !e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);var confirmed=items.filter(function(e){return e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,pending:Math.round(pending*100)/100,confirmed:Math.round(confirmed*100)/100,items:items.map(function(e){return {name:e.source+(e.confirmed?' ✓':' ?'),value:e.amount,date:e.expectedDate};})};})()`;
+      const df=_sqlDf(args,'expectedDate');
+      return _sql(`SELECT source as name, amount as value, expectedDate, confirmed, confirmedDate FROM expected_income WHERE ${df} ORDER BY expectedDate`);
     },
 
     // ── Budgets ────────────────────────────────────────────────────────────────
     // budgets() — all category budgets
-    budgets:()=>`Object.entries(data.catBudgets||{}).map(function(e){return {name:e[0],value:e[1]};}).sort(function(a,b){return b.value-a.value;})`,
+    budgets:()=>_sql(`SELECT category as name, budget as value FROM cat_budgets ORDER BY budget DESC`),
     // budget_vs_actual(month?|from?,to?) — category budget vs actual spend
     budget_vs_actual:(args={})=>{
-      const df=_df(args);
-      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};var cats=Array.from(new Set(Object.keys(budgets).concat(Object.keys(spent))));return cats.map(function(c){var b=budgets[c]||0;var s=Math.round((spent[c]||0)*100)/100;var rem=Math.round((b-s)*100)/100;var pct=b>0?Math.round((s/b)*1000)/10:null;return {name:c,budget:b,spent:s,remaining:rem,percentUsed:pct};}).sort(function(a,b){return (b.percentUsed||0)-(a.percentUsed||0);});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category ORDER BY percentUsed DESC NULLS LAST`);
     },
     // budget_remaining(category, month?|from?,to?) — remaining budget for one category
     budget_remaining:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';var budget=(data.catBudgets||{})[cat]||0;var spent=data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).reduce(function(s,t){return s+t.amount;},0);var remaining=budget-spent;var pct=budget>0?Math.round((spent/budget)*1000)/10:null;return {category:cat,budget:Math.round(budget*100)/100,spent:Math.round(spent*100)/100,remaining:Math.round(remaining*100)/100,percentUsed:pct};})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT SUM(amount) as spent FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df}) t ON 1=1 WHERE cb.category='${cat}'`);
     },
-    // over_budget(month?|from?,to?) — categories exceeding their budget
+    // over_budget(month?|from?,to?) — categories where actual spend exceeds budget
     over_budget:(args={})=>{
-      const df=_df(args);
-      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};return Object.keys(budgets).filter(function(c){return (spent[c]||0)>budgets[c];}).map(function(c){return {name:c,budget:Math.round(budgets[c]*100)/100,spent:Math.round(spent[c]*100)/100,over:Math.round((spent[c]-budgets[c])*100)/100};}).sort(function(a,b){return b.over-a.over;});})()`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT COALESCE(category,'Other') as cat, SUM(amount) as spent FROM transactions WHERE type='expense' AND ${df} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
     },
 
     // ── Bills ─────────────────────────────────────────────────────────────────
-    // bills_due(month?|from?,to?) — unpaid bills; range returns unpaid across all months in window
+    // bills_due(month?) — bills not yet paid this month
     bills_due:(args={})=>{
       const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return b.active!==false&&!paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay,category:b.category};}).sort(function(a,b){return a.dueDay-b.dueDay;});})()`;
+      return _sql(`SELECT b.name, b.amount as value, b.dueDay, b.category FROM bills b WHERE b.active=1 AND b.id NOT IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
     },
-    // bills_paid(month?) — paid bills this month
+    // bills_paid(month?) — bills paid this month
     bills_paid:(args={})=>{
       const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay};});})()`;
+      return _sql(`SELECT b.name, b.amount as value, b.dueDay FROM bills b WHERE b.active=1 AND b.id IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
     },
 
     // ── Holdings / Portfolio ───────────────────────────────────────────────────
-    // holdings_detail() — each holding with cost basis, market value, gain/loss
-    holdings_detail:()=>`(function(){return (data.holdings||[]).map(function(h){var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var gainPct=cost>0?Math.round((gain/cost)*1000)/10:null;return {name:h.ticker||h.symbol||'?',shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:gainPct};}).sort(function(a,b){return b.marketValue-a.marketValue;});})()`,
-    // portfolio_gain() — total unrealised gain/loss
-    portfolio_gain:()=>`(function(){var total=0,cost=0;(data.holdings||[]).forEach(function(h){var price=h.price||h.currentPrice||0;total+=(h.shares||0)*price;cost+=(h.shares||0)*(h.costBasis||0);});var gain=total-cost;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {marketValue:Math.round(total*100)/100,totalCost:Math.round(cost*100)/100,gain:Math.round(gain*100)/100,gainPercent:pct};})()`,
+    // holdings_detail() — each holding with shares, cost basis, total cost
+    holdings_detail:()=>_sql(`SELECT ticker as name, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings ORDER BY totalCost DESC NULLS LAST`),
+    // portfolio_gain() — total portfolio cost basis (market price not stored in DB)
+    portfolio_gain:()=>_sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as totalCost, COUNT(*) as holdings, ROUND(AVG(costBasis),2) as avgCostBasis FROM holdings WHERE costBasis IS NOT NULL`),
     // holding(ticker) — detail for one ticker
     holding:(args={})=>{
-      const t=(args.ticker||"").replace(/'/g,"\\'");
-      return `(function(){var t='${t}';var h=(data.holdings||[]).find(function(h){return (h.ticker||h.symbol||'').toUpperCase()===t.toUpperCase();});if(!h)return null;var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {ticker:h.ticker||h.symbol,shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:pct};})()`;
+      const t=(args.ticker||"").replace(/'/g,"''");
+      return _sql(`SELECT ticker, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings WHERE UPPER(ticker)=UPPER('${t}') LIMIT 1`);
     },
 
     // ── Vacations ─────────────────────────────────────────────────────────────
-    // vacations() — all vacations: [{name, startDate, endDate, budget}]
-    vacations:()=>`(data.vacations||[]).map(function(v){return {name:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget};})`,
-    // vacation_spending(name) — actual spend vs budget for a named vacation
+    // vacations() — all vacations with dates and budgets
+    vacations:()=>_sql(`SELECT name, startDate, endDate, budget FROM vacations ORDER BY startDate`),
+    // vacation_spending(name) — budget vs actual spend for a named vacation
     vacation_spending:(args={})=>{
-      const name=(args.name||"").replace(/'/g,"\\'");
-      return `(function(){var name='${name}';var v=(data.vacations||[]).find(function(v){return v.name.toLowerCase().includes(name.toLowerCase());});if(!v)return null;var txns=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date>=v.startDate&&t.date<=v.endDate;});var total=txns.reduce(function(s,t){return s+t.amount;},0);var rem=v.budget-total;return {vacation:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget,spent:Math.round(total*100)/100,remaining:Math.round(rem*100)/100,transactions:txns.map(function(t){return {name:t.merchant||t.description||'?',value:t.amount,date:t.date,category:t.category};})};})()`;
+      const name=(args.name||"").replace(/'/g,"''");
+      return _sql(`SELECT v.name, v.startDate, v.endDate, v.budget, ROUND(COALESCE(SUM(vt.amount),0),2) as spent, ROUND(v.budget-COALESCE(SUM(vt.amount),0),2) as remaining FROM vacations v LEFT JOIN vacation_txns vt ON vt.vacationId=v.id WHERE LOWER(v.name) LIKE LOWER('%${name}%') GROUP BY v.id ORDER BY v.startDate`);
     },
 
     // ── Account History ────────────────────────────────────────────────────────
     // account_balance() — most recent balance snapshot
-    account_balance:()=>`(function(){var h=(data.accountHistory||[]).slice().sort(function(a,b){return b.date.localeCompare(a.date);});return h.length?{balance:h[0].balance,date:h[0].date}:null;})()`,
-    // balance_history(from?,to?) — balance snapshots over time
+    account_balance:()=>_sql(`SELECT date, balance as value FROM account_history ORDER BY date DESC LIMIT 1`),
+    // balance_history(from?,to?) — all balance snapshots ordered by date
     balance_history:(args={})=>{
-      const df=_df(args,'h.date');
-      return `(data.accountHistory||[]).filter(function(h){return ${df};}).slice().sort(function(a,b){return a.date.localeCompare(b.date);}).map(function(h){return {name:h.date,value:h.balance};})`;
+      const df=_sqlDf(args);
+      return _sql(`SELECT date as name, balance as value FROM account_history WHERE ${df} ORDER BY date`);
     },
 
     // ── Transactions (extended) ────────────────────────────────────────────────
     // txns_by_category(category, month?|from?,to?) — all transactions in a category
     txns_by_category:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';return data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};});})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, category FROM transactions WHERE type='expense' AND COALESCE(category,'Other')='${cat}' AND ${df} ORDER BY date DESC`);
     },
     // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
     txns_by_merchant:(args={})=>{
-      const merch=(args.merchant||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var m='${merch}';return data.txns.filter(function(t){return (t.merchant||t.description||'').toLowerCase().includes(m.toLowerCase())&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,type:t.type};});})()`;
+      const merch=(args.merchant||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type FROM transactions WHERE LOWER(COALESCE(merchant,'')) LIKE LOWER('%${merch}%') AND ${df} ORDER BY date DESC`);
     },
     // largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
     largest_expenses:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const n=args.limit||10;
-      return `data.txns.filter(function(t){return t.type==='expense'&&${df};}).slice().sort(function(a,b){return b.amount-a.amount;}).slice(0,${n}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};})`;
+      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, COALESCE(category,'Other') as category FROM transactions WHERE type='expense' AND ${df} ORDER BY amount DESC LIMIT ${n}`);
     },
 
-    // ── Math tools — all arithmetic happens here, never in LLM text ──────────
-
+    // ── Math / Comparison tools ────────────────────────────────────────────────
     // compare_expenses(month1, month2) — {month1,value1,month2,value2,change,changePercent}
     compare_expenses:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function total(m){return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
-        var v1=total('${m1}'),v2=total('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='expense' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
     // compare_income(month1, month2) — same shape for income
     compare_income:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function total(m){return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);}
-        var v1=total('${m1}'),v2=total('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/v1)*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
     // compare_net(month1, month2) — net position comparison
     compare_net:(args={})=>{
       const m1=args.month1||new Date().toISOString().slice(0,7);
       const m2=args.month2||new Date().toISOString().slice(0,7);
-      return `(function(){
-        function net(m){var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;}
-        var v1=net('${m1}'),v2=net('${m2}');
-        var change=v2-v1;
-        var pct=v1!==0?Math.round((change/Math.abs(v1))*1000)/10:null;
-        return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
-      })()`.replace(/\n\s*/g," ");
+      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN CASE WHEN type='income' THEN amount ELSE -amount END ELSE 0 END),2) as value2 FROM transactions WHERE strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
     },
-    // savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
+    // savings_rate(month?|from?,to?) — {period, income, expenses, saved, rate%}
     savings_rate:(args={})=>{
-      const df=_df(args);
+      const df=_sqlDf(args);
       const label=_label(args);
-      return `(function(){var inc=data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {period:'${label}',income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;
+      return _sql(`SELECT '${label}' as period, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0),2) as income, ROUND(COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),2) as expenses, ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as saved, CASE WHEN SUM(CASE WHEN type='income' THEN amount ELSE 0 END)>0 THEN ROUND(SUM(CASE WHEN type='income' THEN amount ELSE -amount END)*100.0/SUM(CASE WHEN type='income' THEN amount ELSE 0 END),1) ELSE NULL END as rate FROM transactions WHERE ${df}`);
     },
     // expense_share(category, month?|from?,to?) — what % of spending is one category
     expense_share:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"\\'");
-      const df=_df(args);
-      return `(function(){var cat='${cat}';var txns=data.txns.filter(function(t){return t.type==='expense'&&${df};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;
+      const cat=(args.category||"").replace(/'/g,"''");
+      const df=_sqlDf(args);
+      return _sql(`SELECT '${cat}' as category, ROUND(COALESCE(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END),0),2) as amount, ROUND(COALESCE(SUM(amount),0),2) as total, CASE WHEN SUM(amount)>0 THEN ROUND(SUM(CASE WHEN COALESCE(category,'Other')='${cat}' THEN amount ELSE 0 END)*100.0/SUM(amount),1) ELSE NULL END as percent FROM transactions WHERE type='expense' AND ${df}`);
     },
+
+    // ── Raw SQL ────────────────────────────────────────────────────────────────
+    // sql_query(sql, params?) — execute any SELECT directly against SQLite
+    sql_query:(args={})=>_sql(args.sql||'SELECT 1', args.params||[]),
   };
 
   // Build compact system prompt — just tool names, no raw JS examples
@@ -3288,6 +3288,9 @@ compare_net(month1, month2) — net position comparison
 savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
 expense_share(category, month?|from?,to?) — what % of spending is one category
 
+SQL:
+sql_query(sql, params?) — execute any SELECT against SQLite for custom analysis
+
 NAVIGATION:
 navigate(tab) — home/bills/history/stocks/budget/networth/settings
 
@@ -3323,6 +3326,17 @@ User: total expenses from January to March 2026
 User: what was my savings rate for Q1 2026
 <tool>{"name":"savings_rate","args":{"from":"2026-01","to":"2026-03"}}</tool>
 
+SQL TOOL — use when no named tool fits:
+sql_query(sql, params?) — run any SELECT against SQLite.
+${Object.entries((schema&&schema.views)||{}).map(([,v])=>{
+  const tbl=v.table||v.source||'?';
+  const fields=Object.entries(v.dimensions||{}).filter(([,d])=>d.sql).map(([dk,d])=>`${dk}:${d.sql.replace(/\$\{TABLE\}/g,tbl)}`);
+  return `${tbl}: ${fields.join(', ')}`;
+}).join('\n')}
+Example:
+User: expenses by category in 2026-05
+<tool>{"name":"sql_query","args":{"sql":"SELECT category, ROUND(SUM(amount),2) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)='2026-05' GROUP BY category ORDER BY total DESC"}}</tool>
+
 Current month: ${curMonth}`;
   };
 
@@ -3332,13 +3346,17 @@ Current month: ${curMonth}`;
       onNavigate(args.tab);
       return{success:true,navigatedTo:args.tab};
     }
-    // Named library tool — look up the JS generator and run it
+    // Named library tool — all tools now return __SQL__: markers
     if(TOOL_LIBRARY[name]){
       try{
-        const js=TOOL_LIBRARY[name](args||{});
-        const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:js})});
+        const marker=TOOL_LIBRARY[name](args||{});
+        const{sql,params}=JSON.parse(marker.slice(8));
+        const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
         const d=await r.json();
-        return{id:name,result:d.result,error:d.error};
+        if(d.error)return{id:name,error:d.error};
+        // Normalize: 1 row × 1 column → scalar value (e.g. expenses → 1234.56)
+        if(d.rows.length===1&&d.columns.length===1)return{id:name,result:d.rows[0][d.columns[0]]};
+        return{id:name,result:d.rows,columns:d.columns,count:d.count};
       }catch(e){return{id:name,error:e.message};}
     }
     // Legacy raw query tool (fallback only)
@@ -3460,12 +3478,23 @@ Current month: ${curMonth}`;
         const widgets=[];
         for(const q of preloaded.queries){
           try{
-            const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q.js()})});
-            const d=await r.json();
-            if(d.result!==undefined&&!d.error){
-              const w=q.buildWidget?q.buildWidget(d.result):autoWidget(uid(),q.label,d.result,q.chartType);
-              if(w) widgets.push(w);
+            const marker=q.js();
+            let result;
+            if(typeof marker==="string"&&marker.startsWith("__SQL__:")){
+              const{sql,params}=JSON.parse(marker.slice(8));
+              const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
+              const d=await r.json();
+              if(d.error)continue;
+              // Normalize single-value result to scalar
+              result=d.rows.length===1&&d.columns.length===1?d.rows[0][d.columns[0]]:d.rows;
+            } else {
+              const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:marker})});
+              const d=await r.json();
+              if(d.result===undefined||d.error)continue;
+              result=d.result;
             }
+            const w=q.buildWidget?q.buildWidget(result):autoWidget(uid(),q.label,result,q.chartType);
+            if(w) widgets.push(w);
           }catch(e){}
         }
         if(widgets.length>0){

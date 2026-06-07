@@ -11,6 +11,7 @@ import llmRouter from "./routes/llm.js";
 import stocksRouter from "./routes/stocks.js";
 import messagesRouter from "./routes/messages.js";
 import configRouter from "./routes/config.js";
+import sqlRouter from "./routes/sql.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.SERVER_PORT || process.env.PORT || 3001;
@@ -37,6 +38,7 @@ app.use(llmRouter);
 app.use(stocksRouter);
 app.use(messagesRouter);
 app.use(configRouter);
+app.use(sqlRouter);
 
 // Serve built frontend in production
 const distPath = join(__dirname, "..", "dist");

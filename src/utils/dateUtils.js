@@ -1,3 +1,12 @@
+// SQL WHERE clause fragment for date filtering
+export const _sqlDf = (args = {}, col = 'date') => {
+  if (args.month) return `strftime('%Y-%m',${col})='${args.month}'`;
+  const p = [];
+  if (args.from) p.push(`strftime('%Y-%m',${col})>='${args.from}'`);
+  if (args.to)   p.push(`strftime('%Y-%m',${col})<='${args.to}'`);
+  return p.length ? p.join(' AND ') : '1=1';
+};
+
 export const _df = (args = {}, field = 't.date') => {
   if (args.month) return `${field}&&${field}.slice(0,7)==='${args.month}'`;
   if (args.from || args.to) {
