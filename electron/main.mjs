@@ -2,11 +2,14 @@ import { app, BrowserWindow, shell } from 'electron'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { spawn } from 'child_process'
 import net from 'net'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const isDev = !app.isPackaged
+
+// ── Port helpers ──────────────────────────────────────────────────────────────
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -19,7 +22,7 @@ function getFreePort() {
   })
 }
 
-function waitForPort(port, retries = 40, delay = 150) {
+function waitForPort(port, retries = 60, delay = 150) {
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const sock = net.connect(port, '127.0.0.1', () => {
@@ -35,29 +38,65 @@ function waitForPort(port, retries = 40, delay = 150) {
   })
 }
 
+// ── Server lifecycle ──────────────────────────────────────────────────────────
+// In dev:  spawn `node server/index.js` as a child process — restarts on crash.
+// In prod: import server/index.js directly into the Electron process.
+
+let serverProc = null
+let isQuitting = false
+
+function spawnServer(port, env = {}) {
+  const fullEnv = { ...process.env, SERVER_PORT: String(port), ...env }
+  const cwd = join(__dirname, '..')
+
+  function doSpawn() {
+    console.log(`[main] Starting server on port ${port}…`)
+    serverProc = spawn(process.execPath, ['server/index.js'], { cwd, env: fullEnv, stdio: 'inherit' })
+
+    serverProc.on('exit', (code, signal) => {
+      if (isQuitting) return
+      if (signal === 'SIGTERM' || signal === 'SIGKILL') return
+      console.log(`[main] Server exited (code=${code}), restarting in 1 s…`)
+      setTimeout(doSpawn, 1000)
+    })
+  }
+
+  doSpawn()
+}
+
+function stopServer() {
+  isQuitting = true
+  if (serverProc && !serverProc.killed) {
+    serverProc.kill('SIGTERM')
+    serverProc = null
+  }
+}
+
+// ── App lifecycle ─────────────────────────────────────────────────────────────
+
 app.whenReady().then(async () => {
   let url
 
   if (isDev) {
-    // Dev: Vite dev server + separate Express already started by concurrently
-    url = 'http://localhost:5173'
+    // Dev mode: spawn the Express server as a managed child process
+    const port = 3001
+    spawnServer(port)
+    await waitForPort(port)
+    url = 'http://localhost:5173'   // Vite HMR dev server
   } else {
-    // Prod: set up persistent data directory, start embedded Express
+    // Prod mode: set up user-data directory, then import the server directly
     const userDataPath = app.getPath('userData')
     mkdirSync(userDataPath, { recursive: true })
 
-    // Copy bundled seed DB to userData on first launch
     const dbPath = join(userDataPath, 'spend.db')
     if (!existsSync(dbPath)) {
       const src = join(process.resourcesPath, 'spend.db')
       if (existsSync(src)) copyFileSync(src, dbPath)
     }
 
-    // Tell the server where the DB and seed file live
     process.env.SPEND_DB_PATH = dbPath
     process.env.SEED_DATA_PATH = join(process.resourcesPath, 'data.json')
 
-    // Find a free port and start Express
     const port = await getFreePort()
     process.env.SERVER_PORT = String(port)
     await import('../server/index.js')
@@ -81,13 +120,11 @@ app.whenReady().then(async () => {
 
   win.loadURL(url)
 
-  // Open external links (e.g. aistudio.google.com) in the default browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
   })
 
-  // Also catch target="_blank" navigation
   win.webContents.on('will-navigate', (e, navUrl) => {
     if (!navUrl.startsWith('http://127.0.0.1') && !navUrl.startsWith('http://localhost')) {
       e.preventDefault()
@@ -96,6 +133,12 @@ app.whenReady().then(async () => {
   })
 })
 
+// Kill the server when the app is about to quit
+app.on('before-quit', () => {
+  stopServer()
+})
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  stopServer()
+  app.quit()
 })

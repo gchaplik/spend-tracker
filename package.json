@@ -4,13 +4,13 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "dev": "concurrently \"vite\" \"SERVER_PORT=3001 node server/index.js\"",
+    "dev": "concurrently \"vite\" \"nodemon --watch server --ext js server/index.js\"",
     "build": "vite build",
     "start": "node server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "electron:dev": "concurrently \"vite\" \"SERVER_PORT=3001 node server/index.js\" \"wait-on http://localhost:3001/api/data && electron .\"",
+    "electron:dev": "concurrently \"vite\" \"electron .\"",
     "electron:build": "vite build && electron-builder",
     "electron:build:win": "vite build && electron-builder --win --x64",
     "postinstall": "electron-builder install-app-deps"
@@ -87,6 +87,7 @@
     "electron-builder": "^25.1.8",
     "electron-icon-builder": "^2.0.1",
     "jsdom": "^29.1.1",
+    "nodemon": "^3.1.14",
     "supertest": "^7.2.2",
     "vite": "^5.4.2",
     "vitest": "^4.1.8",
