@@ -19,7 +19,7 @@ const PORT = process.env.SERVER_PORT || process.env.PORT || 3001;
 migrate();
 
 // One-time seed from data.json if DB is empty and data.json exists
-const DATA_FILE = join(__dirname, "..", "data.json");
+const DATA_FILE = process.env.SEED_DATA_PATH || join(__dirname, "..", "data.json");
 if (existsSync(DATA_FILE)) {
   try {
     const dataJson = JSON.parse(readFileSync(DATA_FILE, "utf8"));

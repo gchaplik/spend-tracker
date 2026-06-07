@@ -5,3 +5,10 @@ data.json
 .DS_Store
 Receipts/
 .claude/
+spend.db
+spend.db-shm
+spend.db-wal
+
+# Electron build output
+release/
+electron/icons/
