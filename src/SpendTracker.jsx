@@ -2915,60 +2915,181 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
 
   // ─── Tool library: named functions the LLM can call by name + params ──────────
   // The LLM never writes JavaScript — it just picks a tool name and fills params.
+  // _df(args, field?) — generates a JS date-filter expression for use inside template strings.
+  // Supports: month (exact), from+to (range), or neither (all-time).
+  // field defaults to 't.date'; use 'e.expectedDate' for expected-income tools.
+  const _df=(args={},field='t.date')=>{
+    if(args.month)  return `${field}&&${field}.slice(0,7)==='${args.month}'`;
+    if(args.from||args.to){
+      const f=args.from||'0000-00', t=args.to||'9999-99';
+      return `${field}&&${field}.slice(0,7)>='${f}'&&${field}.slice(0,7)<='${t}'`;
+    }
+    return 'true';
+  };
+  // _label(args) — human-readable period label for widget titles
+  const _label=(args={})=>{
+    if(args.month) return args.month;
+    if(args.from&&args.to) return `${args.from} – ${args.to}`;
+    if(args.from) return `from ${args.from}`;
+    if(args.to)   return `up to ${args.to}`;
+    return 'All Time';
+  };
+
   const TOOL_LIBRARY={
-    // expenses(month?) — total expenses for a given month
+    // ── Spending & Income ──────────────────────────────────────────────────────
+    // expenses(month?|from?,to?) — total expenses. single month OR range
     expenses:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';return data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`;
+      const df=_df(args);
+      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
     },
-    // income(month?) — total income for a given month
+    // income(month?|from?,to?) — total income
     income:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';return data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);})()`;
+      const df=_df(args);
+      return `(function(){return Math.round(data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0)*100)/100;})()`;
     },
-    // net(month?) — income minus expenses for a given month
+    // net(month?|from?,to?) — income minus expenses
     net:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var i=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);return i-e;})()`;
+      const df=_df(args);
+      return `(function(){var df=function(t){return ${df};};var i=data.txns.filter(function(t){return t.type==='income'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);var e=data.txns.filter(function(t){return t.type==='expense'&&df(t);}).reduce(function(s,t){return s+t.amount;},0);return Math.round((i-e)*100)/100;})()`;
     },
-    // categories(month?) — expense totals grouped by category; omit month for all-time
+    // categories(month?|from?,to?) — expense totals grouped by category
     categories:(args={})=>{
-      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:e[1]};});})()`;
+      const df=_df(args);
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
     },
-    // top_category(month?) — single highest-spend category
+    // top_category(month?|from?,to?) — single highest-spend category
     top_category:(args={})=>{
-      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:s[0][1]}:null;})()`;
+      const df=_df(args);
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';a[c]=(a[c]||0)+t.amount;});var s=Object.entries(a).sort(function(x,y){return y[1]-x[1];});return s.length?{name:s[0][0],value:Math.round(s[0][1]*100)/100}:null;})()`;
     },
-    // monthly(months?) — income & expenses per month for last N months
+    // monthly(months?|from?,to?) — income & expenses per month
     monthly:(args={})=>{
-      const n=args.months||6;
-      return `(function(){var mo={};data.txns.forEach(function(t){var d=t.date?t.date.slice(0,7):null;if(!d)return;if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;
+      const n=args.months||99;
+      const df=_df(args,'d');
+      const rangeFilter=(args.from||args.to)?`var d=t.date?t.date.slice(0,7):null;if(!d||!(${df}))return;`:`var d=t.date?t.date.slice(0,7):null;if(!d)return;`;
+      return `(function(){var mo={};data.txns.forEach(function(t){${rangeFilter}if(!mo[d])mo[d]={name:d,Income:0,Expenses:0};if(t.type==='income')mo[d].Income+=t.amount;if(t.type==='expense')mo[d].Expenses+=t.amount;});return Object.values(mo).sort(function(a,b){return a.name<b.name?-1:1;}).slice(-${n});})()`;
     },
-    // bills(type?) — type "total" returns sum, default returns list [{name,value}]
+    // bills(type?) — "total"=sum, default=list [{name,value}]
     bills:(args={})=>{
       if(args.type==="total")
-        return `data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)`;
+        return `Math.round(data.bills.filter(function(b){return b.active!==false;}).reduce(function(s,b){return s+b.amount;},0)*100)/100`;
       return `data.bills.filter(function(b){return b.active!==false;}).map(function(b){return {name:b.name,value:b.amount};}).sort(function(a,b){return b.value-a.value;})`;
     },
-    // portfolio(type?) — type "total" returns value, default returns holdings [{name,value}]
+    // portfolio(type?) — "total"=value, default=holdings [{name,value}]
     portfolio:(args={})=>{
       if(args.type==="total")
-        return `(function(){if(!data.stocks||!data.stocks.length)return 0;return data.stocks.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0);})()`;
-      return `(function(){if(!data.stocks||!data.stocks.length)return [];return data.stocks.map(function(h){return {name:h.symbol||h.ticker||'?',value:(h.shares||0)*(h.price||h.currentPrice||0)};}).sort(function(a,b){return b.value-a.value;});})()`;
+        return `(function(){if(!data.holdings||!data.holdings.length)return 0;return Math.round(data.holdings.reduce(function(s,h){return s+(h.shares||0)*(h.price||h.currentPrice||0);},0)*100)/100;})()`;
+      return `(function(){if(!data.holdings||!data.holdings.length)return [];return data.holdings.map(function(h){return {name:h.ticker||h.symbol||'?',value:Math.round((h.shares||0)*(h.price||h.currentPrice||0)*100)/100};}).sort(function(a,b){return b.value-a.value;});})()`;
     },
-    // merchants(month?, limit?) — top merchants/payees by spend
+    // merchants(month?|from?,to?, limit?) — top merchants by spend
     merchants:(args={})=>{
-      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
+      const df=_df(args);
       const n=args.limit||10;
-      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'${mFilter};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:e[1]};});})()`;
+      return `(function(){var a={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var k=t.merchant||t.description||'Other';a[k]=(a[k]||0)+t.amount;});return Object.entries(a).sort(function(x,y){return y[1]-x[1];}).slice(0,${n}).map(function(e){return {name:e[0],value:Math.round(e[1]*100)/100};});})()`;
     },
-    // transactions(month?, limit?) — recent transactions
+    // transactions(month?|from?,to?, limit?) — recent transactions
     transactions:(args={})=>{
+      const df=_df(args);
       const n=args.limit||10;
-      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
-      return `data.txns.filter(function(t){return true${mFilter};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;
+      return `data.txns.filter(function(t){return ${df};}).slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,${n}).map(function(t){return {name:(t.merchant||t.description||'?')+' ('+t.date+')',value:t.amount};})`;
+    },
+
+    // ── Expected Income ────────────────────────────────────────────────────────
+    // pending_income(month?|from?,to?) — unconfirmed expected income
+    pending_income:(args={})=>{
+      const df=_df(args,'e.expectedDate');
+      return `(function(){var items=(data.expected||[]).filter(function(e){return !e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.expectedDate};})};})()`;
+    },
+    // confirmed_income(month?|from?,to?) — confirmed expected income
+    confirmed_income:(args={})=>{
+      const df=_df(args,'e.expectedDate');
+      return `(function(){var items=(data.expected||[]).filter(function(e){return e.confirmed&&${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,items:items.map(function(e){return {name:e.source,value:e.amount,date:e.confirmedDate||e.expectedDate};})};})()`;
+    },
+    // all_expected_income(month?|from?,to?) — all expected income with status
+    all_expected_income:(args={})=>{
+      const df=_df(args,'e.expectedDate');
+      return `(function(){var items=(data.expected||[]).filter(function(e){return ${df};});var total=items.reduce(function(s,e){return s+e.amount;},0);var pending=items.filter(function(e){return !e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);var confirmed=items.filter(function(e){return e.confirmed;}).reduce(function(s,e){return s+e.amount;},0);return {total:Math.round(total*100)/100,pending:Math.round(pending*100)/100,confirmed:Math.round(confirmed*100)/100,items:items.map(function(e){return {name:e.source+(e.confirmed?' ✓':' ?'),value:e.amount,date:e.expectedDate};})};})()`;
+    },
+
+    // ── Budgets ────────────────────────────────────────────────────────────────
+    // budgets() — all category budgets
+    budgets:()=>`Object.entries(data.catBudgets||{}).map(function(e){return {name:e[0],value:e[1]};}).sort(function(a,b){return b.value-a.value;})`,
+    // budget_vs_actual(month?|from?,to?) — category budget vs actual spend
+    budget_vs_actual:(args={})=>{
+      const df=_df(args);
+      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};var cats=Array.from(new Set(Object.keys(budgets).concat(Object.keys(spent))));return cats.map(function(c){var b=budgets[c]||0;var s=Math.round((spent[c]||0)*100)/100;var rem=Math.round((b-s)*100)/100;var pct=b>0?Math.round((s/b)*1000)/10:null;return {name:c,budget:b,spent:s,remaining:rem,percentUsed:pct};}).sort(function(a,b){return (b.percentUsed||0)-(a.percentUsed||0);});})()`;
+    },
+    // budget_remaining(category, month?|from?,to?) — remaining budget for one category
+    budget_remaining:(args={})=>{
+      const cat=(args.category||"").replace(/'/g,"\\'");
+      const df=_df(args);
+      return `(function(){var cat='${cat}';var budget=(data.catBudgets||{})[cat]||0;var spent=data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).reduce(function(s,t){return s+t.amount;},0);var remaining=budget-spent;var pct=budget>0?Math.round((spent/budget)*1000)/10:null;return {category:cat,budget:Math.round(budget*100)/100,spent:Math.round(spent*100)/100,remaining:Math.round(remaining*100)/100,percentUsed:pct};})()`;
+    },
+    // over_budget(month?|from?,to?) — categories exceeding their budget
+    over_budget:(args={})=>{
+      const df=_df(args);
+      return `(function(){var spent={};data.txns.filter(function(t){return t.type==='expense'&&${df};}).forEach(function(t){var c=t.category||'Other';spent[c]=(spent[c]||0)+t.amount;});var budgets=data.catBudgets||{};return Object.keys(budgets).filter(function(c){return (spent[c]||0)>budgets[c];}).map(function(c){return {name:c,budget:Math.round(budgets[c]*100)/100,spent:Math.round(spent[c]*100)/100,over:Math.round((spent[c]-budgets[c])*100)/100};}).sort(function(a,b){return b.over-a.over;});})()`;
+    },
+
+    // ── Bills ─────────────────────────────────────────────────────────────────
+    // bills_due(month?|from?,to?) — unpaid bills; range returns unpaid across all months in window
+    bills_due:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return b.active!==false&&!paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay,category:b.category};}).sort(function(a,b){return a.dueDay-b.dueDay;});})()`;
+    },
+    // bills_paid(month?) — paid bills this month
+    bills_paid:(args={})=>{
+      const m=args.month||new Date().toISOString().slice(0,7);
+      return `(function(){var m='${m}';var paid=new Set((data.billPayments||[]).filter(function(p){return p.month===m;}).map(function(p){return p.billId;}));return (data.bills||[]).filter(function(b){return paid.has(b.id);}).map(function(b){return {name:b.name,value:b.amount,dueDay:b.dueDay};});})()`;
+    },
+
+    // ── Holdings / Portfolio ───────────────────────────────────────────────────
+    // holdings_detail() — each holding with cost basis, market value, gain/loss
+    holdings_detail:()=>`(function(){return (data.holdings||[]).map(function(h){var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var gainPct=cost>0?Math.round((gain/cost)*1000)/10:null;return {name:h.ticker||h.symbol||'?',shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:gainPct};}).sort(function(a,b){return b.marketValue-a.marketValue;});})()`,
+    // portfolio_gain() — total unrealised gain/loss
+    portfolio_gain:()=>`(function(){var total=0,cost=0;(data.holdings||[]).forEach(function(h){var price=h.price||h.currentPrice||0;total+=(h.shares||0)*price;cost+=(h.shares||0)*(h.costBasis||0);});var gain=total-cost;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {marketValue:Math.round(total*100)/100,totalCost:Math.round(cost*100)/100,gain:Math.round(gain*100)/100,gainPercent:pct};})()`,
+    // holding(ticker) — detail for one ticker
+    holding:(args={})=>{
+      const t=(args.ticker||"").replace(/'/g,"\\'");
+      return `(function(){var t='${t}';var h=(data.holdings||[]).find(function(h){return (h.ticker||h.symbol||'').toUpperCase()===t.toUpperCase();});if(!h)return null;var price=h.price||h.currentPrice||0;var mktVal=Math.round((h.shares||0)*price*100)/100;var cost=Math.round((h.shares||0)*(h.costBasis||0)*100)/100;var gain=Math.round((mktVal-cost)*100)/100;var pct=cost>0?Math.round((gain/cost)*1000)/10:null;return {ticker:h.ticker||h.symbol,shares:h.shares,costBasis:h.costBasis,marketValue:mktVal,cost:cost,gain:gain,gainPercent:pct};})()`;
+    },
+
+    // ── Vacations ─────────────────────────────────────────────────────────────
+    // vacations() — all vacations: [{name, startDate, endDate, budget}]
+    vacations:()=>`(data.vacations||[]).map(function(v){return {name:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget};})`,
+    // vacation_spending(name) — actual spend vs budget for a named vacation
+    vacation_spending:(args={})=>{
+      const name=(args.name||"").replace(/'/g,"\\'");
+      return `(function(){var name='${name}';var v=(data.vacations||[]).find(function(v){return v.name.toLowerCase().includes(name.toLowerCase());});if(!v)return null;var txns=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date>=v.startDate&&t.date<=v.endDate;});var total=txns.reduce(function(s,t){return s+t.amount;},0);var rem=v.budget-total;return {vacation:v.name,startDate:v.startDate,endDate:v.endDate,budget:v.budget,spent:Math.round(total*100)/100,remaining:Math.round(rem*100)/100,transactions:txns.map(function(t){return {name:t.merchant||t.description||'?',value:t.amount,date:t.date,category:t.category};})};})()`;
+    },
+
+    // ── Account History ────────────────────────────────────────────────────────
+    // account_balance() — most recent balance snapshot
+    account_balance:()=>`(function(){var h=(data.accountHistory||[]).slice().sort(function(a,b){return b.date.localeCompare(a.date);});return h.length?{balance:h[0].balance,date:h[0].date}:null;})()`,
+    // balance_history(from?,to?) — balance snapshots over time
+    balance_history:(args={})=>{
+      const df=_df(args,'h.date');
+      return `(data.accountHistory||[]).filter(function(h){return ${df};}).slice().sort(function(a,b){return a.date.localeCompare(b.date);}).map(function(h){return {name:h.date,value:h.balance};})`;
+    },
+
+    // ── Transactions (extended) ────────────────────────────────────────────────
+    // txns_by_category(category, month?|from?,to?) — all transactions in a category
+    txns_by_category:(args={})=>{
+      const cat=(args.category||"").replace(/'/g,"\\'");
+      const df=_df(args);
+      return `(function(){var cat='${cat}';return data.txns.filter(function(t){return t.type==='expense'&&(t.category||'Other')===cat&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};});})()`;
+    },
+    // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
+    txns_by_merchant:(args={})=>{
+      const merch=(args.merchant||"").replace(/'/g,"\\'");
+      const df=_df(args);
+      return `(function(){var m='${merch}';return data.txns.filter(function(t){return (t.merchant||t.description||'').toLowerCase().includes(m.toLowerCase())&&${df};}).sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,type:t.type};});})()`;
+    },
+    // largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
+    largest_expenses:(args={})=>{
+      const df=_df(args);
+      const n=args.limit||10;
+      return `data.txns.filter(function(t){return t.type==='expense'&&${df};}).slice().sort(function(a,b){return b.amount-a.amount;}).slice(0,${n}).map(function(t){return {name:(t.merchant||'?')+' ('+t.date+')',value:t.amount,category:t.category};})`;
     },
 
     // ── Math tools — all arithmetic happens here, never in LLM text ──────────
@@ -3009,16 +3130,17 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
         return {month1:'${m1}',value1:Math.round(v1*100)/100,month2:'${m2}',value2:Math.round(v2*100)/100,change:Math.round(change*100)/100,changePercent:pct};
       })()`.replace(/\n\s*/g," ");
     },
-    // savings_rate(month?) — {income, expenses, saved, rate%} — what % of income was saved
+    // savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
     savings_rate:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return `(function(){var m='${m}';var inc=data.txns.filter(function(t){return t.type==='income'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&t.date&&t.date.slice(0,7)===m;}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {month:m,income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;
+      const df=_df(args);
+      const label=_label(args);
+      return `(function(){var inc=data.txns.filter(function(t){return t.type==='income'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var exp=data.txns.filter(function(t){return t.type==='expense'&&${df};}).reduce(function(s,t){return s+t.amount;},0);var saved=inc-exp;var rate=inc>0?Math.round((saved/inc)*1000)/10:null;return {period:'${label}',income:Math.round(inc*100)/100,expenses:Math.round(exp*100)/100,saved:Math.round(saved*100)/100,rate:rate};})()`;
     },
-    // expense_share(category, month?) — what % of total spending is one category
+    // expense_share(category, month?|from?,to?) — what % of spending is one category
     expense_share:(args={})=>{
-      const cat=args.category||"";
-      const mFilter=args.month?`&&t.date&&t.date.slice(0,7)==='${args.month}'`:``;
-      return `(function(){var cat='${cat.replace(/'/g,"\\'")}';var txns=data.txns.filter(function(t){return t.type==='expense'${mFilter};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;
+      const cat=(args.category||"").replace(/'/g,"\\'");
+      const df=_df(args);
+      return `(function(){var cat='${cat}';var txns=data.txns.filter(function(t){return t.type==='expense'&&${df};});var total=txns.reduce(function(s,t){return s+t.amount;},0);var catTotal=txns.filter(function(t){return (t.category||'Other')===cat;}).reduce(function(s,t){return s+t.amount;},0);var pct=total>0?Math.round((catTotal/total)*1000)/10:null;return {category:cat,amount:Math.round(catTotal*100)/100,total:Math.round(total*100)/100,percent:pct};})()`;
     },
   };
 
@@ -3032,47 +3154,101 @@ RULES:
 - Never refuse. Never say "I can't" — just call the right tool.
 - After getting results, respond in 1-2 sentences using ONLY the returned values.
 
+DATE ARGS (apply to most tools):
+  month="YYYY-MM"          — single month
+  from="YYYY-MM",to="YYYY-MM" — sum over a range of months
+  (omit both for all-time)
+
 AVAILABLE TOOLS:
-expenses(month) — total expenses for a month. month = YYYY-MM
-income(month) — total income for a month
-net(month) — income minus expenses
-categories(month?) — expenses by category; omit month for all-time
-top_category(month?) — highest-spend category
-monthly(months?) — income & expenses per month, last N months (default 6)
-bills(type?) — "total" = sum; default = list [{name,value}]
-portfolio(type?) — "total" = portfolio value; default = holdings [{name,value}]
-merchants(month?, limit?) — top merchants by spend
-transactions(month?, limit?) — recent transactions
 
-MATH TOOLS (use these instead of doing any arithmetic yourself):
+SPENDING & INCOME:
+expenses(month?|from?,to?) — total expenses
+income(month?|from?,to?) — total income
+net(month?|from?,to?) — income minus expenses
+categories(month?|from?,to?) — expenses by category
+top_category(month?|from?,to?) — highest-spend category
+monthly(months?|from?,to?) — income & expenses per month
+merchants(month?|from?,to?, limit?) — top merchants by spend
+transactions(month?|from?,to?, limit?) — recent transactions
+txns_by_category(category, month?|from?,to?) — all transactions in a category
+txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
+largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
+
+BUDGETS:
+budgets() — all category budgets
+budget_vs_actual(month?|from?,to?) — each category: budget, spent, remaining, % used
+budget_remaining(category, month?|from?,to?) — remaining budget for one category
+over_budget(month?) — categories exceeding their budget
+
+EXPECTED INCOME:
+pending_income(month?|from?,to?) — unconfirmed expected income: {total, items[]}
+confirmed_income(month?|from?,to?) — confirmed expected income: {total, items[]}
+all_expected_income(month?|from?,to?) — all expected income with status
+
+BILLS:
+bills(type?) — "total"=sum; default=list [{name,value}]
+bills_due(month?) — unpaid bills this month
+bills_paid(month?) — paid bills this month
+
+PORTFOLIO:
+portfolio(type?) — "total"=value; default=holdings [{name,value}]
+holdings_detail() — each holding with cost, market value, gain/loss
+portfolio_gain() — total unrealised gain/loss: {marketValue, totalCost, gain, gainPercent}
+holding(ticker) — detail for one ticker
+
+VACATIONS:
+vacations() — all vacations with dates and budgets
+vacation_spending(name) — actual spend vs budget for a vacation
+
+ACCOUNT:
+account_balance() — most recent balance snapshot
+balance_history() — all balance snapshots over time
+
+ACCOUNT:
+account_balance() — most recent balance snapshot
+balance_history(from?,to?) — balance snapshots over time
+
+MATH (never do arithmetic yourself — always call these):
 compare_expenses(month1, month2) — {value1, value2, change, changePercent}
-compare_income(month1, month2) — same shape for income
+compare_income(month1, month2) — same for income
 compare_net(month1, month2) — net position comparison
-savings_rate(month?) — {income, expenses, saved, rate%}
-expense_share(category, month?) — what % of spending is one category
+savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
+expense_share(category, month?|from?,to?) — what % of spending is one category
 
-navigate(tab) — go to page (home/bills/history/stocks/budget/networth/settings)
+NAVIGATION:
+navigate(tab) — home/bills/history/stocks/budget/networth/settings
 
 RULES:
-- NEVER do arithmetic. Always call a math tool instead.
+- NEVER do arithmetic. Use a math tool instead.
 - Call exactly ONE tool per response.
-- After getting results, report the returned values directly in 1-2 sentences.
+- Report returned values directly in 1-2 sentences only.
 
-HOW TO CALL:
-<tool>{"name":"TOOL_NAME","args":{"param":"value"}}</tool>
+HOW TO CALL: <tool>{"name":"TOOL_NAME","args":{"param":"value"}}</tool>
 
 EXAMPLES:
 User: what did I spend in ${curMonth}
 <tool>{"name":"expenses","args":{"month":"${curMonth}"}}</tool>
 
-User: how did my expenses change from 2026-05 to 2026-06
+User: show unconfirmed expected income this month
+<tool>{"name":"pending_income","args":{"month":"${curMonth}"}}</tool>
+
+User: am I over budget anywhere this month
+<tool>{"name":"over_budget","args":{"month":"${curMonth}"}}</tool>
+
+User: how did expenses change from 2026-05 to 2026-06
 <tool>{"name":"compare_expenses","args":{"month1":"2026-05","month2":"2026-06"}}</tool>
 
-User: what is my savings rate this month
-<tool>{"name":"savings_rate","args":{"month":"${curMonth}"}}</tool>
+User: show my portfolio gain/loss
+<tool>{"name":"portfolio_gain","args":{}}</tool>
 
-User: what percent of spending is food
-<tool>{"name":"expense_share","args":{"category":"Food","month":"${curMonth}"}}</tool>
+User: how much did I spend on my Montreal vacation
+<tool>{"name":"vacation_spending","args":{"name":"Montreal"}}</tool>
+
+User: total expenses from January to March 2026
+<tool>{"name":"expenses","args":{"from":"2026-01","to":"2026-03"}}</tool>
+
+User: what was my savings rate for Q1 2026
+<tool>{"name":"savings_rate","args":{"from":"2026-01","to":"2026-03"}}</tool>
 
 Current month: ${curMonth}`;
   };
@@ -3172,6 +3348,20 @@ Current month: ${curMonth}`;
         {label:"Monthly Bills Total",chartType:null,js:()=>TOOL_LIBRARY.bills({type:"total"})},
         {label:"Bills Breakdown",chartType:"bar",js:()=>TOOL_LIBRARY.bills({})},
       ]
+    },
+    // Pending / unconfirmed expected income
+    {
+      test:msg=>/(income|pay|salary).*(pending|unconfirmed|expected|not.*confirmed|hasn.?t.*confirmed)|(pending|unconfirmed|expected|hasn.?t.*confirmed).*(income|pay|salary)/i.test(msg),
+      queries:[{
+        label:"Pending Income This Month",chartType:"bar",
+        js:()=>TOOL_LIBRARY.pending_income({month:new Date().toISOString().slice(0,7)}),
+        buildWidget:(result)=>{
+          const items=result?.items||[];
+          const total=result?.total||0;
+          if(items.length===0) return {id:uid(),type:"metric",title:"Pending Income This Month",value:0,format:"currency"};
+          return {id:uid(),type:"bar",title:`Pending Income This Month · $${total.toLocaleString()} total`,data:items,xKey:"name",yKey:"value",format:"currency"};
+        }
+      }]
     },
     // Portfolio value
     {
