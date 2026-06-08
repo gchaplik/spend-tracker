@@ -108,7 +108,7 @@ app.whenReady().then(async () => {
     process.env.SERVER_PORT = String(port)
     await import('../server/index.js')
     await waitForPort(port)
-    url = `http://127.0.0.1:${port}`
+    url = `http://localhost:${port}`
   }
 
   const win = new BrowserWindow({
