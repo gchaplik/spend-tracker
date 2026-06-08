@@ -11,7 +11,7 @@ const saveFPs = () => {};
 
 // IndexedDB helpers for persisting FileSystemDirectoryHandle across page loads
 const _idb = () => new Promise((res, rej) => {
-  const req = indexedDB.open('spend-tracker-fs', 1);
+  const req = indexedDB.open('cashheap-fs', 1);
   req.onupgradeneeded = () => req.result.createObjectStore('handles');
   req.onsuccess = () => res(req.result);
   req.onerror = () => rej(req.error);
@@ -2464,7 +2464,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
     if(typeFilter!=="all") data=data.filter(t=>t.type===typeFilter);
     const rows=[["Date","Type","Merchant/Source","Amount","Category","Note"],...data.map(t=>[t.date,t.type,t.merchant||t.source||"",t.amount,t.category||"Income",t.note||""])];
     const label=reportType==="monthly"?month:String(year);
-    downloadCSV(rows,`spend-tracker-transactions-${label}.csv`);
+    downloadCSV(rows,`cashheap-transactions-${label}.csv`);
   };
 
   const exportMonthlySummary=()=>{
@@ -2479,7 +2479,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
       const net=income-expenses;
       months.push([m,income.toFixed(2),expenses.toFixed(2),net.toFixed(2)]);
     });
-    downloadCSV([["Month","Income","Expenses","Net"],...months],`spend-tracker-summary-${year}.csv`);
+    downloadCSV([["Month","Income","Expenses","Net"],...months],`cashheap-summary-${year}.csv`);
   };
 
   const exportCategoryBreakdown=()=>{
@@ -2490,7 +2490,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
       const budget=(catBudgets[c]||0)*12;
       return[c,v.toFixed(2),budget?budget.toFixed(2):"—",budget?(v/budget*100).toFixed(1)+"%":"—"];
     })];
-    downloadCSV(rows,`spend-tracker-categories-${year}.csv`);
+    downloadCSV(rows,`cashheap-categories-${year}.csv`);
   };
 
   const totalIncome=txns.filter(t=>t.type==="income"&&t.date?.startsWith(String(year))).reduce((s,t)=>s+t.amount,0);
@@ -5069,7 +5069,7 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
   // Build compact system prompt — just tool names, no raw JS examples
   const buildSystemPrompt=()=>{
     const curMonth=new Date().toISOString().slice(0,7);
-    return `You are SpendTracker Assistant. Answer finance questions by calling the tools below. NEVER invent or estimate numbers — only state values returned by tools.
+    return `You are CashHeap Assistant. Answer finance questions by calling the tools below. NEVER invent or estimate numbers — only state values returned by tools.
 
 RULES:
 - Always call a tool before answering any financial question.
@@ -6230,7 +6230,7 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
         <div style={{ width:28, height:28, borderRadius:8, background:"linear-gradient(135deg,#0284C7,#0369a1)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
           <span style={{ color:"#fff", fontWeight:900, fontSize:13 }}>S</span>
         </div>
-        <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>SpendTracker</span>
+        <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>CashHeap</span>
         <button onClick={onShowWhatsNew} title="What's new" style={{ marginLeft:"auto", background:"#f0f9ff", border:"1px solid #bae6fd", cursor:"pointer", padding:"3px 7px", borderRadius:12, fontSize:10, color:"#0284C7", fontFamily:"inherit", fontWeight:600, flexShrink:0, whiteSpace:"nowrap" }}>New</button>
       </div>
 
@@ -6337,7 +6337,7 @@ function TermsOfServiceModal({onAccept,onDecline}){
         <div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",padding:"28px 32px 24px",flexShrink:0}}>
           <div style={{fontSize:11,fontWeight:700,color:"#93c5fd",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:8}}>Before You Continue</div>
           <div style={{fontSize:22,fontWeight:800,color:"#fff",letterSpacing:"-0.4px",marginBottom:4}}>Terms of Service & Privacy Policy</div>
-          <div style={{fontSize:12,color:"#94a3b8"}}>Spend Tracker · Effective {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})}</div>
+          <div style={{fontSize:12,color:"#94a3b8"}}>CashHeap · Effective {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})}</div>
         </div>
 
         {/* Scrollable body */}
@@ -6345,16 +6345,16 @@ function TermsOfServiceModal({onAccept,onDecline}){
 
           {[
             {h:"1. Acceptance of Terms",
-             b:`By accessing or using Spend Tracker ("the Application"), you agree to be bound by these Terms of Service. If you do not agree to these terms, do not use the Application. These terms apply to all users of the Application, including users who are contributors of content or other services.`},
+             b:`By accessing or using CashHeap ("the Application"), you agree to be bound by these Terms of Service. If you do not agree to these terms, do not use the Application. These terms apply to all users of the Application, including users who are contributors of content or other services.`},
 
             {h:"2. Description of Service",
-             b:`Spend Tracker is a personal financial management application designed to help individuals track income, expenses, bills, investments, and net worth. The Application runs locally on your device and may communicate with third-party AI services (such as Google Gemini or Ollama) when those features are enabled by the user.`},
+             b:`CashHeap is a personal financial management application designed to help individuals track income, expenses, bills, investments, and net worth. The Application runs locally on your device and may communicate with third-party AI services (such as Google Gemini or Ollama) when those features are enabled by the user.`},
 
             {h:"3. User Data & Privacy",
-             b:`All financial data you enter is stored locally on your device in a SQLite database. Spend Tracker does not transmit your financial data to any remote server operated by the Application's developers. When AI features are used, transaction summaries or queries may be sent to third-party AI providers (Google Gemini or a local Ollama instance) solely to generate responses. You are solely responsible for the accuracy, legality, and appropriateness of all data you enter. You acknowledge that you have the right to enter any financial information you input into the Application.`},
+             b:`All financial data you enter is stored locally on your device in a SQLite database. CashHeap does not transmit your financial data to any remote server operated by the Application's developers. When AI features are used, transaction summaries or queries may be sent to third-party AI providers (Google Gemini or a local Ollama instance) solely to generate responses. You are solely responsible for the accuracy, legality, and appropriateness of all data you enter. You acknowledge that you have the right to enter any financial information you input into the Application.`},
 
             {h:"4. No Financial Advice",
-             b:`The Application and its AI features (including the Jarvis assistant) provide informational summaries and calculations only. Nothing in the Application constitutes financial, investment, legal, or tax advice. You should consult a qualified professional before making any financial decisions. The developers of Spend Tracker are not liable for any financial decisions made based on information provided by the Application.`},
+             b:`The Application and its AI features (including the Jarvis assistant) provide informational summaries and calculations only. Nothing in the Application constitutes financial, investment, legal, or tax advice. You should consult a qualified professional before making any financial decisions. The developers of CashHeap are not liable for any financial decisions made based on information provided by the Application.`},
 
             {h:"5. AI-Generated Content",
              b:`Responses generated by integrated AI models (Google Gemini, Ollama, or any other configured model) are automated and may contain errors, inaccuracies, or omissions. AI-generated content is provided "as-is" without any warranty of accuracy. You agree not to rely solely on AI-generated responses for financial planning or decision-making.`},
@@ -6366,13 +6366,13 @@ function TermsOfServiceModal({onAccept,onDecline}){
              b:`The Application, including its source code, design, and documentation, is the intellectual property of the developer. All rights are reserved. You are granted a limited, non-exclusive, non-transferable licence to use the Application for personal, non-commercial purposes only. You may not distribute, sell, or sublicense the Application without express written permission.`},
 
             {h:"8. Third-Party Services",
-             b:`The Application integrates with optional third-party services including Google Gemini AI and Ollama. Your use of these services is governed by their respective terms of service and privacy policies. The developers of Spend Tracker are not responsible for the practices, availability, or content of third-party services. API keys you provide are stored locally on your device and are not accessible to the Application's developers.`},
+             b:`The Application integrates with optional third-party services including Google Gemini AI and Ollama. Your use of these services is governed by their respective terms of service and privacy policies. The developers of CashHeap are not responsible for the practices, availability, or content of third-party services. API keys you provide are stored locally on your device and are not accessible to the Application's developers.`},
 
             {h:"9. Disclaimer of Warranties",
              b:`The Application is provided "as is" and "as available" without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement. The developers do not warrant that the Application will be uninterrupted, error-free, or free of viruses or other harmful components. You assume full responsibility for all risks associated with your use of the Application.`},
 
             {h:"10. Limitation of Liability",
-             b:`To the fullest extent permitted by applicable law, the developers of Spend Tracker shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to loss of data, loss of profits, or financial losses, arising out of or related to your use of the Application, even if advised of the possibility of such damages. In no event shall the developers' total liability exceed the amount you paid for the Application.`},
+             b:`To the fullest extent permitted by applicable law, the developers of CashHeap shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to loss of data, loss of profits, or financial losses, arising out of or related to your use of the Application, even if advised of the possibility of such damages. In no event shall the developers' total liability exceed the amount you paid for the Application.`},
 
             {h:"11. Data Loss & Backups",
              b:`You are solely responsible for backing up your data. The Application stores data in a local database file. The developers are not liable for any data loss resulting from software bugs, hardware failure, accidental deletion, or any other cause. You are strongly encouraged to maintain regular backups of your database file.`},
@@ -6390,7 +6390,7 @@ function TermsOfServiceModal({onAccept,onDecline}){
              b:`These Terms of Service constitute the entire agreement between you and the developers regarding your use of the Application and supersede all prior agreements, understandings, and representations relating to the Application.`},
 
             {h:"16. Contact",
-             b:`If you have any questions about these Terms of Service or the Application, you may reach out through the project's GitHub repository at github.com/gchaplik/spend-tracker.`},
+             b:`If you have any questions about these Terms of Service or the Application, you may reach out through the project's GitHub repository at github.com/gchaplik/cashheap.`},
           ].map(({h,b})=>(
             <div key={h} style={{marginBottom:20}}>
               <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:6}}>{h}</div>
@@ -6399,7 +6399,7 @@ function TermsOfServiceModal({onAccept,onDecline}){
           ))}
 
           <div style={{borderTop:"1px solid #e2e8f0",paddingTop:16,marginTop:8,color:"#64748b",fontSize:11,fontStyle:"italic"}}>
-            Last updated: {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})} · Spend Tracker is a personal project. Use at your own discretion.
+            Last updated: {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})} · CashHeap is a personal project. Use at your own discretion.
           </div>
         </div>
 

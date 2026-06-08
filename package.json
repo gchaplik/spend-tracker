@@ -1,5 +1,5 @@
 {
-  "name": "spend-tracker",
+  "name": "cashheap",
   "version": "1.0.0",
   "type": "module",
   "main": "electron/main.mjs",
@@ -20,8 +20,8 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
-    "appId": "com.spendtracker.app",
-    "productName": "Spend Tracker",
+    "appId": "com.cashheap.app",
+    "productName": "CashHeap",
     "asar": true,
     "asarUnpack": [
       "**/better-sqlite3/**"
@@ -80,7 +80,7 @@
     "publish": {
       "provider": "github",
       "owner": "gchaplik",
-      "repo": "spend-tracker"
+      "repo": "cashheap"
     }
   },
   "dependencies": {

@@ -116,7 +116,7 @@ app.whenReady().then(async () => {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'Spend Tracker',
+    title: 'CashHeap',
     webPreferences: {
       preload: join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
@@ -161,8 +161,8 @@ app.whenReady().then(async () => {
 
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
     const dmgName = arch === 'arm64'
-      ? 'Spend Tracker-1.0.0-arm64.dmg'
-      : 'Spend Tracker-1.0.0.dmg'
+      ? 'CashHeap-1.0.0-arm64.dmg'
+      : 'CashHeap-1.0.0.dmg'
     const dmgPath = join(projectRoot, 'release', dmgName)
 
     // Resolve npm — load user's shell profile so PATH includes nvm/homebrew/volta etc.
@@ -194,14 +194,14 @@ app.whenReady().then(async () => {
 
       // Step 2: mount DMG, copy .app, unmount, relaunch — as detached script so it survives app quit
       const installScript = `
-        hdiutil info | grep -o '/Volumes/Spend Tracker[^\\t]*' | while read v; do hdiutil detach "$v" 2>/dev/null || true; done
+        hdiutil info | grep -o '/Volumes/CashHeap[^\\t]*' | while read v; do hdiutil detach "$v" 2>/dev/null || true; done
         MOUNT=$(hdiutil attach "${dmgPath}" -nobrowse | grep '/Volumes/' | awk -F'\\t' '{print $NF}')
-        rm -rf "/Applications/Spend Tracker.app"
-        cp -R "$MOUNT/Spend Tracker.app" /Applications/
-        xattr -cr "/Applications/Spend Tracker.app"
+        rm -rf "/Applications/CashHeap.app"
+        cp -R "$MOUNT/CashHeap.app" /Applications/
+        xattr -cr "/Applications/CashHeap.app"
         hdiutil detach "$MOUNT" -quiet
         sleep 1
-        open "/Applications/Spend Tracker.app"
+        open "/Applications/CashHeap.app"
       `
       const installer = spawn('bash', ['-c', installScript], {
         detached: true, stdio: 'ignore'
