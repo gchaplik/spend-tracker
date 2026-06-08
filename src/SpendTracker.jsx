@@ -4780,7 +4780,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
             {/* Dark Mode */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
               <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>🌙 Dark Mode</div>
+                <div style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>Dark Mode</div>
                 <div style={{fontSize:11,color:"#64748b",marginTop:1}}>Switch to a dark colour scheme</div>
               </div>
               <button onClick={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.darkMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
@@ -4790,7 +4790,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
 
             {/* Color Blind Mode */}
             <div>
-              <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:6}}>👁 Colour Blind Mode</div>
+              <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:6}}>Colour Blind Mode</div>
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {[
                   {v:"none",       l:"None",         d:"Default colours"},
@@ -4950,7 +4950,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
 
             {/* ── Local ── */}
             <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>💻 Local</div>
+              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>Local</div>
               <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Rebuild from your local source code changes. App quits, updates, and relaunches.</div>
               <button
                 onClick={triggerLocalUpdate}
@@ -4970,7 +4970,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
 
             {/* ── GitHub ── */}
             <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>🐙 GitHub</div>
+              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>GitHub</div>
               <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Check GitHub Releases for a new published version and download it in the background.</div>
               <button
                 onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub}
@@ -5005,7 +5005,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
 // ── Security Settings Section (manage existing account) ───────────────────────
 function SecuritySettingsSection({authConfig,onSave}){
   const AC=(authConfig&&typeof authConfig==="object"&&authConfig.pinHash)?authConfig:null;
-  const [phase,setPhase]=useState("idle"); // idle | changePIN | totpSetup
+  const [phase,setPhase]=useState("idle"); // idle | changePIN | totpSetup | changeEmail
   const [pinA,setPinA]=useState("");
   const [pinB,setPinB]=useState("");
   const [pinErr,setPinErr]=useState("");
@@ -5016,6 +5016,7 @@ function SecuritySettingsSection({authConfig,onSave}){
   const [totpInput,setTotpInput]=useState("");
   const [totpErr,setTotpErr]=useState("");
   const [autoLock,setAutoLock]=useState(AC?.autoLockMinutes||0);
+  const [emailInput,setEmailInput]=useState(AC?.email||"");
 
   const cfg=patch=>{const n={...AC,...patch};onSave(n);return n;};
 
@@ -5031,18 +5032,28 @@ function SecuritySettingsSection({authConfig,onSave}){
   const enrollBio=async()=>{
     setBioStatus("enrolling");setBioErr("");
     try{
+      // macOS: use native Touch ID via Electron IPC (most reliable)
+      if(window.electronBiometrics){
+        const ok=await window.electronBiometrics.available();
+        if(ok){
+          await window.electronBiometrics.prompt("verify your identity to enable Touch ID for CashHeap");
+          cfg({webauthnCredId:"native-touchid",webauthnEnabled:true,bioMethod:"touchid"});
+          setBioStatus("enrolled");return;
+        }
+      }
+      // Fallback: WebAuthn (Windows Hello, FIDO2 keys, etc.)
       const cred=await navigator.credentials.create({publicKey:{
         challenge:crypto.getRandomValues(new Uint8Array(32)),
-        rp:{name:"CashHeap",id:"localhost"},
+        rp:{name:"CashHeap",id:window.location.hostname||"localhost"},
         user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
         pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
         authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
         timeout:60000,
       }});
-      cfg({webauthnCredId:_b64ue(cred.rawId),webauthnEnabled:true});
+      cfg({webauthnCredId:_b64ue(cred.rawId),webauthnEnabled:true,bioMethod:"webauthn"});
       setBioStatus("enrolled");
     }catch(e){
-      setBioErr(e.name==="NotAllowedError"?"Cancelled.":`${e.message}`);
+      setBioErr(e.name==="NotAllowedError"?"Cancelled — try again.":`${e.message}`);
       setBioStatus(AC?.webauthnCredId?"enrolled":"idle");
     }
   };
@@ -5058,7 +5069,7 @@ function SecuritySettingsSection({authConfig,onSave}){
   const Row=({icon,label,sub,subColor,action})=>(
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9,marginBottom:8}}>
       <div>
-        <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{icon} {label}</div>
+        <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{icon?`${icon} `:""}{label}</div>
         {sub&&<div style={{fontSize:11,marginTop:1,color:subColor||"#64748b"}}>{sub}</div>}
       </div>
       {action}
@@ -5070,15 +5081,33 @@ function SecuritySettingsSection({authConfig,onSave}){
 
   if(!AC) return(
     <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
-      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:6}}>🔒 Account Security</div>
+      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:6}}>Account Security</div>
       <div style={{fontSize:12,color:"#64748b"}}>No account set up yet. You'll be prompted on next launch.</div>
     </div>
   );
 
   return(
     <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
-      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>🔒 Account Security</div>
-      <div style={{fontSize:11,color:"#64748b",marginBottom:16}}>Manage your PIN, biometrics, and two-factor authentication.</div>
+      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Account Security</div>
+      <div style={{fontSize:11,color:"#64748b",marginBottom:16}}>Manage your email, PIN, biometrics, and two-factor authentication.</div>
+      {/* Email */}
+      {phase!=="changePIN"&&phase!=="totpSetup"&&(
+        <div style={{padding:"11px 14px",background:"#f8fafc",borderRadius:9,marginBottom:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:6}}>Account Email</div>
+          {phase==="changeEmail"?(
+            <div style={{display:"flex",gap:8}}>
+              <input type="email" placeholder="you@example.com" value={emailInput} onChange={e=>setEmailInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&emailInput.includes("@")&&(cfg({email:emailInput.trim()}),setPhase("idle"))} style={{flex:1,padding:"7px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+              <button onClick={()=>{if(emailInput.includes("@")){cfg({email:emailInput.trim()});setPhase("idle");}}} style={{padding:"7px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save</button>
+              <button onClick={()=>setPhase("idle")} style={{padding:"7px 10px",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+            </div>
+          ):(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{fontSize:12,color:AC.email?"#1e293b":"#94a3b8"}}>{AC.email||"No email set"}</span>
+              <button onClick={()=>{setEmailInput(AC.email||"");setPhase("changeEmail");}} style={{padding:"6px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{AC.email?"Change":"Add"}</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Change PIN */}
       {phase==="changePIN"?(
@@ -5095,13 +5124,13 @@ function SecuritySettingsSection({authConfig,onSave}){
           </div>
         </div>
       ):(
-        <Row icon="🔑" label="PIN" sub="Your unlock PIN (PBKDF2 secured)"
+        <Row icon="" label="PIN" sub="Your unlock PIN (PBKDF2 secured)"
           action={<Btn onClick={()=>setPhase("changePIN")} label="Change PIN"/>}/>
       )}
 
       {/* Biometric */}
       {phase!=="changePIN"&&(
-        <Row icon="👆" label="Biometrics" sub={bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"} subColor={bioStatus==="enrolled"?"#16a34a":undefined}
+        <Row icon="" label="Biometrics" sub={bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"} subColor={bioStatus==="enrolled"?"#16a34a":undefined}
           action={bioStatus==="enrolled"
             ?<Btn onClick={()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("idle");}} label="Remove" color="#fee2e2" textColor="#dc2626"/>
             :<Btn onClick={enrollBio} label={bioStatus==="enrolling"?"…":"Enroll"} disabled={bioStatus==="enrolling"}/>
@@ -5126,7 +5155,7 @@ function SecuritySettingsSection({authConfig,onSave}){
           </div>
         </div>
       ):(
-        phase!=="changePIN"&&<Row icon="📱" label="Two-Factor Auth" sub={AC.totpEnabled?"Authenticator app active":"Not enabled"} subColor={AC.totpEnabled?"#16a34a":undefined}
+        phase!=="changePIN"&&<Row icon="" label="Two-Factor Auth" sub={AC.totpEnabled?"Authenticator app active":"Not enabled"} subColor={AC.totpEnabled?"#16a34a":undefined}
           action={AC.totpEnabled
             ?<Btn onClick={()=>cfg({totpSecret:null,totpEnabled:false})} label="Disable" color="#fee2e2" textColor="#dc2626"/>
             :<Btn onClick={()=>{setTotpInput("");setTotpErr("");setPhase("totpSetup");}} label="Set Up"/>
@@ -5137,7 +5166,7 @@ function SecuritySettingsSection({authConfig,onSave}){
       {/* Auto-lock */}
       {phase==="idle"&&(
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9}}>
-          <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>⏱ Auto-lock</div>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>Auto-lock</div>
           <select value={autoLock} onChange={e=>{const v=Number(e.target.value);setAutoLock(v);cfg({autoLockMinutes:v});}} style={{padding:"6px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
             <option value={0}>On launch only</option>
             <option value={1}>After 1 minute</option>
@@ -7157,6 +7186,7 @@ function AccountSetup({onComplete}){
   const [savedHash,setSavedHash]=useState(null);
   const [savedSalt,setSavedSalt]=useState(null);
   const [credId,setCredId]=useState(null);
+  const [bioMethod,setBioMethod]=useState("webauthn"); // "touchid"|"webauthn"
 
   const IS={width:"100%",padding:"12px 14px",borderRadius:10,border:"2px solid #e2e8f0",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",textAlign:"center",letterSpacing:6,transition:"border-color .2s"};
 
@@ -7175,16 +7205,27 @@ function AccountSetup({onComplete}){
   const enrollBio=async()=>{
     setBioStatus("enrolling");setBioErr("");
     try{
-      const challenge=crypto.getRandomValues(new Uint8Array(32));
+      // macOS: native Touch ID via Electron IPC
+      if(window.electronBiometrics){
+        const avail=await window.electronBiometrics.available();
+        if(avail){
+          await window.electronBiometrics.prompt("verify your identity to enable Touch ID for CashHeap");
+          setCredId("native-touchid");
+          setBioMethod("touchid");
+          setBioStatus("done");return;
+        }
+      }
+      // Fallback: WebAuthn (Windows Hello / FIDO2)
       const cred=await navigator.credentials.create({publicKey:{
-        challenge,
-        rp:{name:"CashHeap",id:"localhost"},
+        challenge:crypto.getRandomValues(new Uint8Array(32)),
+        rp:{name:"CashHeap",id:window.location.hostname||"localhost"},
         user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
         pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
         authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
         timeout:60000,
       }});
       setCredId(_b64ue(cred.rawId));
+      setBioMethod("webauthn");
       setBioStatus("done");
     }catch(e){
       setBioErr(e.name==="NotAllowedError"?"Cancelled — you can set this up later in Settings.":`Could not enroll: ${e.message}`);
@@ -7211,9 +7252,10 @@ function AccountSetup({onComplete}){
       pinSalt:savedSalt,
       webauthnCredId:credId||null,
       webauthnEnabled:!!credId,
+      bioMethod:credId?bioMethod:"webauthn",
       totpEnabled,
       totpSecret:totpEnabled?totpSecret:null,
-      autoLockMinutes:0,
+      autoLockMinutes:5,
     };
     onComplete(cfg);
   };
@@ -7377,19 +7419,25 @@ function LockScreen({authConfig,onUnlock}){
     if(!authConfig.webauthnCredId){return;}
     setBioBusy(true);setErr("");
     try{
-      const credId=_b64ud(authConfig.webauthnCredId);
-      const challenge=crypto.getRandomValues(new Uint8Array(32));
-      await navigator.credentials.get({publicKey:{
-        challenge,
-        allowCredentials:[{type:"public-key",id:credId}],
-        userVerification:"required",
-        timeout:60000,
-        rpId:"localhost",
-      }});
+      // macOS: native Touch ID via Electron IPC
+      if(authConfig.bioMethod==="touchid"&&window.electronBiometrics){
+        await window.electronBiometrics.prompt("unlock CashHeap");
+      } else {
+        // WebAuthn fallback (Windows Hello, FIDO2, etc.)
+        const credId=_b64ud(authConfig.webauthnCredId);
+        const challenge=crypto.getRandomValues(new Uint8Array(32));
+        await navigator.credentials.get({publicKey:{
+          challenge,
+          allowCredentials:[{type:"public-key",id:credId}],
+          userVerification:"required",
+          timeout:60000,
+          rpId:window.location.hostname||"localhost",
+        }});
+      }
       if(authConfig.totpEnabled&&authConfig.totpSecret){setPhase("totp");}
       else onUnlock();
     }catch(e){
-      if(e.name!=="NotAllowedError") setErr("Biometric failed. Use your PIN.");
+      if(e.name!=="NotAllowedError") setErr("Biometric failed — use your PIN.");
     }
     setBioBusy(false);
   };
@@ -7680,6 +7728,7 @@ export default function App(){
   const [tosAccepted,setTosAccepted]=useState(false);
   const [authConfig,setAuthConfig]=useState({});
   const [isUnlocked,setIsUnlocked]=useState(true); // becomes false once authConfig.enabled is confirmed
+  const [idleBlur,setIdleBlur]=useState(false); // pixelation overlay shown before full lock
   const lastActivityRef=useRef(Date.now());
   const lockTimerRef=useRef(null);
   const [toast,setToast]=useState(null);
@@ -7687,18 +7736,31 @@ export default function App(){
   const showToast=(msg,undoFn)=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast({msg,undoFn});toastTimer.current=setTimeout(()=>setToast(null),5000);};
   const dismissToast=()=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast(null);};
 
-  // Auto-lock on inactivity
+  // Auto-lock + idle pixelation
   useEffect(()=>{
-    if(!authConfig.enabled||!authConfig.autoLockMinutes) return;
-    const ms=authConfig.autoLockMinutes*60*1000;
-    const onActivity=()=>{lastActivityRef.current=Date.now();};
+    if(!authConfig.pinHash) return; // no account yet
+    const idleMs=(authConfig.autoLockMinutes||5)*60*1000;
+    const blurMs=idleMs*0.8; // show blur at 80% of lock time
+    const onActivity=()=>{
+      lastActivityRef.current=Date.now();
+      if(idleBlur){setIdleBlur(false);}
+    };
     document.addEventListener("mousemove",onActivity,{passive:true});
     document.addEventListener("keydown",onActivity,{passive:true});
+    document.addEventListener("click",onActivity,{passive:true});
     lockTimerRef.current=setInterval(()=>{
-      if(isUnlocked&&Date.now()-lastActivityRef.current>ms){setIsUnlocked(false);}
-    },15000);
-    return()=>{document.removeEventListener("mousemove",onActivity);document.removeEventListener("keydown",onActivity);clearInterval(lockTimerRef.current);};
-  },[authConfig.enabled,authConfig.autoLockMinutes,isUnlocked]);
+      if(!isUnlocked) return;
+      const idle=Date.now()-lastActivityRef.current;
+      if(idle>idleMs){setIdleBlur(false);setIsUnlocked(false);}
+      else if(idle>blurMs){setIdleBlur(true);}
+    },10000);
+    return()=>{
+      document.removeEventListener("mousemove",onActivity);
+      document.removeEventListener("keydown",onActivity);
+      document.removeEventListener("click",onActivity);
+      clearInterval(lockTimerRef.current);
+    };
+  },[authConfig.pinHash,authConfig.autoLockMinutes,isUnlocked,idleBlur]);
 
   useEffect(()=>{
     loadServerData().then(d => {
@@ -7786,7 +7848,7 @@ export default function App(){
   // First launch: no account exists yet → show setup wizard
   if(!authConfig.pinHash) return <AccountSetup onComplete={cfg=>{saveAuthConfig(cfg);setIsUnlocked(true);}}/>;
   // Locked → show lock screen
-  if(!isUnlocked) return <LockScreen authConfig={authConfig} onUnlock={()=>{setIsUnlocked(true);lastActivityRef.current=Date.now();}}/>;
+  if(!isUnlocked) return <LockScreen authConfig={authConfig} onUnlock={()=>{setIsUnlocked(true);setIdleBlur(false);lastActivityRef.current=Date.now();}}/>;
 
   const pendingCount=expected.filter(e=>!e.confirmed).length;
   const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
@@ -7816,6 +7878,15 @@ export default function App(){
       </defs>
     </svg>
     <UpdateBanner/>
+    {/* Idle pixelation overlay — shown before full auto-lock kicks in */}
+    {idleBlur&&isUnlocked&&(
+      <div onClick={()=>{lastActivityRef.current=Date.now();setIdleBlur(false);}}
+        style={{position:"fixed",inset:0,zIndex:9000,backdropFilter:"blur(24px) brightness(0.6)",WebkitBackdropFilter:"blur(24px) brightness(0.6)",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+        <MountainLogo size={48}/>
+        <div style={{color:"rgba(255,255,255,0.9)",fontSize:14,fontWeight:600,fontFamily:"system-ui,sans-serif"}}>CashHeap is idle</div>
+        <div style={{color:"rgba(255,255,255,0.5)",fontSize:12,fontFamily:"system-ui,sans-serif"}}>Click anywhere to continue</div>
+      </div>
+    )}
     {!tosAccepted&&<TermsOfServiceModal onAccept={()=>{setTosAccepted(true);saveServerData({tosAccepted:true});}} onDecline={()=>{ if(window.electronApp?.quit) window.electronApp.quit(); else window.close(); }}/>}
     <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff",filter:rootFilter}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}

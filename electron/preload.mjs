@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld('electronApp', {
   quit: () => ipcRenderer.send('quit-app'),
 })
 
+contextBridge.exposeInMainWorld('electronBiometrics', {
+  available: () => ipcRenderer.invoke('biometrics-available'),
+  prompt: (reason) => ipcRenderer.invoke('biometrics-prompt', reason),
+})
+
 contextBridge.exposeInMainWorld('electronLocalUpdate', {
   trigger: () => ipcRenderer.send('local-update'),
   onProgress: (cb) => ipcRenderer.on('local-update-progress', (_e, msg) => cb(msg)),
