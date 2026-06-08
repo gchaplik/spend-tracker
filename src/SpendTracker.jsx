@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell, ReferenceLine, PieChart, Pie, AreaChart, Area } from "recharts";
 import { DEFAULT_CATS, COLORS, CADENCES, NAV_ITEMS, DEFAULT_SETTINGS } from "./constants/index.js";
 import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/formatters.js";
@@ -1894,6 +1894,788 @@ function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+const BANK_PROFILES={
+  td:{name:"TD Bank",cols:{date:0,desc:1,debit:2,credit:3},dateFormat:"YYYY-MM-DD",skipRows:1},
+  rbc:{name:"RBC",cols:{date:0,desc:4,debit:3,credit:2},dateFormat:"MM/DD/YYYY",skipRows:1},
+  bmo:{name:"BMO",cols:{date:0,desc:2,debit:3,credit:4},dateFormat:"YYYY-MM-DD",skipRows:1},
+  scotiabank:{name:"Scotiabank",cols:{date:0,desc:1,debit:3,credit:4},dateFormat:"DD-MMM-YYYY",skipRows:1},
+  cibc:{name:"CIBC",cols:{date:0,desc:1,debit:2,credit:3},dateFormat:"YYYY-MM-DD",skipRows:1},
+  tangerine:{name:"Tangerine",cols:{date:0,desc:1,amount:2},dateFormat:"YYYY-MM-DD",skipRows:1},
+  custom:{name:"Custom",cols:{date:0,desc:1,amount:2},dateFormat:"YYYY-MM-DD",skipRows:1},
+};
+function parseCSVDate(raw,fmt){
+  if(!raw) return "";
+  raw=raw.trim().replace(/"/g,"");
+  if(fmt==="MM/DD/YYYY"){const p=raw.split("/");if(p.length===3)return p[2]+"-"+p[0].padStart(2,"0")+"-"+p[1].padStart(2,"0");}
+  if(fmt==="DD-MMM-YYYY"){const ms={Jan:"01",Feb:"02",Mar:"03",Apr:"04",May:"05",Jun:"06",Jul:"07",Aug:"08",Sep:"09",Oct:"10",Nov:"11",Dec:"12"};const p=raw.split("-");if(p.length===3)return p[2]+"-"+(ms[p[1]]||"01")+"-"+p[0].padStart(2,"0");}
+  return raw.slice(0,10);
+}
+function parseCSV(text){
+  const rows=[];let cur="",inQ=false;
+  for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){inQ=!inQ;}else if(c===','&&!inQ){rows[rows.length-1]?rows[rows.length-1].push(cur):rows.push([cur]);cur="";}else if((c==='\n'||c==='\r')&&!inQ){if(cur||rows.length){const last=rows[rows.length-1];if(last)last.push(cur);else rows.push([cur]);rows.push([]);}cur="";}else cur+=c;}
+  if(cur){const last=rows[rows.length-1];if(last)last.push(cur);else rows.push([cur]);}
+  return rows.filter(r=>r.some(c=>c.trim())).map(r=>r.map(c=>c.trim().replace(/^"|"$/g,"")));
+}
+function CSVImport({txns,cats,onImport}){
+  const [profile,setProfile]=useState("td");
+  const [step,setStep]=useState("upload"); // upload | map | review
+  const [rawRows,setRawRows]=useState([]);
+  const [headers,setHeaders]=useState([]);
+  const [mapping,setMapping]=useState({date:"",desc:"",debit:"",credit:"",amount:""});
+  const [skipRows,setSkipRows]=useState(1);
+  const [preview,setPreview]=useState([]); // parsed+deduped rows for review
+  const [checked,setChecked]=useState({});
+  const [imported,setImported]=useState(null);
+  const fileRef=useRef();
+
+  const onFile=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const rows=parseCSV(ev.target.result);
+      setRawRows(rows);
+      setHeaders(rows[0]||[]);
+      const p=BANK_PROFILES[profile];
+      const autoMap={};
+      if(p.cols.date!==undefined) autoMap.date=String(p.cols.date);
+      if(p.cols.desc!==undefined) autoMap.desc=String(p.cols.desc);
+      if(p.cols.debit!==undefined) autoMap.debit=String(p.cols.debit);
+      if(p.cols.credit!==undefined) autoMap.credit=String(p.cols.credit);
+      if(p.cols.amount!==undefined) autoMap.amount=String(p.cols.amount);
+      setMapping(autoMap);
+      setSkipRows(p.skipRows||1);
+      setStep("map");
+    };
+    reader.readAsText(f);
+  };
+
+  const buildPreview=()=>{
+    const p=BANK_PROFILES[profile];
+    const data=rawRows.slice(skipRows);
+    const parsed=data.map((row,i)=>{
+      const rawDate=mapping.date!==""?row[+mapping.date]:"";
+      const date=parseCSVDate(rawDate,p.dateFormat);
+      const merchant=(mapping.desc!==""?row[+mapping.desc]:"").replace(/\s+/g," ").trim();
+      let amount=0,type="expense";
+      if(mapping.amount!==""){
+        const raw=+(row[+mapping.amount]||"0").replace(/[,$]/g,"");
+        if(raw<0){amount=Math.abs(raw);type="expense";}else{amount=raw;type=raw>0?"income":"expense";}
+      } else {
+        const debit=+(mapping.debit!==""?(row[+mapping.debit]||"0").replace(/[,$]/g,""):0)||0;
+        const credit=+(mapping.credit!==""?(row[+mapping.credit]||"0").replace(/[,$]/g,""):0)||0;
+        if(debit>0){amount=debit;type="expense";}else if(credit>0){amount=credit;type="income";}
+      }
+      const cat=cats[0]||"Other";
+      // duplicate detection: same date + amount + merchant (fuzzy)
+      const isDupe=txns.some(t=>t.date===date&&Math.abs(t.amount-amount)<0.01&&(t.merchant||t.source||"").toLowerCase()===merchant.toLowerCase());
+      return {_id:i,date,merchant,amount,type,category:cat,isDupe,_raw:row};
+    }).filter(r=>r.amount>0&&r.date);
+    setPreview(parsed);
+    const sel={};parsed.forEach(r=>{if(!r.isDupe)sel[r._id]=true;});
+    setChecked(sel);
+    setStep("review");
+  };
+
+  const doImport=()=>{
+    const toImport=preview.filter(r=>checked[r._id]).map(r=>({
+      id:uid(),type:r.type,merchant:r.merchant,source:r.type==="income"?r.merchant:undefined,
+      amount:r.amount,date:r.date,category:r.type==="expense"?r.category:undefined,note:"CSV import",hasReceipt:false
+    }));
+    onImport(toImport);
+    setImported(toImport.length);
+    setStep("done");
+  };
+
+  const HL={background:"#f0f9ff",borderRadius:16,border:"1px solid #bae6fd",padding:24};
+  const selCount=Object.values(checked).filter(Boolean).length;
+
+  if(step==="done") return(
+    <div style={HL}>
+      <div style={{fontSize:32,marginBottom:12}}>✅</div>
+      <div style={{fontSize:20,fontWeight:700,color:"#0f172a",marginBottom:8}}>Import complete</div>
+      <div style={{color:"#475569",marginBottom:20}}>{imported} transaction{imported!==1?"s":""} added to your history.</div>
+      <Btn onClick={()=>{setStep("upload");setRawRows([]);setImported(null);if(fileRef.current)fileRef.current.value="";}}>Import another file</Btn>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>CSV Import</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Import transactions from your bank's CSV export. Duplicates are detected automatically.</div>
+
+      {/* Step pills */}
+      <div style={{display:"flex",gap:8,marginBottom:28}}>
+        {["upload","map","review"].map((s,i)=>(
+          <div key={s} style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:step===s?"#0284C7":["upload","map","review"].indexOf(step)>i?"#059669":"#e2e8f0",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{["upload","map","review"].indexOf(step)>i?"✓":i+1}</div>
+            <span style={{fontSize:12,fontWeight:600,color:step===s?"#0284C7":"#94a3b8",textTransform:"capitalize"}}>{s==="map"?"Map Columns":s==="review"?"Review & Import":s.charAt(0).toUpperCase()+s.slice(1)}</span>
+            {i<2&&<span style={{color:"#cbd5e1",fontSize:16}}>›</span>}
+          </div>
+        ))}
+      </div>
+
+      {step==="upload"&&(
+        <div style={HL}>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.08em",display:"block",marginBottom:8}}>Bank / Institution</label>
+            <select value={profile} onChange={e=>setProfile(e.target.value)} style={{...IS,width:"auto",minWidth:200}}>
+              {Object.entries(BANK_PROFILES).map(([k,v])=><option key={k} value={k}>{v.name}</option>)}
+            </select>
+          </div>
+          <div style={{border:"2px dashed #bae6fd",borderRadius:12,padding:40,textAlign:"center",cursor:"pointer",background:"#f8fafc"}} onClick={()=>fileRef.current?.click()}>
+            <div style={{fontSize:36,marginBottom:8}}>📂</div>
+            <div style={{fontWeight:600,color:"#0369a1",marginBottom:4}}>Click to select your CSV file</div>
+            <div style={{fontSize:12,color:"#94a3b8"}}>Exported from your online banking portal</div>
+            <input ref={fileRef} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={onFile}/>
+          </div>
+          <div style={{marginTop:16,fontSize:12,color:"#94a3b8"}}>
+            💡 In TD: Accounts → Download → CSV &nbsp;|&nbsp; RBC: My Accounts → Download Transactions → CSV &nbsp;|&nbsp; BMO: Accounts → Download → Spreadsheet
+          </div>
+        </div>
+      )}
+
+      {step==="map"&&(
+        <div style={HL}>
+          <div style={{fontWeight:700,fontSize:15,color:"#0f172a",marginBottom:16}}>Map CSV Columns</div>
+          <div style={{marginBottom:12,fontSize:12,color:"#64748b"}}>Auto-detected from <strong>{BANK_PROFILES[profile].name}</strong> format. Adjust if needed.</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            {[["date","Date *"],["desc","Merchant / Description *"],["debit","Debit Amount"],["credit","Credit Amount"],["amount","Single Amount Column"]].map(([k,label])=>(
+              <div key={k}>
+                <label style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:4}}>{label}</label>
+                <select value={mapping[k]||""} onChange={e=>setMapping(p=>({...p,[k]:e.target.value}))} style={{...IS,width:"100%"}}>
+                  <option value="">— not used —</option>
+                  {headers.map((h,i)=><option key={i} value={String(i)}>{h||`Column ${i+1}`}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:4}}>Skip header rows</label>
+            <input type="number" min={0} max={5} value={skipRows} onChange={e=>setSkipRows(+e.target.value)} style={{...IS,width:80}}/>
+          </div>
+          {/* Raw preview */}
+          <div style={{overflowX:"auto",marginBottom:16}}>
+            <table style={{borderCollapse:"collapse",fontSize:11,width:"100%"}}>
+              <tbody>{rawRows.slice(0,4).map((row,i)=><tr key={i} style={{background:i<skipRows?"#fef9c3":"#fff"}}>{row.map((c,j)=><td key={j} style={{padding:"4px 8px",border:"1px solid #e2e8f0",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c}</td>)}</tr>)}</tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <Btn v="secondary" onClick={()=>setStep("upload")}>← Back</Btn>
+            <Btn onClick={buildPreview} disabled={!mapping.date||!mapping.desc}>Preview Transactions →</Btn>
+          </div>
+        </div>
+      )}
+
+      {step==="review"&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div>
+              <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>{preview.length} transactions found</span>
+              <span style={{fontSize:12,color:"#64748b",marginLeft:12}}>{preview.filter(r=>r.isDupe).length} duplicates (unchecked) · {selCount} selected</span>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{const a={};preview.forEach(r=>{if(!r.isDupe)a[r._id]=true;});setChecked(a);}} style={{fontSize:11,padding:"5px 10px",border:"1px solid #bae6fd",borderRadius:7,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Select Non-Dupes</button>
+              <button onClick={()=>{const a={};preview.forEach(r=>a[r._id]=true);setChecked(a);}} style={{fontSize:11,padding:"5px 10px",border:"1px solid #bae6fd",borderRadius:7,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Select All</button>
+              <button onClick={()=>setChecked({})} style={{fontSize:11,padding:"5px 10px",border:"1px solid #e2e8f0",borderRadius:7,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>Deselect All</button>
+            </div>
+          </div>
+          <div style={{borderRadius:12,border:"1px solid #e2e8f0",overflow:"hidden",marginBottom:20}}>
+            <div style={{display:"grid",gridTemplateColumns:"36px 100px 1fr 100px 120px 36px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0",padding:"8px 12px",fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em"}}>
+              <div/>
+              <div>Date</div><div>Merchant</div><div>Amount</div><div>Category</div><div/>
+            </div>
+            <div style={{maxHeight:420,overflowY:"auto"}}>
+              {preview.map(r=>(
+                <div key={r._id} style={{display:"grid",gridTemplateColumns:"36px 100px 1fr 100px 120px 36px",alignItems:"center",padding:"8px 12px",borderBottom:"1px solid #f1f5f9",background:r.isDupe?"#fffbeb":checked[r._id]?"#f0fdf4":"#fff",opacity:r.isDupe&&!checked[r._id]?0.5:1}}>
+                  <input type="checkbox" checked={!!checked[r._id]} onChange={e=>setChecked(p=>({...p,[r._id]:e.target.checked}))} style={{accentColor:"#0284C7"}}/>
+                  <div style={{fontSize:12,color:"#64748b"}}>{r.date}</div>
+                  <div style={{fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.merchant}</div>
+                  <div style={{fontSize:12,fontWeight:700,color:r.type==="income"?"#059669":"#111827"}}>{r.type==="income"?"+":""}{fmt(r.amount)}</div>
+                  <select value={r.category||cats[0]} onChange={e=>setPreview(p=>p.map(x=>x._id===r._id?{...x,category:e.target.value}:x))} style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,padding:"2px 4px",background:"#fff",fontFamily:"inherit"}}>
+                    {r.type==="income"?<option value="income">Income</option>:cats.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {r.isDupe&&<span title="Possible duplicate" style={{fontSize:14}}>⚠️</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+            <Btn v="secondary" onClick={()=>setStep("map")}>← Back</Btn>
+            <Btn onClick={doImport} disabled={selCount===0}>Import {selCount} Transaction{selCount!==1?"s":""} →</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Cash Flow Forecast ────────────────────────────────────────────────────────
+function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
+  const DAYS=90;
+  // Current balance: sum of all accounts
+  const startBalance=accounts.reduce((s,a)=>s+(+a.balance||0),0);
+  const [threshold,setThreshold]=useState(()=>Math.round(startBalance*0.1/100)*100||500);
+  const [extraExpense,setExtraExpense]=useState("");
+  const [extraLabel,setExtraLabel]=useState("");
+
+  // Build day-by-day projection
+  const projection=useMemo(()=>{
+    const today_str=today();
+    const days=[];
+    let balance=startBalance;
+
+    // Average daily spend from last 60 days of transactions
+    const since=new Date();since.setDate(since.getDate()-60);
+    const sinceStr=since.toISOString().split("T")[0];
+    const recentSpend=txns.filter(t=>t.type==="expense"&&t.date>=sinceStr).reduce((s,t)=>s+t.amount,0);
+    const dailySpend=recentSpend/60;
+
+    // Build a map of scheduled events per date
+    const events={};
+    const addEvent=(date,label,amount,type)=>{
+      if(!events[date]) events[date]=[];
+      events[date].push({label,amount,type});
+    };
+
+    // Bills — find next due date for each unpaid bill
+    const curMonth=today_str.slice(0,7);
+    bills.forEach(b=>{
+      for(let m=0;m<3;m++){
+        const d=new Date();d.setDate(1);d.setMonth(d.getMonth()+m);
+        const ym=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+        const dueDay=String(b.dueDay||15).padStart(2,"0");
+        const dueDate=ym+"-"+dueDay;
+        const paid=billPayments.some(p=>p.billId===b.id&&p.month===ym);
+        if(!paid&&dueDate>=today_str) addEvent(dueDate,b.name,+(b.amount)||0,"bill");
+      }
+    });
+
+    // Expected income
+    expected.filter(e=>!e.confirmed&&e.date>=today_str).forEach(e=>{
+      addEvent(e.date,e.source,+e.amount||0,"income");
+    });
+
+    // Extra what-if expense
+    if(+extraExpense>0&&extraLabel){
+      const midDate=new Date();midDate.setDate(midDate.getDate()+30);
+      addEvent(midDate.toISOString().split("T")[0],extraLabel,+extraExpense,"extra");
+    }
+
+    for(let i=0;i<DAYS;i++){
+      const d=new Date();d.setDate(d.getDate()+i);
+      const dateStr=d.toISOString().split("T")[0];
+      balance-=dailySpend;
+      const dayEvents=events[dateStr]||[];
+      dayEvents.forEach(ev=>{
+        if(ev.type==="bill"||ev.type==="extra") balance-=ev.amount;
+        else balance+=ev.amount;
+      });
+      days.push({date:dateStr,balance:+balance.toFixed(2),events:dayEvents,day:i});
+    }
+    return days;
+  },[txns,bills,billPayments,expected,accounts,startBalance,extraExpense,extraLabel]);
+
+  const minBalance=Math.min(...projection.map(d=>d.balance));
+  const dangerDays=projection.filter(d=>d.balance<threshold);
+  const firstDanger=dangerDays[0];
+
+  // Chart data — weekly points
+  const chartData=projection.filter((_,i)=>i%7===0||i===DAYS-1).map(d=>({
+    date:new Date(d.date).toLocaleDateString("en-CA",{month:"short",day:"numeric"}),
+    Balance:+d.balance.toFixed(0),
+    Threshold:threshold,
+  }));
+
+  const GREEN="#059669",RED="#ef4444",AMBER="#f59e0b";
+  const healthColor=minBalance>=threshold?GREEN:minBalance>0?AMBER:RED;
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Cash Flow Forecast</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>90-day projection based on your spending patterns, upcoming bills, and expected income.</div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:28}}>
+        {[
+          {label:"Starting Balance",val:fmt(startBalance),color:"#0284C7",sub:accounts.length+" account"+(accounts.length!==1?"s":"")},
+          {label:"Lowest Point",val:fmt(minBalance),color:healthColor,sub:minBalance<threshold?"Below threshold":"Looking good"},
+          {label:"90-Day Outlook",val:fmt(projection[DAYS-1]?.balance||0),color:projection[DAYS-1]?.balance>startBalance?GREEN:RED,sub:projection[DAYS-1]?.balance>startBalance?"Net positive":"Net negative"},
+        ].map(c=>(
+          <div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:c.color}}>{c.val}</div>
+            <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{c.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {firstDanger&&(
+        <div style={{background:"#fef9c3",borderRadius:12,border:"1px solid #fde047",padding:"12px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div><strong>Balance warning:</strong> your balance is projected to drop below {fmt(threshold)} around <strong>{new Date(firstDanger.date).toLocaleDateString("en-CA",{month:"long",day:"numeric"})}</strong>.</div>
+        </div>
+      )}
+
+      {/* Chart */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:16}}>Projected Balance</div>
+        <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={chartData} margin={{top:4,right:16,bottom:0,left:0}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+            <XAxis dataKey="date" tick={{fontSize:10}} tickLine={false}/>
+            <YAxis tick={{fontSize:10}} tickLine={false} tickFormatter={v=>"$"+Math.round(v/1000)+"k"}/>
+            <Tooltip formatter={(v,n)=>[fmt(v),n]} contentStyle={{fontSize:12,borderRadius:8}}/>
+            <Area type="monotone" dataKey="Balance" stroke="#0284C7" fill="#bae6fd" fillOpacity={0.4} strokeWidth={2}/>
+            <Line type="monotone" dataKey="Threshold" stroke={RED} strokeDasharray="4 2" strokeWidth={1.5} dot={false}/>
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Controls */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>⚠️ Warning Threshold</div>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Alert when balance drops below:</div>
+          <input type="number" min={0} step={100} value={threshold} onChange={e=>setThreshold(+e.target.value)} style={{...IS,width:"100%"}}/>
+        </div>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧮 What-If Scenario</div>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Add a hypothetical one-time expense:</div>
+          <div style={{display:"flex",gap:8}}>
+            <input placeholder="Label" value={extraLabel} onChange={e=>setExtraLabel(e.target.value)} style={{...IS,flex:1}}/>
+            <input type="number" placeholder="$0" value={extraExpense} onChange={e=>setExtraExpense(e.target.value)} style={{...IS,width:90}}/>
+          </div>
+        </div>
+      </div>
+
+      {/* Upcoming events */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>Upcoming Events</div>
+        <div style={{maxHeight:240,overflowY:"auto"}}>
+          {projection.filter(d=>d.events.length>0).slice(0,20).map(d=>d.events.map((ev,i)=>(
+            <div key={d.date+i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9",fontSize:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span>{ev.type==="bill"?"🧾":ev.type==="income"?"💰":"🔮"}</span>
+                <div>
+                  <div style={{fontWeight:600}}>{ev.label}</div>
+                  <div style={{color:"#94a3b8"}}>{new Date(d.date).toLocaleDateString("en-CA",{month:"short",day:"numeric"})}</div>
+                </div>
+              </div>
+              <div style={{fontWeight:700,color:ev.type==="income"?GREEN:RED}}>{ev.type==="income"?"+":"-"}{fmt(ev.amount)}</div>
+            </div>
+          )))}
+          {projection.every(d=>d.events.length===0)&&<div style={{fontSize:12,color:"#94a3b8",textAlign:"center",padding:16}}>No scheduled events found. Add bills and expected income to see them here.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Debt Tracker ─────────────────────────────────────────────────────────────
+const DEBT_TYPES=["Credit Card","Car Loan","Student Loan","Mortgage","Line of Credit","Personal Loan","Other"];
+function DebtTracker({debts=[],onSaveDebts}){
+  const blank={id:"",name:"",type:"Credit Card",balance:"",rate:"",minPayment:"",cadence:"monthly",note:""};
+  const [form,setForm]=useState(blank);
+  const [editing,setEditing]=useState(false);
+  const [strategy,setStrategy]=useState("avalanche"); // avalanche | snowball
+  const [extra,setExtra]=useState(""); // extra monthly payment
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const save=()=>{
+    if(!form.name.trim()||!form.balance||!form.rate) return;
+    const item={...form,id:form.id||uid(),balance:+form.balance,rate:+form.rate,minPayment:+form.minPayment||0};
+    onSaveDebts(form.id?debts.map(d=>d.id===form.id?item:d):[...debts,item]);
+    setForm(blank);setEditing(false);
+  };
+  const remove=id=>onSaveDebts(debts.filter(d=>d.id!==id));
+  const edit=d=>{setForm({...d,balance:String(d.balance),rate:String(d.rate),minPayment:String(d.minPayment||"")});setEditing(true);};
+
+  // Payoff simulation
+  const simulate=useMemo(()=>{
+    if(!debts.length) return [];
+    const extraAmt=+extra||0;
+    let items=debts.map(d=>({...d,remaining:d.balance}));
+    // Sort by strategy
+    if(strategy==="avalanche") items.sort((a,b)=>b.rate-a.rate);
+    else items.sort((a,b)=>a.remaining-b.remaining);
+
+    const results=[];
+    items.forEach((debt,di)=>{
+      let bal=debt.balance;
+      const monthlyRate=debt.rate/100/12;
+      let months=0,totalInterest=0;
+      const payment=debt.minPayment+(di===0?extraAmt:0);
+      const effPay=Math.max(payment,bal*monthlyRate+1);
+      while(bal>0.01&&months<600){
+        const interest=bal*monthlyRate;
+        totalInterest+=interest;
+        bal=bal+interest-effPay;
+        if(bal<0)bal=0;
+        months++;
+      }
+      const payoffDate=new Date();payoffDate.setMonth(payoffDate.getMonth()+months);
+      results.push({...debt,months,totalInterest:+totalInterest.toFixed(2),payoffDate:payoffDate.toLocaleDateString("en-CA",{year:"numeric",month:"short"})});
+    });
+    return results;
+  },[debts,strategy,extra]);
+
+  const totalDebt=debts.reduce((s,d)=>s+d.balance,0);
+  const totalInterest=simulate.reduce((s,d)=>s+d.totalInterest,0);
+  const maxMonths=Math.max(...simulate.map(d=>d.months),1);
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Debt Tracker</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Track all debts and model payoff strategies to minimise interest paid.</div>
+
+      {/* Summary bar */}
+      {debts.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:24}}>
+          {[
+            {label:"Total Debt",val:fmt(totalDebt),color:"#ef4444"},
+            {label:"Total Interest (projected)",val:fmt(totalInterest),color:"#f59e0b"},
+            {label:"Debt-Free Date",val:simulate.length?simulate[simulate.length-1].payoffDate:"—",color:"#059669"},
+          ].map(c=>(
+            <div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div>
+              <div style={{fontSize:20,fontWeight:800,color:c.color}}>{c.val}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add/Edit form */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Debt":"➕ Add Debt"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
+          <Fld label="Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. TD Visa"/></Fld>
+          <Fld label="Type"><select style={IS} value={form.type} onChange={e=>set("type",e.target.value)}>{DEBT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
+          <Fld label="Current Balance *"><input type="number" style={IS} value={form.balance} onChange={e=>set("balance",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Interest Rate % *"><input type="number" style={IS} value={form.rate} onChange={e=>set("rate",e.target.value)} placeholder="19.99"/></Fld>
+          <Fld label="Min. Payment / mo"><input type="number" style={IS} value={form.minPayment} onChange={e=>set("minPayment",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Note"><input style={IS} value={form.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={save} disabled={!form.name.trim()||!form.balance||!form.rate}>{editing?"Save Changes":"Add Debt"}</Btn>
+          {editing&&<Btn v="secondary" onClick={()=>{setForm(blank);setEditing(false);}}>Cancel</Btn>}
+        </div>
+      </div>
+
+      {debts.length===0&&<div style={{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}}>No debts tracked yet. Add your first debt above to model your payoff plan.</div>}
+
+      {debts.length>0&&(<>
+        {/* Debt list */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",overflow:"hidden",marginBottom:24}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 100px 80px 90px 1fr 80px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0",padding:"8px 16px",fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em"}}>
+            <div>Debt</div><div>Balance</div><div>Rate</div><div>Min Pay</div><div style={{textAlign:"center"}}>Progress to zero</div><div/>
+          </div>
+          {debts.map(d=>{
+            const pct=Math.max(0,Math.min(100,100-(d.balance/(d.balance+0.01))*100));
+            return(
+              <div key={d.id} style={{display:"grid",gridTemplateColumns:"1fr 100px 80px 90px 1fr 80px",alignItems:"center",padding:"12px 16px",borderBottom:"1px solid #f1f5f9"}}>
+                <div><div style={{fontWeight:600,fontSize:13}}>{d.name}</div><div style={{fontSize:11,color:"#94a3b8"}}>{d.type}</div></div>
+                <div style={{fontWeight:700,color:"#ef4444",fontSize:13}}>{fmt(d.balance)}</div>
+                <div style={{fontSize:13,color:"#f59e0b",fontWeight:600}}>{d.rate}%</div>
+                <div style={{fontSize:13}}>{fmt(d.minPayment)}/mo</div>
+                <div style={{paddingRight:16}}>
+                  <div style={{background:"#f1f5f9",borderRadius:99,height:6}}>
+                    <div style={{height:6,borderRadius:99,background:"#ef4444",width:`${pct}%`,transition:"width .3s"}}/>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>edit(d)} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bae6fd",borderRadius:6,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Edit</button>
+                  <button onClick={()=>remove(d.id)} style={{fontSize:11,padding:"4px 8px",border:"1px solid #fecaca",borderRadius:6,cursor:"pointer",background:"#fff5f5",color:"#ef4444",fontFamily:"inherit"}}>✕</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Payoff strategy */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>Payoff Strategy</div>
+          <div style={{display:"flex",gap:16,marginBottom:16,flexWrap:"wrap"}}>
+            {[["avalanche","🏔️ Avalanche","Highest rate first — minimises total interest"],["snowball","⛄ Snowball","Lowest balance first — fastest wins, best for motivation"]].map(([k,l,d])=>(
+              <label key={k} style={{display:"flex",alignItems:"flex-start",gap:8,cursor:"pointer",flex:1,minWidth:200,background:strategy===k?"#f0f9ff":"#f8fafc",border:`1.5px solid ${strategy===k?"#0284C7":"#e2e8f0"}`,borderRadius:10,padding:12}}>
+                <input type="radio" name="strategy" value={k} checked={strategy===k} onChange={()=>setStrategy(k)} style={{marginTop:2,accentColor:"#0284C7"}}/>
+                <div><div style={{fontWeight:700,fontSize:12}}>{l}</div><div style={{fontSize:11,color:"#64748b"}}>{d}</div></div>
+              </label>
+            ))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
+            <label style={{fontSize:12,fontWeight:600,color:"#374151",whiteSpace:"nowrap"}}>Extra monthly payment:</label>
+            <input type="number" min={0} value={extra} onChange={e=>setExtra(e.target.value)} placeholder="$0" style={{...IS,width:120}}/>
+          </div>
+          {/* Payoff timeline bars */}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {simulate.map(d=>(
+              <div key={d.id}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+                  <span style={{fontWeight:600}}>{d.name}</span>
+                  <span style={{color:"#64748b"}}>Paid off {d.payoffDate} · {fmt(d.totalInterest)} interest</span>
+                </div>
+                <div style={{background:"#f1f5f9",borderRadius:99,height:10}}>
+                  <div style={{height:10,borderRadius:99,background:"linear-gradient(90deg,#0284C7,#0ea5e9)",width:`${(d.months/maxMonths)*100}%`,transition:"width .4s"}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+// ── Reports & Export ─────────────────────────────────────────────────────────
+function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacationTxns,settings}){
+  const [reportType,setReportType]=useState("monthly");
+  const [year,setYear]=useState(()=>new Date().getFullYear());
+  const [month,setMonth]=useState(()=>today().slice(0,7));
+  const [catFilter,setCatFilter]=useState("all");
+  const [typeFilter,setTypeFilter]=useState("all");
+
+  const years=useMemo(()=>{
+    const ys=new Set(txns.map(t=>t.date?.slice(0,4)).filter(Boolean));
+    ys.add(String(new Date().getFullYear()));
+    return [...ys].sort((a,b)=>b-a);
+  },[txns]);
+
+  // Escape CSV value
+  const esc=v=>`"${String(v||"").replace(/"/g,'""')}"`;
+
+  const downloadCSV=(rows,filename)=>{
+    const csv=rows.map(r=>r.map(esc).join(",")).join("\n");
+    const blob=new Blob([csv],{type:"text/csv"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=filename;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+
+  const exportTransactions=()=>{
+    let data=txns;
+    if(reportType==="monthly") data=data.filter(t=>t.date?.startsWith(month));
+    else if(reportType==="annual"||reportType==="tax") data=data.filter(t=>t.date?.startsWith(String(year)));
+    if(catFilter!=="all") data=data.filter(t=>t.category===catFilter||t.type===catFilter);
+    if(typeFilter!=="all") data=data.filter(t=>t.type===typeFilter);
+    const rows=[["Date","Type","Merchant/Source","Amount","Category","Note"],...data.map(t=>[t.date,t.type,t.merchant||t.source||"",t.amount,t.category||"Income",t.note||""])];
+    const label=reportType==="monthly"?month:String(year);
+    downloadCSV(rows,`spend-tracker-transactions-${label}.csv`);
+  };
+
+  const exportMonthlySummary=()=>{
+    const months=[];
+    const allTxns=[...txns,...vacationTxns];
+    // Build list of unique months in range
+    const ms=new Set(allTxns.map(t=>t.date?.slice(0,7)).filter(Boolean));
+    [...ms].filter(m=>m.startsWith(String(year))).sort().forEach(m=>{
+      const mt=allTxns.filter(t=>t.date?.startsWith(m));
+      const income=mt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+      const expenses=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+      const net=income-expenses;
+      months.push([m,income.toFixed(2),expenses.toFixed(2),net.toFixed(2)]);
+    });
+    downloadCSV([["Month","Income","Expenses","Net"],...months],`spend-tracker-summary-${year}.csv`);
+  };
+
+  const exportCategoryBreakdown=()=>{
+    const allTxns=[...txns,...vacationTxns].filter(t=>t.date?.startsWith(String(year))&&t.type==="expense");
+    const byCat={};
+    allTxns.forEach(t=>{const c=t.category||"Uncategorized";byCat[c]=(byCat[c]||0)+t.amount;});
+    const rows=[["Category","Total","Budget","% of Budget"],...Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>{
+      const budget=(catBudgets[c]||0)*12;
+      return[c,v.toFixed(2),budget?budget.toFixed(2):"—",budget?(v/budget*100).toFixed(1)+"%":"—"];
+    })];
+    downloadCSV(rows,`spend-tracker-categories-${year}.csv`);
+  };
+
+  const totalIncome=txns.filter(t=>t.type==="income"&&t.date?.startsWith(String(year))).reduce((s,t)=>s+t.amount,0);
+  const totalExpenses=[...txns,...vacationTxns].filter(t=>t.type==="expense"&&t.date?.startsWith(String(year))).reduce((s,t)=>s+t.amount,0);
+  const savingsRate=totalIncome>0?((totalIncome-totalExpenses)/totalIncome*100):0;
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Reports & Export</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Download summaries and transaction data as CSV files.</div>
+
+      {/* Annual snapshot */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:28}}>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em"}}>Year</span>
+            <select value={year} onChange={e=>setYear(+e.target.value)} style={{fontSize:12,border:"1px solid #e2e8f0",borderRadius:6,padding:"2px 6px",fontFamily:"inherit"}}>
+              {years.map(y=><option key={y}>{y}</option>)}
+            </select>
+          </div>
+          <div style={{fontSize:22,fontWeight:800,color:"#0f172a"}}>{year}</div>
+        </div>
+        {[
+          {label:"Income",val:fmt(totalIncome),color:"#059669"},
+          {label:"Expenses",val:fmt(totalExpenses),color:"#ef4444"},
+          {label:"Savings Rate",val:savingsRate.toFixed(1)+"%",color:savingsRate>=20?"#059669":savingsRate>=10?"#f59e0b":"#ef4444"},
+        ].map(c=>(
+          <div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:c.color}}>{c.val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Export cards */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
+
+        {/* Transactions export */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📋 Transaction Export</div>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>Export a filtered list of transactions to CSV.</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+            {[["monthly","Monthly"],["annual","Annual"],["tax","Tax Year"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setReportType(k)} style={{fontSize:11,padding:"5px 12px",borderRadius:20,border:`1.5px solid ${reportType===k?"#0284C7":"#e2e8f0"}`,background:reportType===k?"#0284C7":"#f8fafc",color:reportType===k?"#fff":"#64748b",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{l}</button>
+            ))}
+          </div>
+          {reportType==="monthly"&&(
+            <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{...IS,width:"100%",marginBottom:8}}/>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+            <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} style={IS}>
+              <option value="all">All Types</option><option value="expense">Expenses</option><option value="income">Income</option>
+            </select>
+            <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} style={IS}>
+              <option value="all">All Categories</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <Btn full onClick={exportTransactions}>⬇ Download CSV</Btn>
+        </div>
+
+        {/* Summary reports */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📅 Monthly Summary</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>All months in {year} — income, expenses, net per month.</div>
+            <Btn full onClick={exportMonthlySummary}>⬇ Download CSV</Btn>
+          </div>
+          <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>🏷️ Category Breakdown</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Annual spending by category vs budget for {year}.</div>
+            <Btn full onClick={exportCategoryBreakdown}>⬇ Download CSV</Btn>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Tax summary table */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧾 {year} Tax Year Summary</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}}>
+          {[
+            {label:"Total Income",val:fmt(totalIncome)},
+            {label:"Total Expenses",val:fmt(totalExpenses)},
+            {label:"Net Saved",val:fmt(Math.max(0,totalIncome-totalExpenses))},
+          ].map(r=>(
+            <div key={r.label} style={{background:"#f8fafc",borderRadius:10,padding:12}}>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>{r.label}</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#0f172a"}}>{r.val}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:12,color:"#94a3b8",fontStyle:"italic"}}>
+          💡 For tax deductions tracking, tag individual transactions as deductible (coming in Phase 2 Tax Tracker feature).
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Alerts & Notifications ────────────────────────────────────────────────────
+function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,onUpdateSettings}){
+  const alerts=useMemo(()=>{
+    const found=[];
+    const curMonth=month||today().slice(0,7);
+
+    // 1. Unpaid bills due within 3 days
+    const todayStr=today();
+    bills.filter(b=>b.active!==false).forEach(b=>{
+      const paid=billPayments.some(p=>p.billId===b.id&&p.month===curMonth);
+      if(paid) return;
+      const dueStr=curMonth+"-"+String(b.dueDay||15).padStart(2,"0");
+      const daysUntil=Math.ceil((new Date(dueStr)-new Date(todayStr))/(1000*60*60*24));
+      if(daysUntil<=3&&daysUntil>=-3){
+        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"🔴":"🟡",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
+      }
+    });
+
+    // 2. Category budget overages
+    const mt=[...txns].filter(t=>t.type==="expense"&&t.date?.startsWith(curMonth));
+    Object.entries(catBudgets).forEach(([cat,budget])=>{
+      if(!budget) return;
+      const spent=mt.filter(t=>t.category===cat).reduce((s,t)=>s+t.amount,0);
+      const pct=spent/budget*100;
+      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"🔴",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
+      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"🟡",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
+    });
+
+    // 3. Goals close to target
+    goals.forEach(g=>{
+      if(!g.target||!g.saved) return;
+      const pct=g.saved/g.target*100;
+      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"🎉",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
+      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"🟢",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
+    });
+
+    // 4. Large transaction alert
+    const largeThreshold=settings?.largeTransactionAlert||500;
+    const bigTxns=mt.filter(t=>t.amount>=largeThreshold);
+    bigTxns.forEach(t=>{
+      found.push({id:"large-"+t.id,type:"large",icon:"💸",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
+    });
+
+    return found;
+  },[txns,bills,billPayments,catBudgets,goals,month,settings]);
+
+  const [dismissed,setDismissed]=useState(new Set());
+  const visible=alerts.filter(a=>!dismissed.has(a.id));
+  const highCount=visible.filter(a=>a.severity==="high").length;
+  const medCount=visible.filter(a=>a.severity==="medium").length;
+
+  const severityBg={high:"#fef2f2",medium:"#fffbeb",info:"#f0fdf4"};
+  const severityBorder={high:"#fecaca",medium:"#fde047",info:"#bbf7d0"};
+
+  return(
+    <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>🔔 Alerts</div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{visible.length===0?"All clear":""+highCount+" urgent · "+medCount+" warnings"}</div>
+        </div>
+        {visible.length>0&&<button onClick={()=>setDismissed(new Set(alerts.map(a=>a.id)))} style={{fontSize:11,padding:"4px 10px",border:"1px solid #e2e8f0",borderRadius:7,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>Dismiss all</button>}
+      </div>
+      {visible.length===0&&(
+        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>✅ No alerts right now — you're on track!</div>
+      )}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {visible.map(a=>(
+          <div key={a.id} style={{display:"flex",alignItems:"flex-start",gap:10,background:severityBg[a.severity]||"#f8fafc",border:`1px solid ${severityBorder[a.severity]||"#e2e8f0"}`,borderRadius:10,padding:"10px 12px"}}>
+            <span style={{fontSize:18,flexShrink:0}}>{a.icon}</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:13,color:"#0f172a"}}>{a.title}</div>
+              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{a.detail}</div>
+            </div>
+            <button onClick={()=>setDismissed(p=>new Set([...p,a.id]))} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#94a3b8",padding:"0 2px",fontFamily:"inherit",lineHeight:1}}>×</button>
+          </div>
+        ))}
+      </div>
+      {/* Alert preferences */}
+      <div style={{marginTop:16,paddingTop:14,borderTop:"1px solid #f1f5f9"}}>
+        <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Alert Preferences</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,fontSize:12}}>
+          <label style={{color:"#374151",whiteSpace:"nowrap"}}>Large transaction threshold:</label>
+          <input type="number" min={50} step={50} value={settings?.largeTransactionAlert||500} onChange={e=>onUpdateSettings({...settings,largeTransactionAlert:+e.target.value})} style={{...IS,width:100}}/>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4805,6 +5587,7 @@ export default function App(){
   const [holdings,setHoldings]=useState([]);
   const [stockPrices,setStockPrices]=useState({});
   const [fxRate,setFxRate]=useState(1.38);
+  const [debts,setDebts]=useState([]);
   const [settings,setSettings]=useState(DEFAULT_SETTINGS);
   const [schema,setSchema]=useState(DEFAULT_SCHEMA);
   const [insightWidgets,setInsightWidgets]=useState([]);
@@ -4844,6 +5627,7 @@ export default function App(){
       if(d.schema) setSchema(d.schema);
       if(d.insightMessages) setInsightMessages(d.insightMessages);
       if(d.insightWidgets) setInsightWidgets(d.insightWidgets);
+      if(d.debts) setDebts(d.debts);
       if(d.tosAccepted) setTosAccepted(true);
       setReady(true);
     });
@@ -4862,6 +5646,7 @@ export default function App(){
   const saveAccounts=a=>{setAccounts(a);saveServerData({accounts:a})};
   const saveAccountHistory=h=>{setAccountHistory(h);saveServerData({accountHistory:h})};
   const saveHoldings=h=>{setHoldings(h);saveServerData({holdings:h})};
+  const saveDebts=d=>{setDebts(d);saveServerData({debts:d})};
   const saveSettings=s=>{setSettings(s);saveServerData({settings:s})};
   const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
   // Auto-persist insight chat & widgets whenever they change (skip initial empty load)
@@ -4937,7 +5722,7 @@ export default function App(){
       {/* Main content */}
       <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
+        {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
@@ -4951,6 +5736,10 @@ export default function App(){
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
         {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets}/>}
+        {view==="import"&&<CSVImport txns={txns} cats={cats} onImport={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));}}/>}
+        {view==="reports"&&<Reports txns={txns} bills={bills} billPayments={billPayments} cats={cats} catBudgets={catBudgets} goals={goals} vacations={vacations} vacationTxns={vacationTxns} settings={settings}/>}
+        {view==="cashflow"&&<CashFlowForecast txns={txns} bills={bills} billPayments={billPayments} expected={expected} accounts={accounts} settings={settings}/>}
+        {view==="debt"&&<DebtTracker debts={debts} onSaveDebts={saveDebts}/>}
         {view==="settings"&&<Settings settings={settings} onSave={saveSettings}/>}
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
         {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}

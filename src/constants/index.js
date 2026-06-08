@@ -21,6 +21,10 @@ export const NAV_ITEMS = [
   { k:"categories",l:"Categories",     icon:"▦", desc:"Define spending categories and set monthly budget caps with progress alerts." },
   { k:"manual",    l:"Add Expense",    icon:"+", desc:"Log a one-off or recurring expense directly into your transaction history." },
   { k:"income",    l:"Add Income",     icon:"+", desc:"Record a one-off or recurring income entry." },
+  { k:"import",    l:"CSV Import",      icon:"⇩", desc:"Import transactions from a bank CSV export — auto-maps columns and detects duplicates." },
+  { k:"reports",   l:"Reports",         icon:"▤", desc:"Export monthly summaries, annual tax reports, and filtered transaction CSVs." },
+  { k:"cashflow",  l:"Cash Flow",       icon:"◌", desc:"90-day forecast of your balance based on bills, income, and spending patterns." },
+  { k:"debt",      l:"Debt Tracker",   icon:"◐", desc:"Track loans, credit cards, and mortgage — payoff strategies and total interest." },
   { k:"folder",    l:"Folder Sync",    icon:"▤", desc:"Point the app at a local folder of receipts and import them all at once." },
   { k:"upload",    l:"Upload Receipts",icon:"↑", desc:"Upload individual receipt photos or PDFs and extract the details automatically." },
   { k:"settings",  l:"Settings",       icon:"⚙", desc:"Configure your name, Ollama model, and developer options.", isBottom:true },
@@ -31,5 +35,5 @@ export const TODAY = () => new Date().toISOString().split("T")[0];
 export const DEFAULT_SETTINGS = {
   name:"", ollamaUrl:"http://localhost:11434", ollamaModel:"phi3:mini",
   devMode:false, globalChatModel:"ollama", jarvisVoice:true,
-  darkMode:false, colorBlindMode:"none"
+  darkMode:false, colorBlindMode:"none", largeTransactionAlert:500
 };
