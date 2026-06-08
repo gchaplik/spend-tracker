@@ -5,6 +5,65 @@ import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/f
 import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
 import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const T={
+  bg:"#f9f9f9",surface:"#ffffff",overlay:"#f2f2f2",
+  border:"#e4e4e4",
+  tx1:"#111111",tx2:"#555555",tx3:"#aaaaaa",
+  accent:"#111111",accentBg:"#f2f2f2",accentMid:"#888888",
+  green:"#059669",greenBg:"#f0fdf4",
+  red:"#dc2626",redBg:"#fef2f2",
+  amber:"#d97706",amberBg:"#fffbeb",
+  shadow:"0 1px 3px rgba(0,0,0,0.07),0 1px 2px rgba(0,0,0,0.04)",
+  shadowMd:"0 4px 16px rgba(0,0,0,0.09)",
+  r:8,rCard:12,
+};
+
+// ── Auth / crypto helpers ─────────────────────────────────────────────────────
+function _b64e(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
+function _b64d(str){return Uint8Array.from(atob(str),c=>c.charCodeAt(0));}
+function _b64ue(buf){return _b64e(buf).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function _b64ud(str){return _b64d(str.replace(/-/g,'+').replace(/_/g,'/'));}
+async function hashPin(pin,salt){
+  const enc=new TextEncoder();
+  const km=await crypto.subtle.importKey('raw',enc.encode(pin),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(salt),iterations:200000,hash:'SHA-256'},km,256);
+  return _b64e(bits);
+}
+function genSalt(){return _b64e(crypto.getRandomValues(new Uint8Array(16)));}
+function _b32d(s){
+  const A='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  s=s.toUpperCase().replace(/=+$/,'');
+  let bits=0,val=0;const out=[];
+  for(const c of s){const i=A.indexOf(c);if(i<0)continue;val=(val<<5)|i;bits+=5;if(bits>=8){bits-=8;out.push((val>>bits)&0xff);}}
+  return new Uint8Array(out);
+}
+async function calcTOTP(secret,time=Date.now()){
+  const T=Math.floor(time/1000/30);
+  const ctr=new Uint8Array(8);new DataView(ctr.buffer).setUint32(4,T,false);
+  const ck=await crypto.subtle.importKey('raw',_b32d(secret),{name:'HMAC',hash:'SHA-1'},false,['sign']);
+  const sig=new Uint8Array(await crypto.subtle.sign('HMAC',ck,ctr));
+  const off=sig[19]&0xf;
+  const code=((sig[off]&0x7f)<<24)|(sig[off+1]<<16)|(sig[off+2]<<8)|sig[off+3];
+  return String(code%1000000).padStart(6,'0');
+}
+function genTOTPSecret(){
+  const A='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  return Array.from(crypto.getRandomValues(new Uint8Array(20))).map(b=>A[b%32]).join('');
+}
+
+// Fetch USD→CAD rate: use /latest for today or future dates (Frankfurter only has past data)
+const fetchUsdCad = (dateStr) => {
+  const endpoint = dateStr >= today()
+    ? "https://api.frankfurter.app/latest?from=USD&to=CAD"
+    : `https://api.frankfurter.app/${dateStr}?from=USD&to=CAD`;
+  return fetch(endpoint).then(r => r.json()).then(d => {
+    const rate = d?.rates?.CAD;
+    if (!rate) throw new Error("Rate unavailable");
+    return rate;
+  });
+};
+
 // receiptFPs is now persisted in data.json via App state; these are no-ops kept for safety
 const loadFPs = () => new Set();
 const saveFPs = () => {};
@@ -39,22 +98,22 @@ async function extractReceipt(b64, mtype, cats) {
   return JSON.parse(text.replace(/```[\w]*/g,"").replace(/```/g,"").trim());
 }
 
-const IS={width:"100%",padding:"10px 13px",borderRadius:10,border:"1.5px solid #bae6fd",fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:"#f0f9ff",color:"#1E293B",transition:"border-color 0.15s,box-shadow 0.15s"};
-const CA={background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",padding:22,boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"};
+const IS={width:"100%",padding:"9px 12px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:T.surface,color:T.tx1,transition:"border-color 0.15s"};
+const CA={background:T.surface,borderRadius:T.rCard,border:"none",padding:20,boxShadow:T.shadow};
 
 function Fld({label,children,style}){
-  return <div style={{marginBottom:16,...style}}>{label&&<label style={{display:"block",fontSize:11,fontWeight:600,color:"#0369a1",marginBottom:6,letterSpacing:"0.04em",textTransform:"uppercase"}}>{label}</label>}{children}</div>;
+  return <div style={{marginBottom:14,...style}}>{label&&<label style={{display:"block",fontSize:11,fontWeight:500,color:T.tx2,marginBottom:5}}>{label}</label>}{children}</div>;
 }
 function Btn({children,onClick,v,disabled,full,sm,style}){
   const vv=v||"primary";
   const variants={
-    primary:{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",color:"#fff",border:"none",boxShadow:"0 2px 10px rgba(2,132,199,0.35)"},
-    secondary:{background:"#f0f9ff",color:"#0369a1",border:"1.5px solid #bae6fd",boxShadow:"none"},
-    danger:{background:"#fff1f2",color:"#e11d48",border:"1.5px solid #fecdd3",boxShadow:"none"},
-    success:{background:"#f0fdf4",color:"#059669",border:"1.5px solid #bbf7d0",boxShadow:"none"},
+    primary:{background:T.accent,color:"#fff",border:"none",boxShadow:"none"},
+    secondary:{background:T.overlay,color:T.tx1,border:"1px solid "+T.border,boxShadow:"none"},
+    danger:{background:T.redBg,color:T.red,border:"1px solid #fecaca",boxShadow:"none"},
+    success:{background:T.greenBg,color:T.green,border:"1px solid #bbf7d0",boxShadow:"none"},
   };
   const s=variants[vv]||variants.primary;
-  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 13px":"10px 20px",borderRadius:10,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:600,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",letterSpacing:"0.01em",...s,...style}}>{children}</button>;
+  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 12px":"8px 16px",borderRadius:T.r,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:500,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",...s,...style}}>{children}</button>;
 }
 
 function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
@@ -62,21 +121,21 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
   const confirmed=mExp.filter(e=>e.confirmed).length;
   const overdue=mExp.filter(e=>!e.confirmed&&e.expectedDate<today()).length;
   return (
-    <div style={{gridColumn:"1/-1",background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"}}>
-      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",borderRadius:18}}>
+    <div style={{gridColumn:"1/-1",...CA}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:0,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",marginBottom:open?10:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Expected Income — {ml(month)}</span>
-          <span style={{fontSize:11,fontWeight:600,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
-          {overdue>0&&<span style={{fontSize:10,fontWeight:600,background:"#fee2e2",color:"#b91c1c",padding:"1px 8px",borderRadius:20}}>{overdue} overdue</span>}
+          <span style={{fontSize:11,fontWeight:500,color:T.tx3}}>Expected Income — {ml(month)}</span>
+          <span style={{fontSize:11,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
+          {overdue>0&&<span style={{fontSize:10,color:T.red,background:T.redBg,padding:"1px 8px",borderRadius:99}}>{overdue} overdue</span>}
         </div>
-        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,lineHeight:1}}>{open?"▲":"▼"}</span>
+        <span style={{fontSize:13,color:T.tx3,lineHeight:1}}>{open?"▲":"▼"}</span>
       </button>
-      {/* Collapsed: compact name + button chips */}
+      {/* Collapsed */}
       {!open&&(
-        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:6}}>
           {mExp.map(e=>(
-            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,padding:"6px 10px 6px 12px",borderRadius:10,background:e.confirmed?"#f0fdf4":"#fffbeb",border:`1px solid ${e.confirmed?"#bbf7d0":"#fde68a"}`}}>
-              <span style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>{e.source}</span>
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,padding:"6px 10px 6px 12px",borderRadius:T.r,background:T.overlay}}>
+              <span style={{fontSize:12,color:T.tx1}}>{e.source}</span>
               {e.confirmed
                 ?<button onClick={()=>onRevert(e.id)} title="Click to revert" style={{width:22,height:22,borderRadius:"50%",background:"#d1fae5",border:"2px solid #059669",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:GREEN}}>✓</button>
                 :<button onClick={()=>onConfirm(e.id)} title="Mark as received" style={{width:22,height:22,borderRadius:"50%",background:"#fef3c7",border:"2px solid #d97706",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:YELLOW}}>?</button>}
@@ -86,11 +145,11 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
       )}
       {/* Expanded: full view with amounts */}
       {open&&(
-        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0 16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0 16px"}}>
           {mExp.map(e=>(
-            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #f0f9ff",gap:8}}>
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid "+T.border,gap:8}}>
               <div style={{minWidth:0,flex:1}}>
-                <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
+                <span style={{fontSize:12,fontWeight:500,color:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
                 {e.note&&<span style={{fontSize:10,color:"#94a3b8"}}>{e.note}</span>}
               </div>
               <span style={{fontSize:12,fontWeight:700,color:e.confirmed?GREEN:YELLOW,flexShrink:0}}>{fmt(e.amount)}</span>
@@ -111,25 +170,25 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
     <div style={{...CA,marginBottom:14}}>
       <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Bills Due — {ml(month)}</span>
-          <span style={{fontSize:11,fontWeight:600,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
-          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED,fontWeight:600}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
+          <span style={{fontSize:11,fontWeight:500,color:T.tx3}}>Bills Due — {ml(month)}</span>
+          <span style={{fontSize:11,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
+          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
         </div>
-        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,flexShrink:0}}>{open?"▲":"▼"}</span>
+        <span style={{fontSize:13,color:T.tx3,flexShrink:0}}>{open?"▲":"▼"}</span>
       </button>
       {open&&(
-        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:6}}>
           {[...monthBills].sort((a,b)=>a.dueDay-b.dueDay).map(b=>{
             const paid=billPaid(b.id);
             return(
-              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 12px",borderRadius:10,background:paid?"#f0fdf4":"#fafafa",border:`1px solid ${paid?"#bbf7d0":"#f1f5f9"}`,cursor:"pointer",transition:"all 0.15s"}}>
+              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"7px 12px",borderRadius:T.r,background:paid?T.greenBg:T.overlay,cursor:"pointer",transition:"background 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                  <div style={{width:20,height:20,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?GREEN:"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    {paid&&<span style={{fontSize:10,color:GREEN}}>✓</span>}
+                  <div style={{width:18,height:18,borderRadius:"50%",background:paid?T.greenBg:"transparent",border:`1.5px solid ${paid?GREEN:T.border}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {paid&&<span style={{fontSize:9,color:GREEN}}>✓</span>}
                   </div>
-                  <span style={{fontSize:12,fontWeight:600,color:paid?"#94a3b8":"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
+                  <span style={{fontSize:12,color:paid?T.tx3:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
                 </div>
-                <span style={{fontSize:12,fontWeight:700,color:paid?"#94a3b8":RED,flexShrink:0}}>{fmt(b.amount)}</span>
+                <span style={{fontSize:12,fontWeight:500,color:paid?T.tx3:RED,flexShrink:0}}>{fmt(b.amount)}</span>
               </div>
             );
           })}
@@ -218,56 +277,56 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
     <div>
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:10}}>
-        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px",color:"#1E293B"}}>Dashboard</h2>
-        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500}}>
+        <h2 style={{margin:0,fontSize:18,fontWeight:600,color:T.tx1}}>Dashboard</h2>
+        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"7px 12px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:13,background:T.surface,fontFamily:"inherit",color:T.tx1,fontWeight:400}}>
           {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
         </select>
       </div>
 
       {/* Hero — Net Position */}
-      <div style={{...CA,padding:"28px 32px",marginBottom:14,borderLeft:`4px solid ${actNet>=0?GREEN:RED}`,background:actNet>=0?"linear-gradient(135deg,#f0fdf4 0%,#fff 60%)":"linear-gradient(135deg,#fff1f2 0%,#fff 60%)"}}>
-        <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:10}}>Net Position · {ml(month)}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:24,flexWrap:"wrap"}}>
-          <div style={{fontSize:48,fontWeight:800,color:actNet>=0?GREEN:RED,letterSpacing:"-2px",lineHeight:1}}>{fmt(actNet)}</div>
-          <div style={{paddingBottom:8,display:"flex",flexDirection:"column",gap:4}}>
-            {netDelta&&<div style={{fontSize:12,fontWeight:600,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
-            {pendingExp>0&&<div style={{fontSize:12,color:"#94a3b8"}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:700}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
+      <div style={{...CA,padding:"24px 28px",marginBottom:12}}>
+        <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:8}}>Net Position · {ml(month)}</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:40,fontWeight:600,color:actNet>=0?GREEN:RED,lineHeight:1}}>{fmt(actNet)}</div>
+          <div style={{paddingBottom:6,display:"flex",flexDirection:"column",gap:3}}>
+            {netDelta&&<div style={{fontSize:12,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
+            {pendingExp>0&&<div style={{fontSize:12,color:T.tx3}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:600}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
           </div>
         </div>
       </div>
 
       {/* Net worth strip */}
       {(accounts.length>0||holdings.length>0)&&(
-        <div style={{...CA,padding:"12px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",flexShrink:0}}>Net Worth</div>
-          <div style={{fontSize:18,fontWeight:800,color:netWorth>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(netWorth+(portfolioValue||0))}</div>
-          <div style={{fontSize:12,color:"#94a3b8",display:"flex",gap:14,flexWrap:"wrap"}}>
-            <span>Assets <span style={{color:GREEN,fontWeight:600}}>{fmt(totalAssets)}</span></span>
-            <span>Liabilities <span style={{color:RED,fontWeight:600}}>{fmt(totalLiab)}</span></span>
-            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:"#0284C7",fontWeight:600}}>{fmt(portfolioValue)}</span></span>}
+        <div style={{...CA,padding:"12px 18px",marginBottom:12,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,flexShrink:0}}>Net Worth</div>
+          <div style={{fontSize:18,fontWeight:600,color:netWorth>=0?GREEN:RED}}>{fmt(netWorth+(portfolioValue||0))}</div>
+          <div style={{fontSize:12,color:T.tx3,display:"flex",gap:14,flexWrap:"wrap"}}>
+            <span>Assets <span style={{color:GREEN,fontWeight:500}}>{fmt(totalAssets)}</span></span>
+            <span>Liabilities <span style={{color:RED,fontWeight:500}}>{fmt(totalLiab)}</span></span>
+            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:T.accent,fontWeight:500}}>{fmt(portfolioValue)}</span></span>}
           </div>
         </div>
       )}
       {/* Three stat cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Income</div>
-          <div style={{fontSize:28,fontWeight:800,color:GREEN,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(actualIncome)}</div>
-          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:12}}>
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Income</div>
+          <div style={{fontSize:26,fontWeight:600,color:GREEN,lineHeight:1}}>{fmt(actualIncome)}</div>
+          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
         </div>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Spending</div>
-          <div style={{fontSize:28,fontWeight:800,color:RED,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(spending)}</div>
-          {budgetTotal>0&&<div style={{fontSize:11,fontWeight:500,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
-          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
-          {vacSpend>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Spending</div>
+          <div style={{fontSize:26,fontWeight:600,color:RED,lineHeight:1}}>{fmt(spending)}</div>
+          {budgetTotal>0&&<div style={{fontSize:11,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
+          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
+          {vacSpend>0&&<div style={{fontSize:11,color:T.tx3,marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
         </div>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Expected Income</div>
-          <div style={{fontSize:28,fontWeight:800,color:YELLOW,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(totalExp)}</div>
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Expected Income</div>
+          <div style={{fontSize:26,fontWeight:600,color:YELLOW,lineHeight:1}}>{fmt(totalExp)}</div>
           {pendingExp>0
-            ?<div style={{fontSize:11,color:YELLOW,fontWeight:600,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
-            :mExp.length>0&&<div style={{fontSize:11,color:GREEN,fontWeight:600,marginTop:6}}>All received ✓</div>}
+            ?<div style={{fontSize:11,color:YELLOW,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
+            :mExp.length>0&&<div style={{fontSize:11,color:GREEN,marginTop:6}}>All received ✓</div>}
         </div>
       </div>
 
@@ -280,22 +339,22 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Goals strip */}
       {goals.length>0&&(
         <div style={{...CA,marginBottom:14,padding:"16px 20px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Savings Goals</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:10}}>Savings Goals</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
             {goals.map(g=>{
               const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
               return(
-                <div key={g.id} style={{padding:"10px 14px",borderRadius:10,background:"#fafafa",border:"1px solid #f1f5f9"}}>
+                <div key={g.id} style={{padding:"10px 14px",borderRadius:T.r,background:T.overlay}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                    <span style={{fontSize:16}}>{g.emoji}</span>
-                    <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
+                    <span style={{fontSize:15}}>{g.emoji}</span>
+                    <span style={{fontSize:12,fontWeight:500,color:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
                   </div>
-                  <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:5}}>
-                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s"}}/>
+                  <div style={{height:4,borderRadius:99,background:T.border,overflow:"hidden",marginBottom:5}}>
+                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?GREEN:T.accent,transition:"width 0.4s"}}/>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:11,fontWeight:600,color:g.color||"#0284C7"}}>{fmt(g.currentAmount)}</span>
-                    <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
+                    <span style={{fontSize:11,color:T.accent}}>{fmt(g.currentAmount)}</span>
+                    <span style={{fontSize:11,color:T.tx3}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
                   </div>
                 </div>
               );
@@ -307,29 +366,29 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:"#1E293B"}}>Spending by Category</div>
-          {catData.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
+          <div style={{fontSize:13,fontWeight:500,marginBottom:14,color:T.tx1}}>Spending by Category</div>
+          {catData.length===0?<div style={{color:T.tx3,fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
             const pct=d.budget>0?Math.min(d.amount/d.budget,1):0;
             const over=d.budget>0&&d.amount>d.budget;
             const warn=d.budget>0&&!over&&d.amount/d.budget>=0.8;
             return(
-              <div key={d.name} style={{marginBottom:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7}}>
-                    <span style={{width:7,height:7,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
-                    <span style={{fontSize:12,fontWeight:500,color:"#374151"}}>{d.name}</span>
-                    {over&&<span style={{fontSize:9,fontWeight:700,color:RED,background:"#fee2e2",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>OVER</span>}
-                    {warn&&<span style={{fontSize:9,fontWeight:700,color:YELLOW,background:"#fef3c7",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>NEAR</span>}
+              <div key={d.name} style={{marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{width:6,height:6,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:12,color:T.tx2}}>{d.name}</span>
+                    {over&&<span style={{fontSize:10,color:RED,background:T.redBg,padding:"1px 6px",borderRadius:99}}>over</span>}
+                    {warn&&<span style={{fontSize:10,color:YELLOW,background:T.amberBg,padding:"1px 6px",borderRadius:99}}>near</span>}
                   </div>
-                  <div style={{display:"flex",alignItems:"baseline",gap:5}}>
-                    <span style={{fontSize:12,fontWeight:700,color:over?RED:"#1E293B"}}>{fmt(d.amount)}</span>
-                    {d.budget>0&&<span style={{fontSize:11,color:"#cbd5e1"}}>/ {fmt(d.budget)}</span>}
+                  <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+                    <span style={{fontSize:12,fontWeight:500,color:over?RED:T.tx1}}>{fmt(d.amount)}</span>
+                    {d.budget>0&&<span style={{fontSize:11,color:T.tx3}}>/ {fmt(d.budget)}</span>}
                   </div>
                 </div>
-                <div style={{height:4,borderRadius:99,background:"#f1f5f9",overflow:"hidden"}}>
+                <div style={{height:3,borderRadius:99,background:T.border,overflow:"hidden"}}>
                   {d.budget>0
-                    ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?"#f59e0b":COLORS[i%COLORS.length],transition:"width 0.4s ease"}}/>
-                    :<div style={{height:"100%",borderRadius:99,width:"100%",background:COLORS[i%COLORS.length]+"55"}}/>}
+                    ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?YELLOW:T.accent,transition:"width 0.4s ease"}}/>
+                    :<div style={{height:"100%",borderRadius:99,width:"100%",background:T.accentMid+"66"}}/>}
                 </div>
               </div>
             );
@@ -337,10 +396,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
         <div style={CA}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
-            <div style={{display:"flex",background:"#f1f5f9",borderRadius:8,padding:3,gap:1}}>
+            <div style={{fontSize:13,fontWeight:500,color:T.tx1}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
+            <div style={{display:"flex",background:T.overlay,borderRadius:T.r,padding:3,gap:1}}>
               {[{k:"6mo",l:"6 Mo"},{ k:"year",l:curYear}].map(t=>(
-                <button key={t.k} onClick={()=>setChartTab(t.k)} style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",background:chartTab===t.k?"#fff":"transparent",color:chartTab===t.k?"#1E293B":"#94a3b8",boxShadow:chartTab===t.k?"0 1px 3px rgba(0,0,0,0.08)":"none",transition:"all 0.15s"}}>{t.l}</button>
+                <button key={t.k} onClick={()=>setChartTab(t.k)} style={{padding:"4px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:500,fontFamily:"inherit",background:chartTab===t.k?T.surface:"transparent",color:chartTab===t.k?T.tx1:T.tx3,boxShadow:chartTab===t.k?T.shadow:"none",transition:"all 0.15s"}}>{t.l}</button>
               ))}
             </div>
           </div>
@@ -350,10 +409,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
                 <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
                 <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
-                <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
-                <Line type="monotone" dataKey="Income" stroke={GREEN} strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="Expenses" stroke={RED} strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="Expected" stroke="#0284C7" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
+                <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:T.rCard,border:"none",boxShadow:T.shadowMd,fontSize:12}}/>
+                <Line type="monotone" dataKey="Income" stroke={GREEN} strokeWidth={2} dot={false}/>
+                <Line type="monotone" dataKey="Expenses" stroke={RED} strokeWidth={2} dot={false}/>
+                <Line type="monotone" dataKey="Expected" stroke={T.accentMid} strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
               </LineChart>
             </ResponsiveContainer>
           ):(
@@ -368,7 +427,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
                   <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
                   <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
-                  <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
+                  <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:T.rCard,border:"none",boxShadow:T.shadowMd,fontSize:12}}/>
                   <Bar dataKey="Income" fill={GREEN} radius={[3,3,0,0]}/>
                   <Bar dataKey="Expenses" fill={RED} radius={[3,3,0,0]}/>
                 </BarChart>
@@ -376,9 +435,9 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
             </>
           )}
           <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
-            {[{c:GREEN,l:"Income"},{c:RED,l:"Expenses"},...(chartTab==="6mo"?[{c:"#0284C7",l:"Expected",dashed:true}]:[])].map(item=>(
-              <span key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#94a3b8"}}>
-                {item.dashed?<span style={{width:14,borderTop:"2px dashed #0284C7",display:"inline-block"}}/>:<span style={{width:8,height:8,borderRadius:"50%",background:item.c,display:"inline-block"}}/>}{item.l}
+            {[{c:GREEN,l:"Income"},{c:RED,l:"Expenses"},...(chartTab==="6mo"?[{c:T.accentMid,l:"Expected",dashed:true}]:[])].map(item=>(
+              <span key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.tx3}}>
+                {item.dashed?<span style={{width:14,borderTop:"2px dashed "+T.accentMid,display:"inline-block"}}/>:<span style={{width:7,height:7,borderRadius:"50%",background:item.c,display:"inline-block"}}/>}{item.l}
               </span>
             ))}
           </div>
@@ -388,7 +447,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Budget Health */}
       {budgetHealth.length>0&&(
         <div style={{...CA,marginBottom:16}}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Budget Health — Last 6 Months</div>
+          <div style={{fontSize:13,fontWeight:500,marginBottom:14,color:T.tx1}}>Budget Health — Last 6 Months</div>
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead>
@@ -435,7 +494,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
           <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f8fafc"}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <div style={{width:36,height:36,borderRadius:10,background:t.type==="income"?"#f0fdf4":"#fafafa",border:"1px solid "+(t.type==="income"?"#bbf7d0":"#f1f5f9"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>
-                {t.type==="income"?"💰":"🧾"}
+                null
               </div>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -454,8 +513,20 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
 }
 
 function ExpectedIncome({expected,onUpdate,onConfirm}){
-  const [f,setF]=useState({source:"",amount:"",expectedDate:today(),recurrence:"once",note:""});
+  const [f,setF]=useState({source:"",amount:"",expectedDate:today(),recurrence:"once",note:"",currency:"CAD"});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [fxRate,setFxRate]=useState(null);
+  const [fxLoading,setFxLoading]=useState(false);
+  const [fxError,setFxError]=useState(null);
+  const [fxOverride,setFxOverride]=useState("");
+  useEffect(()=>{
+    if(f.currency!=="USD") return;
+    setFxLoading(true);setFxError(null);
+    fetchUsdCad(f.expectedDate)
+      .then(rate=>{setFxRate(rate);setFxOverride(String(rate.toFixed(4)));})
+      .catch(()=>setFxError("Could not fetch rate"))
+      .finally(()=>setFxLoading(false));
+  },[f.expectedDate,f.currency]);
   const [filter,setFilter]=useState("all");
   const [selectMode,setSelectMode]=useState(false);
   const [selected,setSelected]=useState(new Set());
@@ -486,13 +557,17 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   };
 
   const amtNum=parseFloat(f.amount)||0;
+  const isUSD=f.currency==="USD";
+  const effectiveRate=parseFloat(fxOverride)||fxRate||1;
+  const cadAmt=isUSD?+(amtNum*effectiveRate).toFixed(2):amtNum;
   const recurring=f.recurrence!=="once";
   const yearCount=recurring?countForYear(f.expectedDate,f.recurrence):1;
   const recurrenceLabel=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
 
   const add=()=>{
     if(!f.source.trim()||!f.amount) return;
-    const base={source:f.source.trim(),amount:amtNum,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null};
+    const fxMeta=isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.expectedDate}:{};
+    const base={source:f.source.trim(),amount:cadAmt,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null,...fxMeta};
     let items;
     if(recurring){
       const gid=uid();
@@ -502,9 +577,44 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
       items=[{...base,id:uid()}];
     }
     onUpdate([...expected,...items]);
-    setF({source:"",amount:"",expectedDate:today(),recurrence:"once",note:""});
+    setF({source:"",amount:"",expectedDate:today(),recurrence:"once",note:"",currency:"CAD"});
+    setFxRate(null);setFxOverride("");
   };
   const del=id=>onUpdate(expected.filter(e=>e.id!==id));
+
+  // ── Inline edit state ──────────────────────────────────────────────────────
+  const [editId,setEditId]=useState(null);
+  const [ed,setEd]=useState({});
+  const [edFxRate,setEdFxRate]=useState(null);
+  const [edFxLoading,setEdFxLoading]=useState(false);
+  const [edFxError,setEdFxError]=useState(null);
+  const [edFxOverride,setEdFxOverride]=useState("");
+
+  useEffect(()=>{
+    if(!editId||ed.currency!=="USD") return;
+    setEdFxLoading(true);setEdFxError(null);
+    fetchUsdCad(ed.expectedDate)
+      .then(rate=>{setEdFxRate(rate);setEdFxOverride(String(rate.toFixed(4)));})
+      .catch(()=>setEdFxError("Could not fetch rate"))
+      .finally(()=>setEdFxLoading(false));
+  },[editId,ed.expectedDate,ed.currency]);
+
+  const startEdit=e=>{
+    setEditId(e.id);
+    setEdFxRate(e.fxRate||null);
+    setEdFxOverride(e.fxRate?String(Number(e.fxRate).toFixed(4)):"");
+    setEd({source:e.source,amount:String(e.originalAmountUSD||e.amount),currency:e.originalAmountUSD?"USD":"CAD",expectedDate:e.expectedDate,note:e.note||""});
+  };
+  const saveEdit=()=>{
+    const amtNum=parseFloat(ed.amount)||0;
+    const edIsUSD=ed.currency==="USD";
+    const edRate=parseFloat(edFxOverride)||edFxRate||1;
+    const cadAmt=edIsUSD?+(amtNum*edRate).toFixed(2):amtNum;
+    const fxMeta=edIsUSD?{originalAmountUSD:amtNum,fxRate:edRate,fxDate:ed.expectedDate}:{originalAmountUSD:undefined,fxRate:undefined,fxDate:undefined};
+    onUpdate(expected.map(e=>e.id===editId?{...e,...fxMeta,source:ed.source.trim()||e.source,amount:cadAmt,expectedDate:ed.expectedDate,note:ed.note}:e));
+    setEditId(null);
+  };
+
   const pending=expected.filter(e=>!e.confirmed);
   const confirmed=expected.filter(e=>e.confirmed);
   const shown=filter==="pending"?pending:filter==="confirmed"?confirmed:expected;
@@ -540,20 +650,53 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
         <div style={CA}>
           <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Expected Income</div>
           <Fld label="Source"><input style={IS} value={f.source} onChange={e=>set("source",e.target.value)} placeholder="e.g. Salary, Client payment"/></Fld>
-          <Fld label="Amount ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Currency">
+            <div style={{display:"flex",gap:8}}>
+              {["CAD","USD"].map(cur=>(
+                <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                  {cur==="CAD"?"CAD":"USD"}
+                </button>
+              ))}
+            </div>
+          </Fld>
+          <Fld label={`Amount (${f.currency})`}><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
           <Fld label="Expected Date"><input style={IS} type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)}/></Fld>
           <Fld label="Recurrence">
             <select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>
               {CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}
             </select>
           </Fld>
-          {recurring&&amtNum>0&&(
+          {isUSD&&amtNum>0&&(
+            <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"11px 14px",marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
+                <span style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD</span>
+                {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate...</span>}
+                {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
+                {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.expectedDate}</span>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+                <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+                <input style={{...IS,width:90,padding:"5px 8px",fontSize:13}} type="number" step="0.0001" value={fxOverride} onChange={e=>setFxOverride(e.target.value)} placeholder={fxLoading?"…":"rate"}/>
+                <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:12,color:"#0369a1"}}>${amtNum.toFixed(2)} USD × {effectiveRate.toFixed(4)}</span>
+                <span style={{fontSize:16,fontWeight:800,color:"#0284C7"}}>{fmt(cadAmt)} CAD</span>
+              </div>
+            </div>
+          )}
+          {recurring&&amtNum>0&&!isUSD&&(
             <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
-              {yearCount} {recurrenceLabel.toLowerCase()} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+              {yearCount} {recurrenceLabel.toLowerCase()} payments of <strong>{fmt(amtNum)} CAD</strong> = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)} CAD</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+            </div>
+          )}
+          {recurring&&amtNum>0&&isUSD&&cadAmt>0&&(
+            <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
+              {yearCount} {recurrenceLabel.toLowerCase()} payments of <strong>${amtNum.toFixed(2)} USD</strong> ({fmt(cadAmt)} CAD each) = <strong style={{fontWeight:800}}>{fmt(cadAmt*yearCount)} CAD</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
             </div>
           )}
           <Fld label="Note (optional)" style={{marginBottom:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-          <Btn onClick={add} disabled={!f.source.trim()||!f.amount} full>{recurring?`Add ${yearCount} Entries`:"Add to Schedule"}</Btn>
+          <Btn onClick={add} disabled={!f.source.trim()||!f.amount||(isUSD&&!effectiveRate)} full>{recurring?`Add ${yearCount} Entries`:"Add to Schedule"}</Btn>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           {sumCards.map(item=>(
@@ -585,20 +728,65 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
         )}
         {sorted.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No items</div>:sorted.map(e=>{
           const isPast=!e.confirmed&&e.expectedDate<today();
+          const edIsUSD=ed.currency==="USD";
+          const edRate=parseFloat(edFxOverride)||edFxRate||1;
+          const edAmtNum=parseFloat(ed.amount)||0;
+          const edCadAmt=edIsUSD?+(edAmtNum*edRate).toFixed(2):edAmtNum;
+
+          if(editId===e.id) return(
+            <div key={e.id} style={{padding:"14px 0",borderBottom:"1px solid #e0f2fe",background:"#f8fbff",borderRadius:8,marginBottom:2,paddingLeft:10,paddingRight:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <Fld label="Source" style={{gridColumn:"1/-1"}}><input style={IS} value={ed.source} onChange={e2=>setEd(p=>({...p,source:e2.target.value}))} autoFocus/></Fld>
+                <Fld label="Currency" style={{gridColumn:"1/-1"}}>
+                  <div style={{display:"flex",gap:8}}>
+                    {["CAD","USD"].map(cur=>(
+                      <button key={cur} onClick={()=>setEd(p=>({...p,currency:cur}))} style={{flex:1,padding:"6px 0",borderRadius:8,border:`2px solid ${ed.currency===cur?"#0284C7":"#e2e8f0"}`,background:ed.currency===cur?"#f0f9ff":"#fff",color:ed.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                        {cur==="CAD"?"CAD":"USD"}
+                      </button>
+                    ))}
+                  </div>
+                </Fld>
+                <Fld label={`Amount (${ed.currency})`}><input style={IS} type="number" value={ed.amount} onChange={e2=>setEd(p=>({...p,amount:e2.target.value}))}/></Fld>
+                <Fld label="Expected Date"><input style={IS} type="date" value={ed.expectedDate} onChange={e2=>setEd(p=>({...p,expectedDate:e2.target.value}))}/></Fld>
+                <Fld label="Note" style={{gridColumn:"1/-1"}}><input style={IS} value={ed.note} onChange={e2=>setEd(p=>({...p,note:e2.target.value}))} placeholder="Optional"/></Fld>
+              </div>
+              {edIsUSD&&edAmtNum>0&&(
+                <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+                    <input style={{...IS,width:90,padding:"4px 8px",fontSize:13}} type="number" step="0.0001" value={edFxOverride} onChange={e2=>setEdFxOverride(e2.target.value)} placeholder={edFxLoading?"…":"rate"}/>
+                    <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+                    {edFxLoading&&<span style={{fontSize:11,color:"#0284C7",marginLeft:"auto"}}>Fetching…</span>}
+                    {edFxError&&<span style={{fontSize:11,color:"#dc2626",marginLeft:"auto"}}>{edFxError}</span>}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{fontSize:12,color:"#0369a1"}}>${edAmtNum.toFixed(2)} USD × {edRate.toFixed(4)}</span>
+                    <span style={{fontSize:15,fontWeight:800,color:"#0284C7"}}>{fmt(edCadAmt)} CAD</span>
+                  </div>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8}}>
+                <Btn sm onClick={saveEdit} disabled={!ed.source.trim()||!ed.amount}>Save</Btn>
+                <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+              </div>
+            </div>
+          );
+
           return (
-            <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid #f3f4f6",flexWrap:"wrap",background:selectMode&&selected.has(e.id)?"#eff6ff":"transparent",borderRadius:4}}>
+            <div key={e.id} onClick={()=>!selectMode&&!e.confirmed&&startEdit(e)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid #f3f4f6",flexWrap:"wrap",background:selectMode&&selected.has(e.id)?"#eff6ff":"transparent",borderRadius:4,cursor:!selectMode&&!e.confirmed?"pointer":"default"}}>
               {selectMode&&<input type="checkbox" checked={selected.has(e.id)} onChange={()=>toggleSel(e.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
               <div style={{flex:1,minWidth:160}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <span style={{fontSize:13,fontWeight:500}}>{e.source}</span>
                   {isPast&&<span style={{fontSize:10,background:"#fee2e2",color:"#b91c1c",padding:"1px 7px",borderRadius:20,fontWeight:500}}>Overdue</span>}
+                  {!e.confirmed&&!selectMode&&<span style={{fontSize:10,color:"#cbd5e1"}}>click to edit</span>}
                 </div>
-                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}</div>
+                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}{e.originalAmountUSD?" · $"+e.originalAmountUSD.toFixed(2)+" USD @ "+Number(e.fxRate).toFixed(4):""}</div>
                 {e.confirmed&&<div style={{fontSize:11,color:"#059669",marginTop:1}}>Confirmed {e.confirmedDate}</div>}
               </div>
               <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#0284C7",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
-              {!selectMode&&<div style={{display:"flex",gap:6,flexShrink:0}}>
-                {!e.confirmed&&<Btn v="success" sm onClick={()=>onConfirm(e.id)}>Confirm Payment</Btn>}
+              {!selectMode&&<div style={{display:"flex",gap:6,flexShrink:0}} onClick={ev=>ev.stopPropagation()}>
+                {!e.confirmed&&<Btn v="success" sm onClick={()=>onConfirm(e.id)}>Confirm</Btn>}
                 <button onClick={()=>del(e.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>Remove</button>
               </div>}
             </div>
@@ -667,7 +855,7 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
         loadFromHandle(handle, receiptFPs);
       } else {
         setNeedsPermission(true);
-        setStatus({ t: "info", m: `Click "Restore Access" to reconnect to 📁 ${handle.name}.` });
+        setStatus({ t: "info", m: `Click "Restore Access" to reconnect to ${handle.name}.` });
       }
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -818,8 +1006,8 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
         <input ref={folderRef} type="file" webkitdirectory="" multiple onChange={handleFolderInput} style={{display:"none"}}/>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
           {needsPermission
-            ? <Btn onClick={restoreAccess} disabled={syncing} full v="secondary">🔑 Restore Access to 📁 {dirName}</Btn>
-            : <Btn onClick={pickFolder} disabled={syncing} full v="secondary">{dirName ? `📁 ${dirName}` : "Pick Folder"}</Btn>}
+            ? <Btn onClick={restoreAccess} disabled={syncing} full v="secondary">Restore Access to Folder: {dirName}</Btn>
+            : <Btn onClick={pickFolder} disabled={syncing} full v="secondary">{dirName ? dirName : "Pick Folder"}</Btn>}
           <Btn onClick={scan} disabled={syncing || pendingFiles.length === 0} full>
             {syncing ? "Scanning…" : `Scan${pendingFiles.length > 0 ? ` ${pendingFiles.length} File${pendingFiles.length !== 1 ? "s" : ""}` : ""} with AI`}
           </Btn>
@@ -916,7 +1104,7 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
           onDrop={e=>{e.preventDefault();loadFiles(e.dataTransfer.files);}}
           style={{border:"2px dashed #c7d2fe",borderRadius:16,padding:"36px 20px",textAlign:"center",cursor:"pointer",background:"linear-gradient(135deg,#fafbff,#f5f3ff)",userSelect:"none",transition:"border-color 0.15s"}}
         >
-          <div style={{fontSize:28,marginBottom:10}}>📄</div>
+          
           <div style={{fontWeight:700,fontSize:14,marginBottom:4,color:"#1E293B"}}>Tap to select receipts or drag and drop</div>
           <div style={{fontSize:12,color:"#94a3b8",fontWeight:500}}>JPG, PNG, HEIC, PDF — multiple files supported</div>
           <input ref={ref} type="file" multiple accept="image/*,application/pdf" style={{display:"none"}} onChange={e=>loadFiles(e.target.files)}/>
@@ -1003,18 +1191,41 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
 
 function RecurringForm({title,type,cats,onSaveMultiple}){
   const initCat=cats[0]||"Other";
-  const [f,setF]=useState({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12"});
+  const [f,setF]=useState({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12",currency:"CAD"});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [fxRate,setFxRate]=useState(null);   // null = not fetched yet
+  const [fxLoading,setFxLoading]=useState(false);
+  const [fxError,setFxError]=useState(null);
+  const [fxOverride,setFxOverride]=useState("");  // manual override
+
+  // Fetch historical USD→CAD rate whenever date or currency changes
+  useEffect(()=>{
+    if(f.currency!=="USD") return;
+    setFxLoading(true);setFxError(null);
+    fetchUsdCad(f.date)
+      .then(rate=>{setFxRate(rate);setFxOverride(String(rate.toFixed(4)));})
+      .catch(()=>setFxError("Could not fetch rate"))
+      .finally(()=>setFxLoading(false));
+  },[f.date,f.currency,type]);
+
   const recurring=f.recurrence!=="once";
   const count=recurring?Math.max(1,parseInt(f.occurrences)||1):1;
   const amtNum=parseFloat(f.amount)||0;
+  const isUSD=f.currency==="USD";
+  const effectiveRate=parseFloat(fxOverride)||fxRate||1;
+  const cadAmt=isUSD?+(amtNum*effectiveRate).toFixed(2):amtNum;
+
   const submit=()=>{
     if(!f.merchant.trim()||!f.amount) return;
-    const base=type==="expense"?{type:"expense",merchant:f.merchant.trim(),amount:amtNum,category:f.category,note:f.note,hasReceipt:false}:{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),amount:amtNum,note:f.note};
+    const fxMeta=isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.date}:{};
+    const base=type==="expense"
+      ?{type:"expense",merchant:f.merchant.trim(),amount:cadAmt,category:f.category,note:f.note,hasReceipt:false,...fxMeta}
+      :{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),amount:cadAmt,...fxMeta,note:f.note};
     const dates=recurring?buildDates(f.date,f.recurrence,count):[f.date];
     const gid=recurring?uid():undefined;
     onSaveMultiple(dates.map(date=>({...base,id:uid(),date,...(gid?{groupId:gid,cadence:f.recurrence}:{})})));
-    setF({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12"});
+    setF({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12",currency:"CAD"});
+    setFxRate(null);setFxOverride("");
   };
   const lbl=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
   return (
@@ -1022,14 +1233,59 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>{title}</h2>
       <div style={CA}>
         <Fld label={type==="income"?"Source":"Merchant / Description"}><input style={IS} value={f.merchant} onChange={e=>set("merchant",e.target.value)} placeholder={type==="income"?"e.g. Salary, Freelance":"e.g. Walmart, Netflix, Rent"}/></Fld>
-        <Fld label="Amount per payment ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+        {/* Currency selector */}
+        <Fld label="Currency">
+          <div style={{display:"flex",gap:8}}>
+            {["CAD","USD"].map(cur=>(
+              <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"8px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                {cur==="CAD"?"CAD":"USD"}
+              </button>
+            ))}
+          </div>
+        </Fld>
+        <Fld label={`Amount per payment (${f.currency})`}><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
         <Fld label={recurring?"Start Date":"Date"}><input style={IS} type="date" value={f.date} onChange={e=>set("date",e.target.value)}/></Fld>
         {type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={f.category} onChange={e=>set("category",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}
         <Fld label="Recurrence"><select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>{CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></Fld>
         {recurring&&<Fld label="Number of payments"><input style={IS} type="number" min="2" max="120" value={f.occurrences} onChange={e=>set("occurrences",e.target.value)}/></Fld>}
-        <Fld label="Note (optional)" style={{marginBottom:recurring&&amtNum?12:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-        {recurring&&amtNum>0&&<div style={{background:type==="expense"?"linear-gradient(135deg,#fffbeb,#fef3c7)":"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid "+(type==="expense"?"#fde68a":"#7dd3fc"),borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:type==="expense"?"#92400e":"#0369a1",fontWeight:500}}>{count} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
-        <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
+        <Fld label="Note (optional)" style={{marginBottom:12}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
+        {/* FX conversion panel */}
+        {isUSD&&amtNum>0&&(
+          <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD Conversion</span>
+              {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate...</span>}
+              {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
+              {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.date}</span>}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+              <input
+                style={{...IS,width:90,padding:"5px 8px",fontSize:13}}
+                type="number"
+                step="0.0001"
+                value={fxOverride}
+                onChange={e=>setFxOverride(e.target.value)}
+                placeholder={fxLoading?"…":"rate"}
+              />
+              <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:13,color:"#0369a1"}}>
+                ${amtNum.toFixed(2)} USD × {effectiveRate.toFixed(4)}
+              </span>
+              <span style={{fontSize:18,fontWeight:800,color:"#0284C7",letterSpacing:"-0.5px"}}>
+                {fmt(cadAmt)} CAD
+              </span>
+            </div>
+            {recurring&&<div style={{fontSize:12,color:"#0369a1",marginTop:6,fontWeight:500}}>
+              {count} payments of <strong>${amtNum.toFixed(2)} USD</strong> = <strong>{fmt(cadAmt*count)} CAD</strong> total
+            </div>}
+          </div>
+        )}
+        {recurring&&amtNum>0&&!isUSD&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of <strong>{fmt(amtNum)} CAD</strong> = <strong style={{fontWeight:800}}>{fmt(amtNum*count)} CAD</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        {recurring&&amtNum>0&&isUSD&&cadAmt>0&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of <strong>${amtNum.toFixed(2)} USD</strong> ({fmt(cadAmt)} CAD each) = <strong style={{fontWeight:800}}>{fmt(cadAmt*count)} CAD</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount||(isUSD&&!effectiveRate)} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
       </div>
     </div>
   );
@@ -1172,7 +1428,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
                 ?<div style={{padding:"12px 0"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}><Fld label="Merchant / Source"><input style={IS} value={ed.merchant||ed.source||""} onChange={e=>setEd(d=>({...d,merchant:e.target.value,source:e.target.value}))}/></Fld><Fld label="Amount ($)"><input style={IS} type="number" value={ed.amount||""} onChange={e=>setEd(d=>({...d,amount:e.target.value}))}/></Fld><Fld label="Date"><input style={IS} type="date" value={ed.date||""} onChange={e=>setEd(d=>({...d,date:e.target.value}))}/></Fld>{ed.type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={ed.category||cats[0]} onChange={e=>setEd(d=>({...d,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}<Fld label="Note"><input style={IS} value={ed.note||""} onChange={e=>setEd(d=>({...d,note:e.target.value}))}/></Fld></div><div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div></div>
                 :<div style={{display:"flex",alignItems:"center",padding:"9px 0",gap:10,background:selectMode&&selected.has(t.id)?"#eff6ff":"transparent",borderRadius:4}}>
                   {selectMode&&<input type="checkbox" checked={selected.has(t.id)} onChange={()=>toggleSelect(t.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · $"+t.originalAmountUSD.toFixed(2)+" USD @ "+Number(t.fxRate).toFixed(4):""}</div></div>
                   <div style={{fontWeight:600,fontSize:13,color:t.type==="income"?"#059669":"#111827",whiteSpace:"nowrap"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
                   {!selectMode&&<div style={{display:"flex",gap:5,flexShrink:0}}>{rBtn(()=>startEdit(t),"#e5e7eb","#6b7280","Edit")}{rBtn(()=>del(t.id),"#fecaca","#dc2626","Delete")}</div>}
                 </div>}
@@ -1255,12 +1511,13 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
 
   const addVacation=()=>{
     if(!form.name.trim()) return;
-    const v={id:uid(),name:form.name.trim(),startDate:form.startDate,endDate:form.endDate,budget:parseFloat(form.budget)||0};
+    const v={id:uid(),name:form.name.trim(),startDate:form.startDate,endDate:form.endDate,budget:parseFloat(form.budget)||0,completed:false};
     onSaveVacations([...vacations,v]);
     setForm({name:"",startDate:today(),endDate:today(),budget:""});
     setActiveId(v.id);setView("detail");
   };
   const delVacation=id=>{onSaveVacations(vacations.filter(v=>v.id!==id));onSaveTxns(vacationTxns.filter(t=>t.vacationId!==id));};
+  const toggleComplete=id=>onSaveVacations(vacations.map(v=>v.id===id?{...v,completed:!v.completed,completedAt:v.completed?null:today()}:v));
   const logExpense=()=>{
     if(!expForm.merchant.trim()||!expForm.amount) return;
     const t={id:uid(),vacationId:activeId,merchant:expForm.merchant.trim(),amount:parseFloat(expForm.amount)||0,date:expForm.date||today(),note:expForm.note};
@@ -1303,6 +1560,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
           <button onClick={()=>{setView("list");setEditingMeta(false);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
           <h2 style={{margin:0,fontSize:19,fontWeight:600,flex:1}}>{vac.name}</h2>
           {!editingMeta&&<button onClick={()=>startEditMeta(vac)} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>}
+          {!editingMeta&&<button onClick={()=>toggleComplete(vac.id)} style={{background:vac.completed?"#f0fdf4":"none",border:`1px solid ${vac.completed?"#86efac":"#e5e7eb"}`,borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:vac.completed?"#15803d":"#6b7280",fontFamily:"inherit",fontWeight:vac.completed?600:400}}>{vac.completed?"Completed":"Mark Complete"}</button>}
         </div>
         {editingMeta&&(
           <div style={{...CA,marginBottom:16}}>
@@ -1383,23 +1641,31 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
       </div>
       {vacations.length===0?<div style={{...CA,color:"#9ca3af",fontSize:13}}>No vacations yet. Add one to start tracking trip expenses separately from your regular budget.</div>:
       <div style={{display:"grid",gap:12}}>
-        {[...vacations].sort((a,b)=>(b.startDate||"").localeCompare(a.startDate||""  )).map(v=>{
-          const txns=vacationTxns.filter(t=>t.vacationId===v.id);
-          const total=txns.reduce((s,t)=>s+t.amount,0);
+        {[...vacations].sort((a,b)=>{if(!!a.completed!==!!b.completed)return a.completed?1:-1;return(b.startDate||"").localeCompare(a.startDate||"");}).map(v=>{
+          const vTxns=vacationTxns.filter(t=>t.vacationId===v.id);
+          const total=vTxns.reduce((s,t)=>s+t.amount,0);
           const pct=v.budget>0?Math.min(total/v.budget,1):0;
           const over=v.budget>0&&total>v.budget;
           return (
-            <div key={v.id} style={{...CA,cursor:"pointer"}} onClick={()=>{setActiveId(v.id);setView("detail");setSelectMode(false);setSelected(new Set());}}>
+            <div key={v.id} style={{...CA,cursor:"pointer",opacity:v.completed?0.75:1,borderColor:v.completed?"#86efac":"#f1f5f9"}} onClick={()=>{setActiveId(v.id);setView("detail");setSelectMode(false);setSelected(new Set());}}>
               <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:15,fontWeight:600,marginBottom:2}}>{v.name}</div>
-                  <div style={{fontSize:11,color:"#9ca3af"}}>{v.startDate} – {v.endDate}</div>
-                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#e0f2fe",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:over?"#dc2626":"#f59e0b"}}/></div>}
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                    <div style={{fontSize:15,fontWeight:600}}>{v.name}</div>
+                    {v.completed&&<span style={{fontSize:10,fontWeight:700,color:"#15803d",background:"#dcfce7",border:"1px solid #86efac",borderRadius:99,padding:"1px 7px",letterSpacing:"0.03em"}}>COMPLETED</span>}
+                  </div>
+                  <div style={{fontSize:11,color:"#9ca3af"}}>{v.startDate} – {v.endDate}{v.completedAt?" · done "+v.completedAt:""}</div>
+                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#e0f2fe",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:v.completed?"#059669":over?"#dc2626":"#f59e0b"}}/></div>}
                 </div>
-                <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontSize:15,fontWeight:700,color:"#dc2626"}}>{fmt(total)}</div>
-                  {v.budget>0&&<div style={{fontSize:11,color:over?"#dc2626":"#9ca3af"}}>{over?"over ":"of "}{fmt(v.budget)}</div>}
-                  <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{txns.length} expense{txns.length!==1?"s":""}</div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:15,fontWeight:700,color:v.completed?"#059669":"#dc2626"}}>{fmt(total)}</div>
+                    {v.budget>0&&<div style={{fontSize:11,color:over&&!v.completed?"#dc2626":"#9ca3af"}}>{over&&!v.completed?"over ":"of "}{fmt(v.budget)}</div>}
+                    <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{vTxns.length} expense{vTxns.length!==1?"s":""}</div>
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();toggleComplete(v.id);}} style={{fontSize:11,padding:"3px 9px",borderRadius:6,border:`1px solid ${v.completed?"#86efac":"#e2e8f0"}`,background:v.completed?"#f0fdf4":"#fff",color:v.completed?"#15803d":"#6b7280",cursor:"pointer",fontFamily:"inherit",fontWeight:v.completed?600:400,whiteSpace:"nowrap"}}>
+                    {v.completed?"Done":"Mark Complete"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -1411,14 +1677,19 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
 }
 
 const WHATS_NEW = [
-  { icon: "✦", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
-  { icon: "✦", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
-  { icon: "✦", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
-  { icon: "✦", title: "Expected Income", desc: "Schedule future income and mark it received when it lands. Overdue items are flagged and pending totals show on the Dashboard. Try Expected Income." },
-  { icon: "✦", title: "Vacation Budgets", desc: "Track trip expenses in a separate budget so they don't distort your monthly spending. Spending also rolls up to the Dashboard. Try Vacations." },
-  { icon: "✦", title: "Category Budgets", desc: "Set a monthly cap per category. Progress bars and over-budget alerts appear on the Dashboard and in History. Try Categories." },
-  { icon: "✦", title: "Bulk Select & Edit", desc: "In History and Expected Income, tap Select to check multiple rows and delete or confirm them all at once." },
-  { icon: "✦", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
+  { icon: "—", title: "Account Security", desc: "Protect your financial data with a PIN, biometric unlock (Touch ID / Windows Hello), and optional two-factor authentication. Set up on first launch or in Settings." },
+  { icon: "—", title: "Household Members", desc: "Add people to your household, split shared transactions equally or by income, and track balances with a built-in settlement log. Try Household." },
+  { icon: "—", title: "USD Income & Expenses", desc: "Record income or expenses in USD and CashHeap automatically converts to CAD using the real FX rate for that day. Works in Add Expense, Add Income, and Expected Income." },
+  { icon: "—", title: "Mark Vacation Complete", desc: "Once a trip is done, mark it complete — it gets a green badge and moves to the bottom of the list so active trips stay front and centre." },
+  { icon: "—", title: "Edit Bills Inline", desc: "Click Edit on any bill row in the Bills tab to update the name, amount, due date, or category without leaving the page." },
+  { icon: "—", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
+  { icon: "—", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
+  { icon: "—", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
+  { icon: "—", title: "Expected Income", desc: "Schedule future income and mark it received when it lands. Overdue items are flagged and pending totals show on the Dashboard. Try Expected Income." },
+  { icon: "—", title: "Vacation Budgets", desc: "Track trip expenses in a separate budget so they don't distort your monthly spending. Spending also rolls up to the Dashboard. Try Vacations." },
+  { icon: "—", title: "Category Budgets", desc: "Set a monthly cap per category. Progress bars and over-budget alerts appear on the Dashboard and in History. Try Categories." },
+  { icon: "—", title: "Bulk Select & Edit", desc: "In History and Expected Income, tap Select to check multiple rows and delete or confirm them all at once." },
+  { icon: "—", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
 ];
 
 function Toast({msg,undoFn,onClose}){
@@ -1996,7 +2267,7 @@ function CSVImport({txns,cats,onImport}){
 
   if(step==="done") return(
     <div style={HL}>
-      <div style={{fontSize:32,marginBottom:12}}>✅</div>
+      <div style={{fontSize:32,marginBottom:12,color:"#059669",fontWeight:700}}>✓</div>
       <div style={{fontSize:20,fontWeight:700,color:"#0f172a",marginBottom:8}}>Import complete</div>
       <div style={{color:"#475569",marginBottom:20}}>{imported} transaction{imported!==1?"s":""} added to your history.</div>
       <Btn onClick={()=>{setStep("upload");setRawRows([]);setImported(null);if(fileRef.current)fileRef.current.value="";}}>Import another file</Btn>
@@ -2028,13 +2299,13 @@ function CSVImport({txns,cats,onImport}){
             </select>
           </div>
           <div style={{border:"2px dashed #bae6fd",borderRadius:12,padding:40,textAlign:"center",cursor:"pointer",background:"#f8fafc"}} onClick={()=>fileRef.current?.click()}>
-            <div style={{fontSize:36,marginBottom:8}}>📂</div>
+            
             <div style={{fontWeight:600,color:"#0369a1",marginBottom:4}}>Click to select your CSV file</div>
             <div style={{fontSize:12,color:"#94a3b8"}}>Exported from your online banking portal</div>
             <input ref={fileRef} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={onFile}/>
           </div>
           <div style={{marginTop:16,fontSize:12,color:"#94a3b8"}}>
-            💡 In TD: Accounts → Download → CSV &nbsp;|&nbsp; RBC: My Accounts → Download Transactions → CSV &nbsp;|&nbsp; BMO: Accounts → Download → Spreadsheet
+            Tip — In TD: Accounts → Download → CSV &nbsp;|&nbsp; RBC: My Accounts → Download Transactions → CSV &nbsp;|&nbsp; BMO: Accounts → Download → Spreadsheet
           </div>
         </div>
       )}
@@ -2099,7 +2370,7 @@ function CSVImport({txns,cats,onImport}){
                   <select value={r.category||cats[0]} onChange={e=>setPreview(p=>p.map(x=>x._id===r._id?{...x,category:e.target.value}:x))} style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,padding:"2px 4px",background:"#fff",fontFamily:"inherit"}}>
                     {r.type==="income"?<option value="income">Income</option>:cats.map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
-                  {r.isDupe&&<span title="Possible duplicate" style={{fontSize:14}}>⚠️</span>}
+                  {r.isDupe&&<span title="Possible duplicate" style={{fontSize:11,fontWeight:700,color:"#f59e0b"}}>!</span>}
                 </div>
               ))}
             </div>
@@ -2216,7 +2487,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
 
       {firstDanger&&(
         <div style={{background:"#fef9c3",borderRadius:12,border:"1px solid #fde047",padding:"12px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:20}}>⚠️</span>
+          <span style={{fontSize:13,fontWeight:800,color:"#f59e0b"}}>!</span>
           <div><strong>Balance warning:</strong> your balance is projected to drop below {fmt(threshold)} around <strong>{new Date(firstDanger.date).toLocaleDateString("en-CA",{month:"long",day:"numeric"})}</strong>.</div>
         </div>
       )}
@@ -2239,12 +2510,12 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
       {/* Controls */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>⚠️ Warning Threshold</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>Warning Threshold</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Alert when balance drops below:</div>
           <input type="number" min={0} step={100} value={threshold} onChange={e=>setThreshold(+e.target.value)} style={{...IS,width:"100%"}}/>
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧮 What-If Scenario</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>What-If Scenario</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Add a hypothetical one-time expense:</div>
           <div style={{display:"flex",gap:8}}>
             <input placeholder="Label" value={extraLabel} onChange={e=>setExtraLabel(e.target.value)} style={{...IS,flex:1}}/>
@@ -2260,7 +2531,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
           {projection.filter(d=>d.events.length>0).slice(0,20).map(d=>d.events.map((ev,i)=>(
             <div key={d.date+i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9",fontSize:12}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span>{ev.type==="bill"?"🧾":ev.type==="income"?"💰":"🔮"}</span>
+                <span>{""}</span>
                 <div>
                   <div style={{fontWeight:600}}>{ev.label}</div>
                   <div style={{color:"#94a3b8"}}>{new Date(d.date).toLocaleDateString("en-CA",{month:"short",day:"numeric"})}</div>
@@ -2351,7 +2622,7 @@ function DebtTracker({debts=[],onSaveDebts}){
 
       {/* Add/Edit form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Debt":"➕ Add Debt"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Debt":"Add Debt"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. TD Visa"/></Fld>
           <Fld label="Type"><select style={IS} value={form.type} onChange={e=>set("type",e.target.value)}>{DEBT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
@@ -2400,7 +2671,7 @@ function DebtTracker({debts=[],onSaveDebts}){
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
           <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>Payoff Strategy</div>
           <div style={{display:"flex",gap:16,marginBottom:16,flexWrap:"wrap"}}>
-            {[["avalanche","🏔️ Avalanche","Highest rate first — minimises total interest"],["snowball","⛄ Snowball","Lowest balance first — fastest wins, best for motivation"]].map(([k,l,d])=>(
+            {[["avalanche","Avalanche","Highest rate first — minimises total interest"],["snowball","Snowball","Lowest balance first — fastest wins, best for motivation"]].map(([k,l,d])=>(
               <label key={k} style={{display:"flex",alignItems:"flex-start",gap:8,cursor:"pointer",flex:1,minWidth:200,background:strategy===k?"#f0f9ff":"#f8fafc",border:`1.5px solid ${strategy===k?"#0284C7":"#e2e8f0"}`,borderRadius:10,padding:12}}>
                 <input type="radio" name="strategy" value={k} checked={strategy===k} onChange={()=>setStrategy(k)} style={{marginTop:2,accentColor:"#0284C7"}}/>
                 <div><div style={{fontWeight:700,fontSize:12}}>{l}</div><div style={{fontSize:11,color:"#64748b"}}>{d}</div></div>
@@ -2530,7 +2801,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
 
         {/* Transactions export */}
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📋 Transaction Export</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Transaction Export</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>Export a filtered list of transactions to CSV.</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
             {[["monthly","Monthly"],["annual","Annual"],["tax","Tax Year"]].map(([k,l])=>(
@@ -2548,20 +2819,20 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
               <option value="all">All Categories</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
           </div>
-          <Btn full onClick={exportTransactions}>⬇ Download CSV</Btn>
+          <Btn full onClick={exportTransactions}>Download CSV</Btn>
         </div>
 
         {/* Summary reports */}
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📅 Monthly Summary</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Monthly Summary</div>
             <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>All months in {year} — income, expenses, net per month.</div>
-            <Btn full onClick={exportMonthlySummary}>⬇ Download CSV</Btn>
+            <Btn full onClick={exportMonthlySummary}>Download CSV</Btn>
           </div>
           <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>🏷️ Category Breakdown</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Category Breakdown</div>
             <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Annual spending by category vs budget for {year}.</div>
-            <Btn full onClick={exportCategoryBreakdown}>⬇ Download CSV</Btn>
+            <Btn full onClick={exportCategoryBreakdown}>Download CSV</Btn>
           </div>
         </div>
 
@@ -2569,7 +2840,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
 
       {/* Tax summary table */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧾 {year} Tax Year Summary</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>{year} Tax Year Summary</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}}>
           {[
             {label:"Total Income",val:fmt(totalIncome)},
@@ -2583,7 +2854,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
           ))}
         </div>
         <div style={{fontSize:12,color:"#94a3b8",fontStyle:"italic"}}>
-          💡 For tax deductions tracking, tag individual transactions as deductible (coming in Phase 2 Tax Tracker feature).
+          Tip: For tax deductions tracking, tag individual transactions as deductible (coming in Phase 2 Tax Tracker feature).
         </div>
       </div>
     </div>
@@ -2604,7 +2875,7 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
       const dueStr=curMonth+"-"+String(b.dueDay||15).padStart(2,"0");
       const daysUntil=Math.ceil((new Date(dueStr)-new Date(todayStr))/(1000*60*60*24));
       if(daysUntil<=3&&daysUntil>=-3){
-        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"🔴":"🟡",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
+        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"high":"medium",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
       }
     });
 
@@ -2614,23 +2885,23 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
       if(!budget) return;
       const spent=mt.filter(t=>t.category===cat).reduce((s,t)=>s+t.amount,0);
       const pct=spent/budget*100;
-      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"🔴",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
-      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"🟡",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
+      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"high",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
+      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"medium",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
     });
 
     // 3. Goals close to target
     goals.forEach(g=>{
       if(!g.target||!g.saved) return;
       const pct=g.saved/g.target*100;
-      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"🎉",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
-      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"🟢",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
+      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"done",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
+      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"info",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
     });
 
     // 4. Large transaction alert
     const largeThreshold=settings?.largeTransactionAlert||500;
     const bigTxns=mt.filter(t=>t.amount>=largeThreshold);
     bigTxns.forEach(t=>{
-      found.push({id:"large-"+t.id,type:"large",icon:"💸",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
+      found.push({id:"large-"+t.id,type:"large",icon:"expense",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
     });
 
     return found;
@@ -2648,13 +2919,13 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
     <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>🔔 Alerts</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>Alerts</div>
           <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{visible.length===0?"All clear":""+highCount+" urgent · "+medCount+" warnings"}</div>
         </div>
         {visible.length>0&&<button onClick={()=>setDismissed(new Set(alerts.map(a=>a.id)))} style={{fontSize:11,padding:"4px 10px",border:"1px solid #e2e8f0",borderRadius:7,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>Dismiss all</button>}
       </div>
       {visible.length===0&&(
-        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>✅ No alerts right now — you're on track!</div>
+        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>No alerts right now — you're on track!</div>
       )}
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {visible.map(a=>(
@@ -2788,11 +3059,11 @@ function SpendingAnomalies({txns,cats,month}){
   if(anomalies.catAnomalies.length===0&&anomalies.dupes.length===0) return null;
   return(
     <div style={{background:"#fff",borderRadius:16,border:"1px solid #fde047",padding:20,marginBottom:24}}>
-      <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🔍 Spending Insights</div>
+      <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>Spending Insights</div>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {anomalies.catAnomalies.map(a=>(
           <div key={a.cat} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,padding:"8px 10px",background:a.type==="high"?"#fffbeb":"#f0fdf4",borderRadius:8,border:`1px solid ${a.type==="high"?"#fde047":"#bbf7d0"}`}}>
-            <span>{a.type==="high"?"⬆️":"⬇️"}</span>
+            <span>{a.type==="high"?"↑":"↓"}</span>
             <div style={{flex:1}}>
               <strong>{a.cat}</strong> spending is <strong>{a.type==="high"?"+"+((a.ratio-1)*100).toFixed(0):"-"+((1-a.ratio)*100).toFixed(0)}%</strong> vs your 3-month average
             </div>
@@ -2801,7 +3072,7 @@ function SpendingAnomalies({txns,cats,month}){
         ))}
         {anomalies.dupes.length>0&&(
           <div style={{fontSize:12,padding:"8px 10px",background:"#fef2f2",borderRadius:8,border:"1px solid #fecaca",display:"flex",alignItems:"center",gap:8}}>
-            <span>⚠️</span>
+            <span style={{fontWeight:800,color:"#f59e0b",fontSize:12}}>!</span>
             <span><strong>{anomalies.dupes.length}</strong> possible duplicate transaction{anomalies.dupes.length!==1?"s":""} this month — check your history.</span>
           </div>
         )}
@@ -2876,7 +3147,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
       {detected.length>0&&(
         <div style={{background:"#f0f9ff",borderRadius:14,border:"1px solid #bae6fd",padding:16,marginBottom:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showDetect?12:0}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#0369a1"}}>🔍 {detected.length} potential subscription{detected.length!==1?"s":""} detected from your history</div>
+            <div style={{fontSize:13,fontWeight:700,color:"#0369a1"}}>{detected.length} potential subscription{detected.length!==1?"s":""} detected from your history</div>
             <button onClick={()=>setShowDetect(p=>!p)} style={{fontSize:11,padding:"4px 10px",border:"1px solid #bae6fd",borderRadius:7,cursor:"pointer",background:"#fff",color:"#0369a1",fontFamily:"inherit"}}>{showDetect?"Hide":"Review"}</button>
           </div>
           {showDetect&&(
@@ -2894,7 +3165,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
 
       {/* Add/Edit form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Subscription":"➕ Add Subscription"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Subscription":"Add Subscription"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Service Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Netflix, Spotify"/></Fld>
           <Fld label="Amount *"><input type="number" style={IS} value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
@@ -2925,7 +3196,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
           return(
             <div key={s.id} style={{background:"#fff",borderRadius:12,border:`1px solid ${s.active===false?"#e2e8f0":"#bae6fd"}`,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,opacity:s.active===false?0.55:1}}>
               <div style={{width:40,height:40,borderRadius:10,background:"#f0f9ff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>
-                {s.active===false?"⏸️":"🔄"}
+                {s.active===false?"Paused":"Active"}
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
@@ -3021,7 +3292,7 @@ function TaxTracker({txns,taxItems,onSaveTaxItems,settings}){
       {/* RRSP & TFSA */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>📊 RRSP ({year})</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>RRSP ({year})</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
             <Fld label="Contribution Room ($)"><input type="number" style={IS} value={rrspRoom} onChange={e=>setRrspRoom(e.target.value)} placeholder={String(RRSP_LIMIT_2026)}/></Fld>
             <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={rrspContrib} onChange={e=>setRrspContrib(e.target.value)} placeholder="0"/></Fld>
@@ -3040,7 +3311,7 @@ function TaxTracker({txns,taxItems,onSaveTaxItems,settings}){
           )}
         </div>
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🏦 TFSA ({year})</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>TFSA ({year})</div>
           <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={tfsa} onChange={e=>setTfsa(e.target.value)} placeholder="0"/></Fld>
           <div style={{fontSize:11,color:"#94a3b8",marginTop:8}}>2026 TFSA annual limit: $7,000 · Lifetime limit varies by birth year.</div>
         </div>
@@ -3177,7 +3448,7 @@ function RetirementPlanner({txns,accounts,settings}){
                 {[
                   {l:"Projected at "+retireAge,v:fmt(projected),c:projected>=retireTarget?GREEN:RED},
                   {l:"Target",v:fmt(retireTarget),c:"#0f172a"},
-                  {l:"Gap",v:gap>0?fmt(gap):"None 🎉",c:gap>0?RED:GREEN},
+                  {l:"Gap",v:gap>0?fmt(gap):"None",c:gap>0?RED:GREEN},
                   {l:"Extra needed/mo",v:extraNeeded>0?fmt(extraNeeded):"-",c:extraNeeded>0?"#f59e0b":GREEN},
                 ].map(r=><div key={r.l} style={{background:"#f8fafc",borderRadius:8,padding:10}}><div style={{fontSize:10,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em"}}>{r.l}</div><div style={{fontSize:15,fontWeight:800,color:r.c,marginTop:2}}>{r.v}</div></div>)}
               </div>
@@ -3224,18 +3495,18 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
       const dueDate=ym+"-"+String(b.dueDay||15).padStart(2,"0");
       if(dueDate.startsWith(ym)){
         const paid=billPayments.some(p=>p.billId===b.id&&p.month===ym);
-        add(dueDate,{type:"bill",label:b.name,amount:b.amount,paid,color:paid?"#059669":"#f59e0b",icon:"🧾"});
+        add(dueDate,{type:"bill",label:b.name,amount:b.amount,paid,color:paid?"#059669":"#f59e0b",icon:"bill"});
       }
     });
 
     // Expected income
     expected.filter(e=>e.date?.startsWith(ym)).forEach(e=>{
-      add(e.date,{type:"income",label:e.source,amount:e.amount,confirmed:e.confirmed,color:e.confirmed?"#059669":"#0284C7",icon:"💰"});
+      add(e.date,{type:"income",label:e.source,amount:e.amount,confirmed:e.confirmed,color:e.confirmed?"#059669":"#0284C7",icon:"income"});
     });
 
     // Actual transactions
     txns.filter(t=>t.date?.startsWith(ym)).forEach(t=>{
-      add(t.date,{type:"txn",label:t.merchant||t.source,amount:t.amount,txnType:t.type,color:t.type==="income"?"#059669":"#94a3b8",icon:t.type==="income"?"💚":"💸"});
+      add(t.date,{type:"txn",label:t.merchant||t.source,amount:t.amount,txnType:t.type,color:t.type==="income"?"#059669":"#94a3b8",icon:t.type==="income"?"income":"expense"});
     });
 
     // Vacations
@@ -3244,7 +3515,7 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
       const s=new Date(v.startDate),e=new Date(v.endDate);
       for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){
         const ds=d.toISOString().split("T")[0];
-        if(ds.startsWith(ym)) add(ds,{type:"vacation",label:v.name,color:"#8b5cf6",icon:"✈️"});
+        if(ds.startsWith(ym)) add(ds,{type:"vacation",label:v.name,color:"#8b5cf6",icon:"trip"});
       }
     });
 
@@ -3308,7 +3579,7 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
           {/* Legend */}
           <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
             <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>Legend</div>
-            {[["🧾","#f59e0b","Bill due"],["🧾","#059669","Bill paid"],["💰","#0284C7","Expected income"],["💚","#059669","Income received"],["💸","#94a3b8","Expense"],["✈️","#8b5cf6","Vacation"]].map(([icon,color,label])=>(
+            {[["B","#f59e0b","Bill due"],["B","#059669","Bill paid"],["$","#0284C7","Expected income"],["$","#059669","Income received"],["–","#94a3b8","Expense"],["T","#8b5cf6","Vacation"]].map(([icon,color,label])=>(
               <div key={label} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:11}}>
                 <span style={{fontSize:14}}>{icon}</span>
                 <div style={{width:10,height:10,borderRadius:2,background:color}}/>
@@ -3382,7 +3653,7 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
     onSave(wishlist.map(w=>w.id===item.id?{...w,promotedToGoal:true}:w));
   };
 
-  const priorities=[["essential","🔴 Essential"],["want","🟡 Want"],["nice-to-have","🟢 Nice to Have"]];
+  const priorities=[["essential","Essential"],["want","Want"],["nice-to-have","Nice to Have"]];
   const sorted=[...wishlist].sort((a,b)=>{const o={essential:0,want:1,"nice-to-have":2};return(o[a.priority]||2)-(o[b.priority]||2);});
 
   return(
@@ -3392,14 +3663,14 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
 
       {monthlySavings>0&&(
         <div style={{background:"#f0f9ff",borderRadius:12,border:"1px solid #bae6fd",padding:"12px 16px",marginBottom:20,fontSize:12,display:"flex",alignItems:"center",gap:8}}>
-          <span>💡</span>
+          
           <span>You're currently saving <strong>{fmt(monthlySavings)}/month</strong> on average. Affordability estimates are based on this rate.</span>
         </div>
       )}
 
       {/* Form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Item":"➕ Add to Wishlist"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Item":"Add to Wishlist"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Item Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. MacBook Pro"/></Fld>
           <Fld label="Estimated Cost *"><input type="number" style={IS} value={form.cost} onChange={e=>set("cost",e.target.value)} placeholder="0.00"/></Fld>
@@ -3429,13 +3700,13 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
               <div style={{width:8,height:40,borderRadius:99,background:priorityColor,flexShrink:0}}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                  <span style={{fontWeight:700,fontSize:14}}>{item.purchased?"✅ ":""}{item.name}</span>
+                  <span style={{fontWeight:700,fontSize:14}}>{item.purchased?"✓ ":""}{item.name}</span>
                   {item.promotedToGoal&&<span style={{fontSize:10,background:"#f0fdf4",color:"#059669",padding:"2px 6px",borderRadius:99,fontWeight:600}}>→ Goal created</span>}
                 </div>
                 <div style={{fontSize:11,color:"#64748b"}}>{fmt(item.cost)}{item.note?` · ${item.note}`:""}{affordDate&&!item.purchased?` · Affordable in ~${months} month${months!==1?"s":""} (${affordDate})`:""}</div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
-                {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#64748b"}}>🔗</a>}
+                {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#64748b"}}>Link</a>}
                 {!item.purchased&&!item.promotedToGoal&&<button onClick={()=>promoteToGoal(item)} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bbf7d0",borderRadius:6,cursor:"pointer",background:"#f0fdf4",color:"#059669",fontFamily:"inherit"}}>→ Goal</button>}
                 <button onClick={()=>onSave(wishlist.map(w=>w.id===item.id?{...w,purchased:!w.purchased}:w))} style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>{item.purchased?"Unpurchase":"✓ Bought"}</button>
                 <button onClick={()=>{setForm({...item,cost:String(item.cost)});setEditing(true);window.scrollTo(0,0);}} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bae6fd",borderRadius:6,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Edit</button>
@@ -3538,7 +3809,7 @@ function MortgageCalculator({accounts,onSaveAccounts}){
 
           {extra>0&&(
             <div style={{background:"#f0fdf4",borderRadius:14,border:"1px solid #bbf7d0",padding:16}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:8}}>💡 Extra Payment Impact</div>
+              <div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:8}}>Extra Payment Impact</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,fontSize:12}}>
                 <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Years saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{yearsSaved} yrs</div></div>
                 <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Interest saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{fmt(+intSaved)}</div></div>
@@ -3590,12 +3861,392 @@ function MortgageCalculator({accounts,onSaveAccounts}){
   );
 }
 
+// ── Household ────────────────────────────────────────────────────────────────
+
+const MEMBER_COLORS=["#0284C7","#7C3AED","#059669","#D97706","#DB2777","#0891B2"];
+const MEMBER_AVATARS=["A","B","C","D","E","F","G","H","I","J"];
+
+function Household({members,onSaveMembers,txns,onSaveTxns,splits,onSaveSplits,settlements,onSaveSettlements}){
+  const [tab,setTab]=useState("members"); // members | splits | balances
+  const [form,setForm]=useState({name:"",avatar:"",color:MEMBER_COLORS[0],monthlyIncome:""});
+  const [editId,setEditId]=useState(null);
+  const [editForm,setEditForm]=useState({});
+  const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const setEF=(k,v)=>setEditForm(p=>({...p,[k]:v}));
+
+  const addMember=()=>{
+    if(!form.name.trim()) return;
+    const usedColors=members.map(m=>m.color);
+    const nextColor=MEMBER_COLORS.find(c=>!usedColors.includes(c))||MEMBER_COLORS[members.length%MEMBER_COLORS.length];
+    onSaveMembers([...members,{id:uid(),name:form.name.trim(),avatar:form.avatar,color:form.color||nextColor,monthlyIncome:parseFloat(form.monthlyIncome)||0,joinedDate:today()}]);
+    setForm({name:"",avatar:"",color:nextColor,monthlyIncome:""});
+  };
+  const removeMember=id=>onSaveMembers(members.filter(m=>m.id!==id));
+  const startEdit=m=>{setEditId(m.id);setEditForm({name:m.name,avatar:m.avatar,color:m.color,monthlyIncome:String(m.monthlyIncome||"")});};
+  const saveEdit=()=>{
+    onSaveMembers(members.map(m=>m.id===editId?{...m,name:editForm.name.trim()||m.name,avatar:editForm.avatar,color:editForm.color,monthlyIncome:parseFloat(editForm.monthlyIncome)||0}:m));
+    setEditId(null);
+  };
+
+  const totalIncome=members.reduce((s,m)=>s+m.monthlyIncome,0);
+  const incomePct=m=>totalIncome>0?+(m.monthlyIncome/totalIncome*100).toFixed(1):+(100/members.length).toFixed(1);
+
+  // ── Split helpers ──────────────────────────────────────────────────────────
+  const getSplit=id=>splits[id]||null;
+  const txnMember=t=>t.assignedTo?members.find(m=>m.id===t.assignedTo):null;
+
+  // Compute balances: shared expenses where each member paid different amounts
+  const month=today().slice(0,7);
+  const sharedTxns=txns.filter(t=>splits[t.id]&&splits[t.id].type!=="assigned"&&t.date&&t.date.startsWith(month));
+  // For each shared txn: member who "paid" is assignedTo; others owe their split share
+  const balances={};
+  members.forEach(m=>{balances[m.id]=0;});
+  sharedTxns.forEach(t=>{
+    const sp=splits[t.id];
+    if(!sp||!sp.payer) return;
+    sp.shares.forEach(sh=>{
+      if(sh.memberId===sp.payer) return; // payer doesn't owe themselves
+      balances[sh.memberId]=(balances[sh.memberId]||0)-sh.amount; // owes payer
+      balances[sp.payer]=(balances[sp.payer]||0)+sh.amount;       // is owed by them
+    });
+  });
+  // Settle: already-settled amounts
+  settlements.filter(s=>s.date&&s.date.startsWith(month)).forEach(s=>{
+    balances[s.fromMemberId]=(balances[s.fromMemberId]||0)+s.amount;
+    balances[s.toMemberId]=(balances[s.toMemberId]||0)-s.amount;
+  });
+
+  const [settleForm,setSettleForm]=useState({from:"",to:"",amount:"",note:""});
+  const addSettlement=()=>{
+    if(!settleForm.from||!settleForm.to||!settleForm.amount) return;
+    onSaveSettlements([...settlements,{id:uid(),fromMemberId:settleForm.from,toMemberId:settleForm.to,amount:parseFloat(settleForm.amount)||0,date:today(),note:settleForm.note}]);
+    setSettleForm({from:"",to:"",amount:"",note:""});
+  };
+
+  const tabBtn=(k,l)=><button onClick={()=>setTab(k)} style={{padding:"7px 18px",borderRadius:8,border:"none",background:tab===k?"#0284C7":"transparent",color:tab===k?"#fff":"#64748b",fontWeight:tab===k?700:500,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>;
+
+  return(
+    <div>
+      <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Household</h2>
+      <div style={{display:"flex",gap:4,marginBottom:20,background:"#f8fafc",borderRadius:10,padding:4,width:"fit-content"}}>
+        {tabBtn("members","Members")}{tabBtn("splits","Split Transactions")}{tabBtn("balances","Balances")}
+      </div>
+
+      {tab==="members"&&(
+        <div>
+          {/* Member cards */}
+          {members.length>0&&(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:14,marginBottom:20}}>
+              {members.map(m=>(
+                <div key={m.id} style={{...CA,borderTop:`3px solid ${m.color}`}}>
+                  {editId===m.id?(
+                    <div>
+                      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                        {MEMBER_AVATARS.map(a=><button key={a} onClick={()=>setEF("avatar",a)} style={{fontSize:20,background:editForm.avatar===a?"#f0f9ff":"transparent",border:`2px solid ${editForm.avatar===a?"#0284C7":"transparent"}`,borderRadius:8,padding:4,cursor:"pointer"}}>{a}</button>)}
+                      </div>
+                      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                        {MEMBER_COLORS.map(c=><button key={c} onClick={()=>setEF("color",c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:`3px solid ${editForm.color===c?"#1e293b":"transparent"}`,cursor:"pointer"}}/>)}
+                      </div>
+                      <input style={{...IS,marginBottom:8}} value={editForm.name} onChange={e=>setEF("name",e.target.value)} placeholder="Name"/>
+                      <input style={{...IS,marginBottom:10}} type="number" value={editForm.monthlyIncome} onChange={e=>setEF("monthlyIncome",e.target.value)} placeholder="Monthly income ($)"/>
+                      <div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit} disabled={!editForm.name.trim()}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div>
+                    </div>
+                  ):(
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                        <div style={{width:40,height:40,borderRadius:"50%",background:m.color+"22",border:`2px solid ${m.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>{m.avatar}</div>
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:700,fontSize:15,color:"#1e293b"}}>{m.name}</div>
+                          <div style={{fontSize:11,color:"#94a3b8"}}>Joined {m.joinedDate}</div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                        <span style={{fontSize:12,color:"#64748b"}}>Monthly income</span>
+                        <span style={{fontSize:13,fontWeight:700,color:"#1e293b"}}>{m.monthlyIncome>0?fmt(m.monthlyIncome):"Not set"}</span>
+                      </div>
+                      {totalIncome>0&&m.monthlyIncome>0&&(
+                        <div style={{marginBottom:10}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:11,color:"#94a3b8"}}>Income share</span>
+                            <span style={{fontSize:11,fontWeight:600,color:m.color}}>{incomePct(m)}%</span>
+                          </div>
+                          <div style={{height:5,borderRadius:99,background:"#f1f5f9"}}><div style={{height:"100%",borderRadius:99,width:incomePct(m)+"%",background:m.color}}/></div>
+                        </div>
+                      )}
+                      <div style={{display:"flex",gap:6}}><Btn sm onClick={()=>startEdit(m)}>Edit</Btn><Btn sm v="danger" onClick={()=>removeMember(m.id)}>Remove</Btn></div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Add member form */}
+          <div style={CA}>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1e293b"}}>Add Household Member</div>
+            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+              {MEMBER_AVATARS.map(a=><button key={a} onClick={()=>setF("avatar",a)} style={{fontSize:20,background:form.avatar===a?"#f0f9ff":"transparent",border:`2px solid ${form.avatar===a?"#0284C7":"transparent"}`,borderRadius:8,padding:4,cursor:"pointer"}}>{a}</button>)}
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+              {MEMBER_COLORS.map(c=><button key={c} onClick={()=>setF("color",c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:`3px solid ${form.color===c?"#1e293b":"transparent"}`,cursor:"pointer"}}/>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <Fld label="Name"><input style={IS} value={form.name} onChange={e=>setF("name",e.target.value)} placeholder="e.g. Alex, Jordan"/></Fld>
+              <Fld label="Monthly Income ($)"><input style={IS} type="number" value={form.monthlyIncome} onChange={e=>setF("monthlyIncome",e.target.value)} placeholder="0.00"/></Fld>
+            </div>
+            <Btn onClick={addMember} disabled={!form.name.trim()} full>Add Member</Btn>
+          </div>
+          {/* Household income summary */}
+          {members.length>1&&totalIncome>0&&(
+            <div style={{...CA,marginTop:14}}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1e293b"}}>Household Income Split</div>
+              <div style={{display:"flex",height:16,borderRadius:99,overflow:"hidden",marginBottom:10}}>
+                {members.filter(m=>m.monthlyIncome>0).map(m=><div key={m.id} style={{flex:m.monthlyIncome,background:m.color}} title={`${m.name}: ${incomePct(m)}%`}/>)}
+              </div>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                {members.map(m=>(
+                  <div key={m.id} style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{width:10,height:10,borderRadius:"50%",background:m.color,flexShrink:0}}/>
+                    <span style={{fontSize:12,color:"#64748b"}}>{m.name}: <strong style={{color:"#1e293b"}}>{incomePct(m)}%</strong>{m.monthlyIncome>0?` (${fmt(m.monthlyIncome)}/mo)`:""}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:10,fontSize:12,color:"#94a3b8"}}>Combined household income: <strong style={{color:"#1e293b"}}>{fmt(totalIncome)}/mo</strong></div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="splits"&&(
+        <SplitTransactions txns={txns} members={members} splits={splits} onSaveSplits={onSaveSplits}/>
+      )}
+
+      {tab==="balances"&&(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:14,marginBottom:20}}>
+            {members.map(m=>{
+              const bal=balances[m.id]||0;
+              return(
+                <div key={m.id} style={{...CA,borderTop:`3px solid ${m.color}`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                    <div style={{width:32,height:32,borderRadius:"50%",background:m.color+"22",border:`2px solid ${m.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{m.avatar}</div>
+                    <span style={{fontWeight:700,fontSize:14,color:"#1e293b"}}>{m.name}</span>
+                  </div>
+                  <div style={{fontSize:22,fontWeight:800,color:bal>0?"#059669":bal<0?"#dc2626":"#94a3b8",letterSpacing:"-0.5px"}}>{bal>0?"+":""}{fmt(bal)}</div>
+                  <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>{bal>0?"is owed this month":bal<0?"owes this month":"settled up"}</div>
+                </div>
+              );
+            })}
+          </div>
+          {members.length>=2&&(
+            <div style={CA}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1e293b"}}>Log Settlement</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <Fld label="From">
+                  <select style={{...IS,background:"#fff"}} value={settleForm.from} onChange={e=>setSettleForm(p=>({...p,from:e.target.value}))}>
+                    <option value="">Select member</option>
+                    {members.map(m=><option key={m.id} value={m.id}>{m.avatar} {m.name}</option>)}
+                  </select>
+                </Fld>
+                <Fld label="To">
+                  <select style={{...IS,background:"#fff"}} value={settleForm.to} onChange={e=>setSettleForm(p=>({...p,to:e.target.value}))}>
+                    <option value="">Select member</option>
+                    {members.filter(m=>m.id!==settleForm.from).map(m=><option key={m.id} value={m.id}>{m.avatar} {m.name}</option>)}
+                  </select>
+                </Fld>
+                <Fld label="Amount ($)"><input style={IS} type="number" value={settleForm.amount} onChange={e=>setSettleForm(p=>({...p,amount:e.target.value}))}/></Fld>
+                <Fld label="Note (optional)"><input style={IS} value={settleForm.note} onChange={e=>setSettleForm(p=>({...p,note:e.target.value}))} placeholder="e.g. e-transfer"/></Fld>
+              </div>
+              <Btn onClick={addSettlement} disabled={!settleForm.from||!settleForm.to||!settleForm.amount} full>Record Settlement</Btn>
+            </div>
+          )}
+          {settlements.length>0&&(
+            <div style={{...CA,marginTop:14}}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1e293b"}}>Settlement History</div>
+              {[...settlements].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20).map(s=>{
+                const from=members.find(m=>m.id===s.fromMemberId);
+                const to=members.find(m=>m.id===s.toMemberId);
+                if(!from||!to) return null;
+                return(
+                  <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid #f8fafc"}}>
+                    <span style={{fontSize:13}}>{from.avatar} <strong>{from.name}</strong> → {to.avatar} <strong>{to.name}</strong></span>
+                    <span style={{flex:1,fontSize:11,color:"#94a3b8"}}>{s.date}{s.note?" · "+s.note:""}</span>
+                    <span style={{fontWeight:700,fontSize:13,color:"#059669"}}>{fmt(s.amount)}</span>
+                    <button onClick={()=>onSaveSettlements(settlements.filter(x=>x.id!==s.id))} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"2px 7px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SplitTransactions({txns,members,splits,onSaveSplits}){
+  const [search,setSearch]=useState("");
+  const [splitModal,setSplitModal]=useState(null); // txn being split
+  const [splitType,setSplitType]=useState("equal"); // equal | proportional | custom
+  const [customShares,setCustomShares]=useState({});
+  const [payer,setPayer]=useState("");
+
+  const expenses=txns.filter(t=>t.type==="expense"&&(!search||((t.merchant||"")+" "+(t.category||"")).toLowerCase().includes(search.toLowerCase()))).slice(0,100);
+  const totalIncome=members.reduce((s,m)=>s+m.monthlyIncome,0);
+
+  const openSplit=t=>{
+    setSplitModal(t);
+    const sp=splits[t.id];
+    setSplitType(sp?.type||"equal");
+    setPayer(sp?.payer||members[0]?.id||"");
+    if(sp?.type==="custom"){
+      const map={};sp.shares.forEach(s=>{map[s.memberId]=String(s.amount);});setCustomShares(map);
+    } else {
+      setCustomShares({});
+    }
+  };
+  const closeSplit=()=>setSplitModal(null);
+
+  const computeShares=(t,type)=>{
+    if(!t||members.length===0) return[];
+    const amt=t.amount;
+    if(type==="equal"){
+      const each=+(amt/members.length).toFixed(2);
+      const remainder=+(amt-each*(members.length-1)).toFixed(2);
+      return members.map((m,i)=>({memberId:m.id,amount:i===members.length-1?remainder:each,pct:+(100/members.length).toFixed(1)}));
+    }
+    if(type==="proportional"&&totalIncome>0){
+      let used=0;
+      return members.map((m,i)=>{
+        const pct=totalIncome>0?m.monthlyIncome/totalIncome:1/members.length;
+        const share=i===members.length-1?+(amt-used).toFixed(2):+(amt*pct).toFixed(2);
+        used+=share;
+        return{memberId:m.id,amount:share,pct:+(pct*100).toFixed(1)};
+      });
+    }
+    if(type==="custom"){
+      return members.map(m=>({memberId:m.id,amount:parseFloat(customShares[m.id])||0,pct:+((parseFloat(customShares[m.id])||0)/amt*100).toFixed(1)}));
+    }
+    return[];
+  };
+
+  const saveSplit=()=>{
+    if(!splitModal) return;
+    const shares=computeShares(splitModal,splitType);
+    onSaveSplits({...splits,[splitModal.id]:{type:splitType,payer,shares}});
+    closeSplit();
+  };
+  const clearSplit=id=>{const n={...splits};delete n[id];onSaveSplits(n);};
+
+  const shares=splitModal?computeShares(splitModal,splitType):[];
+  const customTotal=Object.values(customShares).reduce((s,v)=>s+(parseFloat(v)||0),0);
+
+  return(
+    <div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search expenses…" style={{...IS,marginBottom:14,borderRadius:10}}/>
+      {members.length<2&&<div style={{...CA,color:"#94a3b8",fontSize:13}}>Add at least 2 household members to split transactions.</div>}
+      {members.length>=2&&(
+        <div style={CA}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1e293b"}}>Expense Transactions</div>
+          {expenses.length===0&&<div style={{color:"#94a3b8",fontSize:13}}>No expenses found.</div>}
+          {expenses.map(t=>{
+            const sp=splits[t.id];
+            const payerMember=sp?members.find(m=>m.id===sp.payer):null;
+            return(
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid #f8fafc",flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:160}}>
+                  <div style={{fontSize:13,fontWeight:500}}>{t.merchant||t.source}</div>
+                  <div style={{fontSize:11,color:"#94a3b8"}}>{t.date} · {t.category||"Uncategorized"}</div>
+                  {sp&&(
+                    <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                      {sp.shares.map(sh=>{const m=members.find(x=>x.id===sh.memberId);return m?<span key={sh.memberId} style={{fontSize:10,padding:"1px 6px",borderRadius:99,background:m.color+"22",color:m.color,fontWeight:600,border:`1px solid ${m.color}44`}}>{m.name}: {fmt(sh.amount)}</span>:null;})}
+                      {payerMember&&<span style={{fontSize:10,color:"#94a3b8",padding:"1px 6px"}}>paid by {payerMember.name}</span>}
+                    </div>
+                  )}
+                </div>
+                <div style={{fontWeight:700,fontSize:13,color:"#dc2626"}}>{fmt(t.amount)}</div>
+                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <button onClick={()=>openSplit(t)} style={{background:sp?"#f0fdf4":"#f0f9ff",border:`1px solid ${sp?"#86efac":"#7dd3fc"}`,borderRadius:6,padding:"3px 9px",cursor:"pointer",fontSize:11,color:sp?"#15803d":"#0284C7",fontFamily:"inherit",fontWeight:600}}>{sp?"Edit Split":"Split"}</button>
+                  {sp&&<button onClick={()=>clearSplit(t.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:6,padding:"3px 7px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Split modal */}
+      {splitModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}}>
+          <div style={{background:"#fff",borderRadius:16,padding:24,width:"100%",maxWidth:440,boxShadow:"0 20px 60px rgba(0,0,0,0.18)"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:"#1e293b"}}>{splitModal.merchant}</div>
+                <div style={{fontSize:13,color:"#94a3b8"}}>{fmt(splitModal.amount)} · {splitModal.date}</div>
+              </div>
+              <button onClick={closeSplit} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#94a3b8",fontFamily:"inherit",lineHeight:1}}>×</button>
+            </div>
+            {/* Split type */}
+            <div style={{display:"flex",gap:6,marginBottom:16}}>
+              {[["equal","Equal"],["proportional","By Income"],["custom","Custom"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setSplitType(v)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`2px solid ${splitType===v?"#0284C7":"#e2e8f0"}`,background:splitType===v?"#f0f9ff":"#fff",color:splitType===v?"#0284C7":"#64748b",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {splitType==="proportional"&&totalIncome===0&&<div style={{fontSize:12,color:"#f59e0b",marginBottom:10,background:"#fffbeb",padding:"8px 12px",borderRadius:8,border:"1px solid #fde68a"}}>Set monthly incomes on member cards to use proportional split.</div>}
+            {/* Who paid */}
+            <Fld label="Who paid?" style={{marginBottom:14}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {members.map(m=>(
+                  <button key={m.id} onClick={()=>setPayer(m.id)} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${payer===m.id?m.color:"#e2e8f0"}`,background:payer===m.id?m.color+"22":"#fff",color:payer===m.id?m.color:"#64748b",fontWeight:payer===m.id?700:400,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                    {m.avatar} {m.name}
+                  </button>
+                ))}
+              </div>
+            </Fld>
+            {/* Share preview / custom inputs */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Split Breakdown</div>
+              {members.map((m,i)=>{
+                const sh=shares.find(s=>s.memberId===m.id);
+                return(
+                  <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",background:m.color+"22",border:`2px solid ${m.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>{m.avatar}</div>
+                    <span style={{fontSize:13,fontWeight:500,flex:1,color:"#1e293b"}}>{m.name}</span>
+                    {splitType==="custom"?(
+                      <input type="number" value={customShares[m.id]||""} onChange={e=>setCustomShares(p=>({...p,[m.id]:e.target.value}))} style={{...IS,width:90,padding:"5px 8px",fontSize:13}} placeholder="0.00"/>
+                    ):(
+                      <span style={{fontSize:14,fontWeight:700,color:m.color}}>{sh?fmt(sh.amount):"-"}</span>
+                    )}
+                    {splitType!=="custom"&&sh&&<span style={{fontSize:11,color:"#94a3b8",width:36,textAlign:"right"}}>{sh.pct}%</span>}
+                  </div>
+                );
+              })}
+              {splitType==="custom"&&(
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderTop:"1px solid #f1f5f9",fontSize:12}}>
+                  <span style={{color:"#64748b"}}>Total assigned</span>
+                  <span style={{fontWeight:700,color:Math.abs(customTotal-splitModal.amount)<0.02?"#059669":"#dc2626"}}>{fmt(customTotal)} / {fmt(splitModal.amount)}</span>
+                </div>
+              )}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <Btn onClick={saveSplit} full disabled={!payer||(splitType==="proportional"&&totalIncome===0)||(splitType==="custom"&&Math.abs(customTotal-splitModal.amount)>=0.02)}>Save Split</Btn>
+              <Btn v="secondary" onClick={closeSplit}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
   const [form,setForm]=useState({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const monthOpts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const [viewMonth,setViewMonth]=useState(today().slice(0,7));
+  const [editId,setEditId]=useState(null);
+  const [editBill,setEditBill]=useState({});
   const active=bills.filter(b=>b.active!==false);
   const isPaid=(id,mo=viewMonth)=>billPayments.some(p=>p.billId===id&&p.month===mo);
   const togglePaid=id=>{
@@ -3608,6 +4259,12 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
     setForm({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
   };
   const remove=id=>onSaveBills(bills.filter(b=>b.id!==id));
+  const startEdit=b=>{setEditId(b.id);setEditBill({name:b.name,amount:String(b.amount),category:b.category||cats[0]||"Other",dueDay:String(b.dueDay||15),note:b.note||""});};
+  const saveEdit=()=>{
+    if(!editBill.name.trim()||!editBill.amount)return;
+    onSaveBills(bills.map(b=>b.id===editId?{...b,name:editBill.name.trim(),amount:parseFloat(editBill.amount)||0,category:editBill.category,dueDay:parseInt(editBill.dueDay)||15,note:editBill.note}:b));
+    setEditId(null);
+  };
   const paidAmt=active.filter(b=>isPaid(b.id)).reduce((s,b)=>s+b.amount,0);
   const totalAmt=active.reduce((s,b)=>s+b.amount,0);
   const sorted=[...active].sort((a,b)=>a.dueDay-b.dueDay);
@@ -3643,6 +4300,21 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
         <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Bills for {ml(viewMonth)}</div>
         {sorted.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No bills yet. Add recurring bills above.</div>:sorted.map(b=>{
           const paid=isPaid(b.id);
+          if(editId===b.id) return(
+            <div key={b.id} style={{padding:"14px 0",borderBottom:"1px solid #f1f5f9"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <Fld label="Bill Name"><input style={IS} value={editBill.name} onChange={e=>setEditBill(p=>({...p,name:e.target.value}))} autoFocus/></Fld>
+                <Fld label="Amount ($)"><input style={IS} type="number" value={editBill.amount} onChange={e=>setEditBill(p=>({...p,amount:e.target.value}))}/></Fld>
+                <Fld label="Category"><select style={{...IS,background:"#fff"}} value={editBill.category} onChange={e=>setEditBill(p=>({...p,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>
+                <Fld label="Due Day of Month"><input style={IS} type="number" min="1" max="28" value={editBill.dueDay} onChange={e=>setEditBill(p=>({...p,dueDay:e.target.value}))}/></Fld>
+                <Fld label="Note" style={{gridColumn:"1/-1"}}><input style={IS} value={editBill.note} onChange={e=>setEditBill(p=>({...p,note:e.target.value}))} placeholder="Optional"/></Fld>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn sm onClick={saveEdit} disabled={!editBill.name.trim()||!editBill.amount}>Save</Btn>
+                <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+              </div>
+            </div>
+          );
           return(
             <div key={b.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #f8fafc"}}>
               <button onClick={()=>togglePaid(b.id)} style={{width:26,height:26,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?"#059669":"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all 0.15s",fontFamily:"inherit"}}>
@@ -3653,6 +4325,7 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>Due {ordinal(b.dueDay)} · {b.category}{b.note?" · "+b.note:""}</div>
               </div>
               <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{fmt(b.amount)}</div>
+              <button onClick={()=>startEdit(b)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit",flexShrink:0}}>Edit</button>
               <button onClick={()=>remove(b.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0}}>Remove</button>
             </div>
           );
@@ -3663,14 +4336,14 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
 }
 
 function Goals({goals,onSaveGoals}){
-  const [form,setForm]=useState({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  const [form,setForm]=useState({name:"",emoji:"",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [contrib,setContrib]=useState({});
   const GOAL_COLORS=["#0284C7","#059669","#d97706","#7c3aed","#db2777","#0891b2"];
   const add=()=>{
     if(!form.name.trim()||!form.targetAmount)return;
-    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"🎯",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
-    setForm({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
+    setForm({name:"",emoji:"",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
   };
   const logContrib=id=>{
     const amt=parseFloat(contrib[id])||0;if(!amt)return;
@@ -3703,7 +4376,7 @@ function Goals({goals,onSaveGoals}){
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:pct<1?12:0}}>
                   <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% saved</span>
                   {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{fmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
-                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached! 🎉</span>}
+                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached!</span>}
                 </div>
                 {pct<1&&(
                   <div style={{display:"flex",gap:8,borderTop:"1px solid #f1f5f9",paddingTop:10}}>
@@ -3720,7 +4393,7 @@ function Goals({goals,onSaveGoals}){
         <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>{goals.length===0?"Create Your First Goal":"Add Another Goal"}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <Fld label="Goal Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Emergency Fund, House"/></Fld>
-          <Fld label="Emoji"><input style={{...IS}} value={form.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎯"/></Fld>
+          
           <Fld label="Target Amount ($)"><input style={IS} type="number" value={form.targetAmount} onChange={e=>set("targetAmount",e.target.value)} placeholder="10000"/></Fld>
           <Fld label="Already Saved ($)"><input style={IS} type="number" value={form.currentAmount} onChange={e=>set("currentAmount",e.target.value)} placeholder="0"/></Fld>
           <Fld label="Monthly Target ($)"><input style={IS} type="number" value={form.monthlyTarget} onChange={e=>set("monthlyTarget",e.target.value)} placeholder="Optional"/></Fld>
@@ -3998,7 +4671,7 @@ const DEFAULT_SCHEMA={views:{
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Settings({settings,onSave}){
+function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
   const [f,setF]=useState({...DEFAULT_SETTINGS,...settings});
   const [ollamaStatus,setOllamaStatus]=useState(()=>settings.ollamaStatus||null); // null | "ok" | "error"
   const [testing,setTesting]=useState(false);
@@ -4097,245 +4770,399 @@ function Settings({settings,onSave}){
     </div>
   );
 
+  // shared sub-styles
+  const S={background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,padding:"0 18px",marginBottom:10};
+  const SH={fontSize:10,fontWeight:600,color:T.tx3,textTransform:"uppercase",letterSpacing:"0.08em",padding:"12px 0 8px",borderBottom:"1px solid "+T.border,marginBottom:0};
+  const SR={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+T.bg};
+  const SRL={fontSize:13,fontWeight:500,color:T.tx1};
+  const SRS={fontSize:11,color:T.tx3,marginTop:1};
+  const Toggle=({on,onToggle})=>(
+    <button onClick={onToggle} style={{width:38,height:21,borderRadius:11,border:"none",cursor:"pointer",background:on?T.tx1:T.border,position:"relative",transition:"background .2s",flexShrink:0}}>
+      <span style={{position:"absolute",top:2,left:on?18:2,width:17,height:17,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}/>
+    </button>
+  );
+  const SmBtn=({onClick,label,red,disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"5px 12px",background:red?T.redBg:T.overlay,color:red?T.red:T.tx1,border:`1px solid ${red?"#fecaca":T.border}`,borderRadius:T.r,fontSize:12,fontWeight:500,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0,opacity:disabled?0.5:1}}>{label}</button>
+  );
+
   return(
-    <div>
-      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Settings</h2>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+    <div style={{maxWidth:1200}}>
+      <h2 style={{margin:"0 0 16px",fontSize:18,fontWeight:600,color:T.tx1}}>Settings</h2>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
-        {/* Left column */}
-        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* ── Row 1: left col (Account + Appearance) | Security ── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12,marginBottom:12,alignItems:"stretch"}}>
 
-          {/* Personal */}
-          <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Personal</div>
-            <Fld label="Your Name">
-              <input style={IS} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Gabe"/>
-            </Fld>
-            <Btn onClick={save} full>Save Settings</Btn>
+        {/* Left column stretches to match Security height */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+          {/* Account */}
+          <div style={S}>
+            <div style={SH}>Account</div>
+            <div style={{...SR,borderBottom:"none"}}>
+              <div style={SRL}>Name</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input style={{...IS,width:130,padding:"6px 10px",margin:0}} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Your name"/>
+                <SmBtn onClick={save} label="Save"/>
+              </div>
+            </div>
+            {authConfig?.email&&(
+              <div style={{...SR,borderBottom:"none"}}>
+                <div><div style={SRL}>Email</div><div style={SRS}>{authConfig.email}</div></div>
+              </div>
+            )}
           </div>
 
-          {/* Appearance */}
-          <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Appearance</div>
-
-            {/* Dark Mode */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>🌙 Dark Mode</div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:1}}>Switch to a dark colour scheme</div>
-              </div>
-              <button onClick={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.darkMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-                <span style={{position:"absolute",top:3,left:f.darkMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-              </button>
+          {/* Appearance — flex:1 fills remaining height */}
+          <div style={{...S,flex:1,display:"flex",flexDirection:"column"}}>
+            <div style={SH}>Appearance</div>
+            <div style={SR}>
+              <div><div style={SRL}>Dark Mode</div><div style={SRS}>Inverts colours across the app</div></div>
+              <Toggle on={f.darkMode} onToggle={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}}/>
             </div>
+            <div style={{...SR,borderBottom:"none"}}>
+              <div style={SRL}>Colour Blind Mode</div>
+              <select value={f.colorBlindMode} onChange={e=>{set("colorBlindMode",e.target.value);setTimeout(()=>onSave({...f,colorBlindMode:e.target.value}),50);}} style={{padding:"6px 10px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:12,fontFamily:"inherit",outline:"none",background:T.surface,color:T.tx1}}>
+                <option value="none">None</option>
+                <option value="deuteranopia">Deuteranopia</option>
+                <option value="protanopia">Protanopia</option>
+                <option value="tritanopia">Tritanopia</option>
+                <option value="achromatopsia">Greyscale</option>
+              </select>
+            </div>
+          </div>
 
-            {/* Color Blind Mode */}
-            <div>
-              <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:6}}>👁 Colour Blind Mode</div>
-              <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                {[
-                  {v:"none",       l:"None",         d:"Default colours"},
-                  {v:"deuteranopia",l:"Deuteranopia", d:"Red-green (most common)"},
-                  {v:"protanopia",  l:"Protanopia",   d:"Red-green (red weak)"},
-                  {v:"tritanopia",  l:"Tritanopia",   d:"Blue-yellow"},
-                  {v:"achromatopsia",l:"Greyscale",   d:"Full colour blindness"},
-                ].map(({v,l,d})=>(
-                  <label key={v} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"7px 10px",borderRadius:8,background:f.colorBlindMode===v?"#eff6ff":"transparent",border:f.colorBlindMode===v?"1px solid #bae6fd":"1px solid transparent",transition:"all .15s"}}>
-                    <input type="radio" name="colorBlind" value={v} checked={f.colorBlindMode===v} onChange={()=>{set("colorBlindMode",v);setTimeout(()=>onSave({...f,colorBlindMode:v}),50);}} style={{accentColor:"#0284C7"}}/>
+        </div>{/* end left column */}
+
+        {/* Security */}
+        {authConfig!==undefined
+          ? <SecuritySettingsSection authConfig={authConfig} onSave={onSaveAuthConfig} compact/>
+          : <div/>}
+
+      </div>{/* end row 1 */}
+
+      {/* ── Row 2: AI | App ── */}
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,alignItems:"stretch"}}>
+
+      {/* AI */}
+      <div style={S}>
+        <div style={SH}>AI</div>
+
+        {/* Gemini */}
+        <div style={{borderBottom:"1px solid #f1f5f9"}}>
+          <div onClick={()=>setGeminiExpanded(p=>{onSave({...f,geminiExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+            <div><div style={SRL}>Gemini API Key</div><div style={SRS}>Receipt scanning and Jarvis AI</div></div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking...</span>
+               :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Active{geminiKeySource==="env"?" (env)":""}</span>
+               :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600}}>Not set</span>}
+              <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:geminiExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+            </div>
+          </div>
+          {geminiExpanded&&(
+            <div style={{padding:"4px 0 14px"}}>
+              {!geminiKeySet?(
+                <>
+                  <input type="password" style={{...IS,letterSpacing:geminiKeyInput?"0.15em":"normal",fontFamily:geminiKeyInput?"monospace":"inherit",marginBottom:8}} value={geminiKeyInput} onChange={e=>setGeminiKeyInput(e.target.value)} placeholder="AIza..." autoComplete="off" spellCheck={false}/>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={saveGeminiKey} disabled={geminiSaving||!geminiKeyInput.trim()} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||!geminiKeyInput.trim()?0.5:1}}>{geminiSaving?"Saving...":"Save Key"}</button>
+                  </div>
+                </>
+              ):(
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{flex:1,fontSize:12,color:"#94a3b8",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 12px",letterSpacing:"0.2em",fontFamily:"monospace"}}>{"•".repeat(24)}</div>
+                  <SmBtn onClick={resetGeminiKey} label="Remove" red disabled={geminiSaving||geminiKeySource==="env"}/>
+                </div>
+              )}
+              {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px"}}>{geminiMsg.text}</div>}
+              <div style={{marginTop:8,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
+            </div>
+          )}
+        </div>
+
+        {/* Ollama */}
+        <div>
+          <div onClick={()=>setOllamaExpanded(p=>{onSave({...f,ollamaExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+            <div><div style={SRL}>Local AI (Ollama)</div><div style={SRS}>Runs entirely on your machine</div></div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {ollamaStatus==="ok"&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Connected</span>}
+              {ollamaStatus==="error"&&<span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>Unreachable</span>}
+              <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:ollamaExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+            </div>
+          </div>
+          {ollamaExpanded&&(
+            <div style={{padding:"4px 0 14px",display:"flex",flexDirection:"column",gap:10}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Server URL</div>
+                <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
+              </div>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Model</div>
+                <input style={IS} value={f.ollamaModel} onChange={e=>set("ollamaModel",e.target.value)} placeholder="phi3:mini"/>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Recommended: <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>phi3:mini</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>llama3.2:3b</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>mistral:7b</code></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>{testing?"Testing...":"Test Connection"}</button>
+                <SmBtn onClick={save} label="Save"/>
+              </div>
+              {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"8px 12px"}}>✓ Ollama is running and reachable</div>}
+              {ollamaStatus==="error"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  <div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px"}}>Could not reach Ollama — install it first</div>
+                  <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
                     <div>
-                      <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{l}</div>
-                      <div style={{fontSize:10,color:"#94a3b8"}}>{d}</div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>macOS / Linux</div>
+                      <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
                     </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Developer Access */}
-          <div style={{...CA,background:f.devMode?"linear-gradient(135deg,#fefce8,#fef9c3)":"#fff",border:f.devMode?"1px solid #fde047":"1px solid #e2e8f0"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Developer Access</div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Unlocks the Data Model editor tab</div>
-              </div>
-              <button onClick={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.devMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-                <span style={{position:"absolute",top:3,left:f.devMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-              </button>
-            </div>
-            {f.devMode&&<div style={{fontSize:11,color:"#854d0e",background:"#fef9c3",border:"1px solid #fde047",borderRadius:8,padding:"7px 10px"}}>⚠ Dev mode enabled — Data Model tab is now visible in the nav.</div>}
-          </div>
-
-        </div>
-
-        {/* Right column — Gemini + Ollama */}
-        <div style={{display:"flex",flexDirection:"column",gap:16}}>
-
-          {/* Gemini API Key */}
-          <div style={{...CA,border:geminiKeySet?"1px solid #bbf7d0":"1px solid #e2e8f0",background:geminiKeySet?"linear-gradient(135deg,#f0fdf4,#f7fffe)":"#fff"}}>
-            <div onClick={()=>setGeminiExpanded(p=>{onSave({...f,geminiExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:geminiExpanded?4:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Gemini API Key</div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking…</span>
-                 :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Active{geminiKeySource==="env"?" (env)":""}</span>
-                 :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"2px 8px"}}>Not set</span>}
-                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:geminiExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
-              </div>
-            </div>
-            {geminiExpanded&&<>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.6}}>Used for receipt scanning and Jarvis AI. Keys are stored server-side and never exposed to the browser.</div>
-            {!geminiKeySet&&<>
-              <Fld label="Paste your key">
-                <input
-                  type="password"
-                  style={{...IS,letterSpacing:geminiKeyInput?"0.15em":"normal",fontFamily:geminiKeyInput?"monospace":"inherit"}}
-                  value={geminiKeyInput}
-                  onChange={e=>setGeminiKeyInput(e.target.value)}
-                  placeholder="AIza…"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </Fld>
-              <div style={{display:"flex",gap:8,marginTop:4}}>
-                <button onClick={saveGeminiKey} disabled={geminiSaving||!geminiKeyInput.trim()} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:geminiSaving||!geminiKeyInput.trim()?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||!geminiKeyInput.trim()?0.5:1}}>
-                  {geminiSaving?"Saving…":"Save Key"}
-                </button>
-              </div>
-            </>}
-            {geminiKeySet&&<div style={{display:"flex",gap:8,marginTop:4}}>
-              <div style={{flex:1,fontSize:12,color:"#64748b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"8px 12px",letterSpacing:"0.2em",fontFamily:"monospace"}}>
-                {"•".repeat(32)}
-              </div>
-              <button onClick={resetGeminiKey} disabled={geminiSaving||geminiKeySource==="env"} title={geminiKeySource==="env"?"Key comes from .env file — remove GEMINI_API_KEY from .env to reset":""} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:geminiSaving||geminiKeySource==="env"?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||geminiKeySource==="env"?0.5:1,whiteSpace:"nowrap",flexShrink:0}}>
-                {geminiSaving?"…":"Reset Key"}
-              </button>
-            </div>}
-            {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px",fontWeight:500}}>
-              {geminiMsg.type==="ok"?"✓ ":"✗ "}{geminiMsg.text}
-            </div>}
-            <div style={{marginTop:10,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
-            </>}
-          </div>
-
-          <div style={CA}>
-            <div onClick={()=>setOllamaExpanded(p=>{onSave({...f,ollamaExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:ollamaExpanded?4:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Local AI (Ollama)</div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {ollamaStatus==="ok"&&<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Connected</span>}
-                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:ollamaExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
-              </div>
-            </div>
-            {ollamaExpanded&&<>
-            <div style={{fontSize:11,color:"#64748b",marginTop:4,marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
-
-            <Fld label="Ollama URL">
-              <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
-            </Fld>
-            <Fld label="Model">
-              <input style={IS} value={f.ollamaModel} onChange={e=>set("ollamaModel",e.target.value)} placeholder="phi3:mini"/>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:4}}>Recommended: <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>phi3:mini</code> (fast, 3.8B) · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>llama3.2:3b</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>mistral:7b</code></div>
-            </Fld>
-            <div style={{display:"flex",gap:8,marginTop:4,marginBottom:12}}>
-              <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>
-                {testing?"Testing…":"⚡ Test Connection"}
-              </button>
-              <Btn onClick={save}>Save</Btn>
-            </div>
-            {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontWeight:500}}>✓ Ollama is running and reachable</div>}
-            {ollamaStatus==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px"}}>✗ Could not reach Ollama — see install steps below</div>}
-            </>}
-          </div>
-
-          {/* Install instructions — hidden once Ollama connects */}
-          {!ollamaStatus&&<div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:12}}>Install Ollama</div>
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>macOS / Linux</div>
-                <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
-                <div style={{fontSize:11,color:"#94a3b8"}}>Or download from <a href="https://ollama.ai" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai</a></div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Windows</div>
-                <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Download the installer from <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai/download</a> and run it.</div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Pull a model (after installing)</div>
-                <CodeBlock cmd="ollama pull phi3:mini"/>
-                <CodeBlock cmd="ollama pull llama3.2:3b"/>
-                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>phi3:mini is ~2.3GB and runs well on most machines. llama3.2:3b is ~2.0GB and slightly stronger at reasoning.</div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Start Ollama (if not auto-started)</div>
-                <CodeBlock cmd="ollama serve"/>
-              </div>
-
-            </div>
-          </div>}
-        </div>
-
-      </div>
-
-      {/* ── App Update ─────────────────────────────────────────────────── */}
-      {isElectron&&(
-        <div style={{background:"#fff",borderRadius:12,padding:"20px 24px",boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginTop:20}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:2}}>App Update</div>
-          <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>Choose how to update the app.</div>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-
-            {/* ── Local ── */}
-            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>💻 Local</div>
-              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Rebuild from your local source code changes. App quits, updates, and relaunches.</div>
-              <button
-                onClick={triggerLocalUpdate}
-                disabled={localStatus==='building'}
-                style={{width:"100%",padding:"8px 0",borderRadius:7,background:localStatus==='building'?"#94a3b8":localStatus==='error'?"#dc2626":"#0f172a",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:localStatus==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
-              >
-                {localStatus==='building'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
-                  :localStatus==='error'?'↺ Retry':'🔄 Build & Install'}
-              </button>
-              {localLog.length>0&&(
-                <div style={{marginTop:10,background:"#0f172a",borderRadius:7,padding:"8px 12px",maxHeight:130,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6}}>
-                  {localLog.map((l,i)=><div key={i} style={{color:l.startsWith('Error')?'#f87171':l.includes('✓')||l.includes('built')||l.includes('✅')?"#4ade80":"#94a3b8"}}>{l}</div>)}
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Windows — <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai/download</a></div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Pull a model</div>
+                      <CodeBlock cmd="ollama pull phi3:mini"/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Start server</div>
+                      <CodeBlock cmd="ollama serve"/>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
+          )}
+        </div>
+      </div>
 
-            {/* ── GitHub ── */}
-            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>🐙 GitHub</div>
-              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Check GitHub Releases for a new published version and download it in the background.</div>
-              <button
-                onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub}
-                disabled={ghStatus==='checking'||ghStatus==='downloading'}
-                style={{width:"100%",padding:"8px 0",borderRadius:7,background:ghStatus==='checking'||ghStatus==='downloading'?"#94a3b8":ghStatus==='ready'?"#16a34a":ghStatus==='error'?"#dc2626":"#0284C7",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:(ghStatus==='checking'||ghStatus==='downloading')?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
-              >
-                {ghStatus==='checking'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Checking…</>
-                  :ghStatus==='downloading'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Downloading…</>
-                  :ghStatus==='ready'?`✅ Restart to install v${ghVersion}`
-                  :ghStatus==='up-to-date'?'✓ Up to date'
-                  :ghStatus==='error'?'↺ Retry'
-                  :'Check for Updates'}
-              </button>
-              {ghStatus==='up-to-date'&&<div style={{marginTop:8,fontSize:11,color:"#16a34a"}}>You're on the latest version.</div>}
-              {ghStatus==='downloading'&&<div style={{marginTop:8,fontSize:11,color:"#0284C7"}}>Downloading v{ghVersion} in background…</div>}
-              {ghStatus==='error'&&<div style={{marginTop:8,fontSize:11,color:"#dc2626",wordBreak:"break-word"}}>{ghError||"Update check failed."}</div>}
-            </div>
-
+      {/* ── App ─────────────────────────────────────────────────────────── */}
+      <div style={S}>
+        <div style={SH}>App</div>
+        <div style={SR}>
+          <div><div style={SRL}>Developer Mode</div><div style={SRS}>Unlocks the Data Model editor</div></div>
+          <Toggle on={f.devMode} onToggle={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}}/>
+        </div>
+        {isElectron&&<>
+          <div style={SR}>
+            <div><div style={SRL}>Update from Source</div><div style={SRS}>Rebuild and reinstall from local code</div></div>
+            <button onClick={triggerLocalUpdate} disabled={localStatus==='building'} style={{padding:"5px 13px",background:localStatus==='building'?"#f1f5f9":localStatus==='error'?"#fef2f2":"#f1f5f9",color:localStatus==='error'?"#dc2626":"#374151",border:`1px solid ${localStatus==='error'?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:localStatus==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+              {localStatus==='building'?<><span style={{width:10,height:10,border:"2px solid rgba(0,0,0,0.15)",borderTopColor:"#374151",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>Building...</>:localStatus==='error'?'Retry':'Build & Install'}
+            </button>
           </div>
+          {localLog.length>0&&(
+            <div style={{background:"#0f172a",borderRadius:8,padding:"8px 12px",maxHeight:100,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6,marginBottom:8}}>
+              {localLog.map((l,i)=><div key={i} style={{color:l.startsWith('Error')?'#f87171':l.includes('✓')||l.includes('built')?"#4ade80":"#94a3b8"}}>{l}</div>)}
+            </div>
+          )}
+          <div style={{...SR,borderBottom:"none"}}>
+            <div><div style={SRL}>Check for Updates</div><div style={SRS}>Download from GitHub Releases</div></div>
+            <button onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub} disabled={ghStatus==='checking'||ghStatus==='downloading'} style={{padding:"5px 13px",background:ghStatus==='ready'?"#f0fdf4":ghStatus==='error'?"#fef2f2":"#f1f5f9",color:ghStatus==='ready'?"#059669":ghStatus==='error'?"#dc2626":"#374151",border:`1px solid ${ghStatus==='ready'?"#bbf7d0":ghStatus==='error'?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:(ghStatus==='checking'||ghStatus==='downloading')?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+              {ghStatus==='checking'||ghStatus==='downloading'?<><span style={{width:10,height:10,border:"2px solid rgba(0,0,0,0.15)",borderTopColor:"#374151",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>{ghStatus==='downloading'?`Downloading v${ghVersion}...`:"Checking..."}</>:ghStatus==='ready'?`Restart to install v${ghVersion}`:ghStatus==='up-to-date'?"Up to date":ghStatus==='error'?'Retry':'Check for Updates'}
+            </button>
+          </div>
+          {ghStatus==='error'&&<div style={{fontSize:11,color:"#dc2626",marginBottom:10,paddingLeft:2}}>{ghError||"Update check failed."}</div>}
+        </>}
+      </div>
+
+      </div>{/* end row 2 */}
+    </div>
+  );
+}
+
+// ── Security Settings Section (manage existing account) ───────────────────────
+function SecuritySettingsSection({authConfig,onSave,compact}){
+  const AC=(authConfig&&typeof authConfig==="object"&&authConfig.pinHash)?authConfig:null;
+  const [phase,setPhase]=useState("idle"); // idle | changePIN | totpSetup | changeEmail
+  const [pinA,setPinA]=useState("");
+  const [pinB,setPinB]=useState("");
+  const [pinErr,setPinErr]=useState("");
+  const [pinBusy,setPinBusy]=useState(false);
+  const [bioStatus,setBioStatus]=useState(AC?.webauthnCredId?"enrolled":"idle"); // idle|enrolling|enrolled|error
+  const [bioErr,setBioErr]=useState("");
+  const [totpSecret]=useState(()=>genTOTPSecret());
+  const [totpInput,setTotpInput]=useState("");
+  const [totpErr,setTotpErr]=useState("");
+  const [autoLock,setAutoLock]=useState(AC?.autoLockMinutes||0);
+  const [emailInput,setEmailInput]=useState(AC?.email||"");
+
+  const cfg=patch=>{const n={...AC,...patch};onSave(n);return n;};
+
+  const savePIN=async()=>{
+    if(pinA.length<4){setPinErr("At least 4 digits");return;}
+    if(pinA!==pinB){setPinErr("PINs don't match");return;}
+    setPinBusy(true);setPinErr("");
+    const salt=genSalt();
+    cfg({pinHash:await hashPin(pinA,salt),pinSalt:salt});
+    setPinA("");setPinB("");setPhase("idle");setPinBusy(false);
+  };
+
+  const enrollBio=async()=>{
+    setBioStatus("enrolling");setBioErr("");
+    try{
+      // macOS: use native Touch ID via Electron IPC (most reliable)
+      if(window.electronBiometrics){
+        const ok=await window.electronBiometrics.available();
+        if(ok){
+          await window.electronBiometrics.prompt("verify your identity to enable Touch ID for CashHeap");
+          cfg({webauthnCredId:"native-touchid",webauthnEnabled:true,bioMethod:"touchid"});
+          setBioStatus("enrolled");return;
+        }
+      }
+      // Fallback: WebAuthn (Windows Hello, FIDO2 keys, etc.)
+      const cred=await navigator.credentials.create({publicKey:{
+        challenge:crypto.getRandomValues(new Uint8Array(32)),
+        rp:{name:"CashHeap",id:window.location.hostname||"localhost"},
+        user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
+        pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
+        authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
+        timeout:60000,
+      }});
+      cfg({webauthnCredId:_b64ue(cred.rawId),webauthnEnabled:true,bioMethod:"webauthn"});
+      setBioStatus("enrolled");
+    }catch(e){
+      setBioErr(e.name==="NotAllowedError"?"Cancelled — try again.":`${e.message}`);
+      setBioStatus(AC?.webauthnCredId?"enrolled":"idle");
+    }
+  };
+
+  const verifyAndSaveTOTP=async()=>{
+    const now=await calcTOTP(totpSecret);
+    const prev=await calcTOTP(totpSecret,Date.now()-30000);
+    if(totpInput===now||totpInput===prev){cfg({totpSecret,totpEnabled:true});setPhase("idle");}
+    else{setTotpErr("Incorrect code — try again");}
+  };
+
+  const IS2={width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
+  const Row=({icon,label,sub,subColor,action})=>(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9,marginBottom:8}}>
+      <div>
+        <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{icon?`${icon} `:""}{label}</div>
+        {sub&&<div style={{fontSize:11,marginTop:1,color:subColor||"#64748b"}}>{sub}</div>}
+      </div>
+      {action}
+    </div>
+  );
+  const Btn=({onClick,label,color="#0284C7",textColor="#fff",disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"6px 14px",background:disabled?"#94a3b8":color,color:textColor,border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0}}>{label}</button>
+  );
+
+  const SH2={fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",padding:"16px 0 10px",borderBottom:"1px solid #f1f5f9",marginBottom:0};
+  const SR2={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 0",borderBottom:"1px solid #f8fafc"};
+  const SRL2={fontSize:13,fontWeight:500,color:"#1e293b"};
+  const SRS2={fontSize:11,color:"#94a3b8",marginTop:1};
+  const SmBtn2=({onClick,label,red,disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"5px 13px",background:red?"#fef2f2":"#f1f5f9",color:red?"#dc2626":"#374151",border:`1px solid ${red?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0,opacity:disabled?0.5:1}}>{label}</button>
+  );
+
+  if(!AC) return(
+    <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"0 20px",marginBottom:16}}>
+      <div style={SH2}>Security</div>
+      <div style={{...SR2,borderBottom:"none"}}><div style={SRL2}>No account configured — you'll be prompted on next launch.</div></div>
+    </div>
+  );
+
+  return(
+    <div style={{background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,padding:"0 18px",marginBottom:0}}>
+      <div style={SH2}>Security</div>
+
+      {/* Email */}
+      {phase!=="changePIN"&&phase!=="totpSetup"&&(
+        <div style={SR2}>
+          <div>
+            <div style={SRL2}>Email</div>
+            <div style={SRS2}>{AC.email||"No email set"}</div>
+          </div>
+          {phase==="changeEmail"?(
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <input type="email" placeholder="you@example.com" value={emailInput} onChange={e=>setEmailInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&emailInput.includes("@")&&(cfg({email:emailInput.trim()}),setPhase("idle"))} style={{padding:"6px 10px",borderRadius:7,border:"1px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",width:180}}/>
+              <SmBtn2 onClick={()=>{if(emailInput.includes("@")){cfg({email:emailInput.trim()});setPhase("idle");}}} label="Save"/>
+              <SmBtn2 onClick={()=>setPhase("idle")} label="Cancel"/>
+            </div>
+          ):(
+            <SmBtn2 onClick={()=>{setEmailInput(AC.email||"");setPhase("changeEmail");}} label={AC.email?"Change":"Add"}/>
+          )}
         </div>
       )}
 
+      {/* PIN */}
+      {phase==="changePIN"?(
+        <div style={{padding:"12px 0",borderBottom:"1px solid #f8fafc"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:8}}>Change PIN</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:320}}>
+            <input type="password" inputMode="numeric" placeholder="New PIN (4-6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
+            <input type="password" inputMode="numeric" placeholder="Confirm new PIN" maxLength={6} value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))} style={IS2} onKeyDown={e=>e.key==="Enter"&&savePIN()}/>
+            {pinErr&&<div style={{color:"#dc2626",fontSize:11}}>{pinErr}</div>}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={savePIN} disabled={pinBusy} style={{flex:1,padding:"7px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinBusy?"Saving...":"Update PIN"}</button>
+              <button onClick={()=>{setPhase("idle");setPinA("");setPinB("");setPinErr("");}} style={{flex:1,padding:"7px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ):(
+        <div style={SR2}>
+          <div><div style={SRL2}>PIN</div><div style={SRS2}>PBKDF2 secured unlock PIN</div></div>
+          <SmBtn2 onClick={()=>setPhase("changePIN")} label="Change"/>
+        </div>
+      )}
+
+      {/* Biometrics */}
+      {phase!=="changePIN"&&(
+        <>
+          <div style={SR2}>
+            <div>
+              <div style={SRL2}>Biometrics</div>
+              <div style={{...SRS2,color:bioStatus==="enrolled"?"#16a34a":undefined}}>{bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"}</div>
+            </div>
+            {bioStatus==="enrolled"
+              ?<SmBtn2 onClick={()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("idle");}} label="Remove" red/>
+              :<SmBtn2 onClick={enrollBio} label={bioStatus==="enrolling"?"...":"Enroll"} disabled={bioStatus==="enrolling"}/>
+            }
+          </div>
+          {bioErr&&<div style={{fontSize:11,color:"#dc2626",paddingBottom:8,marginTop:-6}}>{bioErr}</div>}
+        </>
+      )}
+
+      {/* TOTP */}
+      {phase==="totpSetup"?(
+        <div style={{padding:"12px 0",borderBottom:"1px solid #f8fafc"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:8}}>Set Up 2-Factor Authentication</div>
+          <div style={{textAlign:"center",marginBottom:10}}>
+            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:8,border:"2px solid #e2e8f0"}}/>
+            <div style={{marginTop:6,background:"#0f172a",borderRadius:6,padding:"6px 10px",fontFamily:"monospace",fontSize:11,color:"#a5f3fc",wordBreak:"break-all"}}>{totpSecret}</div>
+          </div>
+          <input placeholder="Enter 6-digit code to verify" maxLength={6} value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))} style={{...IS2,textAlign:"center",fontSize:18,letterSpacing:6,fontFamily:"monospace",marginBottom:8}} onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyAndSaveTOTP()}/>
+          {totpErr&&<div style={{color:"#dc2626",fontSize:11,marginBottom:6}}>{totpErr}</div>}
+          <div style={{display:"flex",gap:8,maxWidth:320}}>
+            <button onClick={verifyAndSaveTOTP} disabled={totpInput.length!==6} style={{flex:1,padding:"7px 0",background:totpInput.length===6?"#0284C7":"#94a3b8",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit"}}>Verify &amp; Enable</button>
+            <button onClick={()=>{setPhase("idle");setTotpInput("");setTotpErr("");}} style={{flex:1,padding:"7px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          </div>
+        </div>
+      ):(
+        phase!=="changePIN"&&(
+          <div style={SR2}>
+            <div>
+              <div style={SRL2}>Two-Factor Auth</div>
+              <div style={{...SRS2,color:AC.totpEnabled?"#16a34a":undefined}}>{AC.totpEnabled?"Authenticator app active":"Not enabled"}</div>
+            </div>
+            {AC.totpEnabled
+              ?<SmBtn2 onClick={()=>cfg({totpSecret:null,totpEnabled:false})} label="Disable" red/>
+              :<SmBtn2 onClick={()=>{setTotpInput("");setTotpErr("");setPhase("totpSetup");}} label="Set Up"/>
+            }
+          </div>
+        )
+      )}
+
+      {/* Auto-lock */}
+      {phase==="idle"&&(
+        <div style={{...SR2,borderBottom:"none"}}>
+          <div><div style={SRL2}>Auto-lock</div><div style={SRS2}>Lock after idle period</div></div>
+          <select value={autoLock} onChange={e=>{const v=Number(e.target.value);setAutoLock(v);cfg({autoLockMinutes:v});}} style={{padding:"6px 10px",borderRadius:7,border:"1px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
+            <option value={0}>On launch only</option>
+            <option value={1}>After 1 minute</option>
+            <option value={5}>After 5 minutes</option>
+            <option value={15}>After 15 minutes</option>
+            <option value={30}>After 30 minutes</option>
+          </select>
+        </div>
+      )}
     </div>
   );
 }
@@ -5512,7 +6339,7 @@ Current month: ${curMonth}`;
       }
     }catch(e){
       setError(e.message);
-      setMessages(prev=>[...prev,{role:"assistant",display:"⚠ "+e.message,content:"",widgets:[]}]);
+      setMessages(prev=>[...prev,{role:"assistant",display:"Error: "+e.message,content:"",widgets:[]}]);
     }
 
     // Last-resort fallback: if no query succeeded (refused, errored, or never tried)
@@ -6054,21 +6881,63 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
       <button
         onClick={()=>onSetOpen(!open)}
         title={open?"Close Jarvis":"Open Jarvis"}
-        style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:open?"#475569":"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:open?18:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 18px rgba(2,132,199,0.5)",zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
+        style={{position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:open?T.overlay:T.accent,border:open?"1px solid "+T.border:"none",cursor:"pointer",color:open?T.tx2:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:open?T.shadow:T.shadowMd,zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
         onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
         onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-      >{open?"✕":"💬"}</button>
+      >{open
+        ?<svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1={18} y1={6} x2={6} y2={18}/><line x1={6} y1={6} x2={18} y2={18}/></svg>
+        :<svg width={26} height={26} viewBox="0 0 32 32" fill="none">
+          {/* Neural / spark logo */}
+          <circle cx={16} cy={16} r={5} fill="rgba(255,255,255,0.95)"/>
+          <circle cx={16} cy={5} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={16} cy={27} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={5} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={27} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={8.1} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={23.9} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={8.1} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={23.9} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <line x1={16} y1={11} x2={16} y2={7.2} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={16} y1={21} x2={16} y2={24.8} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={11} y1={16} x2={7.2} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={21} y1={16} x2={24.8} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+        </svg>
+      }</button>
 
       {/* Panel */}
       {open&&(
-        <div style={{position:"fixed",bottom:92,right:24,width:390,maxHeight:550,borderRadius:18,background:"#fff",boxShadow:"0 10px 48px rgba(0,0,0,0.2)",zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
+        <div style={{position:"fixed",bottom:84,right:24,width:390,maxHeight:550,borderRadius:T.rCard,background:T.surface,boxShadow:T.shadowMd,zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
 
           {/* Header */}
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"13px 16px 11px",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(135deg,#f8fafc,#eff6ff)",flexShrink:0}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>💬</div>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"12px 16px 10px",borderBottom:"1px solid "+T.border,background:T.surface,flexShrink:0}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#0284C7,#6366f1)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <svg width={18} height={18} viewBox="0 0 32 32" fill="none">
+                <circle cx={16} cy={16} r={5} fill="rgba(255,255,255,0.95)"/>
+                <circle cx={16} cy={5} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={16} cy={27} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={5} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={27} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={8.1} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={23.9} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={8.1} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={23.9} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <line x1={16} y1={11} x2={16} y2={7.2} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={16} y1={21} x2={16} y2={24.8} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={11} y1={16} x2={7.2} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={21} y1={16} x2={24.8} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+              </svg>
+            </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}{settings?.jarvisVoice?" · 🔊":""}</div>
+              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}</div>
             </div>
             <button
               onClick={()=>onSetInDepthMode(!inDepthMode)}
@@ -6093,7 +6962,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
                     {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
                   </div>
                 )}
-                <div style={{maxWidth:"88%",background:m.role==="user"?"#0284C7":"#f1f5f9",color:m.role==="user"?"#fff":"#1e293b",padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
+                <div style={{maxWidth:"88%",background:m.role==="user"?T.accent:T.overlay,color:m.role==="user"?"#fff":T.tx1,padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
                   {m.text}
                 </div>
                 {m.widget&&<div style={{maxWidth:"100%",width:"88%",alignSelf:m.role==="user"?"flex-end":"flex-start"}}>{renderWidget(m.widget)}</div>}
@@ -6133,7 +7002,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
               onFocus={e=>e.target.style.borderColor="#0284C7"}
               onBlur={e=>e.target.style.borderColor="#e2e8f0"}
             />
-            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"🔊":"🎤"}</button>
+            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"▐▐":"●"}</button>
             <button onClick={send} disabled={loading||(!input.trim()&&selectedItems.length===0)} style={{width:34,height:34,borderRadius:"50%",background:"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:loading||(!input.trim()&&selectedItems.length===0)?0.4:1,transition:"opacity .15s"}}>↑</button>
           </div>
         </div>
@@ -6162,29 +7031,24 @@ function DevUpdateButton(){
       {status==='building'
         ?<><span style={{display:"inline-block",width:10,height:10,border:"2px solid currentColor",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
         :status==='error'?'✗ Build failed'
-        :'🔄 Update App'}
+        :'Update App'}
     </button>
   );
 }
 
 // ── Sidebar component ─────────────────────────────────────────────────────────
-function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew }) {
+function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew, onSignOut }) {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [hoveredApp, setHoveredApp] = useState(null);
+  const [tooltip, setTooltip] = useState(null); // {label, y}
   const flyoutRef = useRef(null);
   const appsButtonRef = useRef(null);
   const flyoutTimer = useRef(null);
 
   const appItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom);
-  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"⚙", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
+  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"DM", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
   const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom), ...devItems];
   const pinnedItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom && favourites.includes(n.k));
-
-  const badge = k => {
-    if (k==="expected" && pendingCount>0) return pendingCount;
-    if (k==="bills" && unpaidBillCount>0) return unpaidBillCount;
-    return null;
-  };
 
   const [flyoutTop, setFlyoutTop] = useState(0);
   const openFlyout = () => {
@@ -6197,122 +7061,505 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   };
   const closeFlyout = () => { flyoutTimer.current = setTimeout(()=>setFlyoutOpen(false), 120); };
 
-  const NavBtn = ({ item, indent=false }) => {
-    const b = badge(item.k);
+  // Render function (not a component) — avoids remount-on-rerender killing hover state
+  const navBtn = (item) => {
     const active = view === item.k;
     return (
       <button
+        key={item.k}
         onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
-        title={item.desc}
-        style={{
-          display:"flex", alignItems:"center", gap:10, width:"100%",
-          padding: indent ? "7px 14px 7px 20px" : "7px 14px",
-          borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500,
-          background: active ? "rgba(2,132,199,0.12)" : "transparent",
-          color: active ? "#0284C7" : "#334155",
-          textAlign:"left", fontFamily:"inherit", position:"relative",
-          transition:"background 0.12s, color 0.12s",
+        onMouseEnter={e => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setTooltip({ label: item.l, y: r.top + r.height / 2 });
+          if (!active) e.currentTarget.style.background = T.overlay;
         }}
-        onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(0,0,0,0.04)"; }}
-        onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}
-      >
-        <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>{item.icon}</span>
-        <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.l}</span>
-        {b && <span style={{ minWidth:16,height:16,borderRadius:8,background:item.k==="bills"?"#dc2626":"#06B6D4",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px",flexShrink:0 }}>{b}</span>}
-      </button>
+        onMouseLeave={e => {
+          setTooltip(null);
+          if (!active) e.currentTarget.style.background = "transparent";
+        }}
+        style={{
+          width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          fontFamily:"inherit", fontSize:16,
+          background: active ? T.accentBg : "transparent",
+          color: active ? T.accent : T.tx3,
+          borderLeft: active ? "3px solid "+T.accent : "3px solid transparent",
+          transition:"background 0.12s, color 0.12s",
+          flexShrink:0,
+        }}
+      >{item.icon}</button>
     );
   };
 
   return (
-    <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #e2e8f0", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none" }}>
-      {/* Logo */}
-      <div style={{ padding:"0 14px", height:56, display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid #f1f5f9", flexShrink:0 }}>
-        <div style={{ width:28, height:28, borderRadius:8, background:"linear-gradient(135deg,#0284C7,#0369a1)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-          <span style={{ color:"#fff", fontWeight:900, fontSize:13 }}>S</span>
+    <>
+      <div style={{ width:52, flexShrink:0, background:T.surface, display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none", boxShadow:"1px 0 0 "+T.border }}>
+        {/* Logo */}
+        <div style={{ height:52, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <div style={{ width:26, height:26, borderRadius:6, background:"#111", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+              <polygon points="2,27 16,5 30,27" fill="#fff"/>
+              <rect x="2" y="27" width="28" height="2.5" rx="1" fill="#fff"/>
+            </svg>
+          </div>
         </div>
-        <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>CashHeap</span>
-        <button onClick={onShowWhatsNew} title="What's new" style={{ marginLeft:"auto", background:"#f0f9ff", border:"1px solid #bae6fd", cursor:"pointer", padding:"3px 7px", borderRadius:12, fontSize:10, color:"#0284C7", fontFamily:"inherit", fontWeight:600, flexShrink:0, whiteSpace:"nowrap" }}>New</button>
-      </div>
 
-      {/* Scrollable nav */}
-      <div style={{ flex:1, overflowY:"auto", padding:"8px 6px", display:"flex", flexDirection:"column", gap:1 }}>
-        {/* Always-visible: Home + Insights */}
-        {NAV_ITEMS.filter(n=>n.alwaysShow).map(item=>(
-          <NavBtn key={item.k} item={item} />
-        ))}
+        {/* Top divider */}
+        <div style={{ height:1, background:T.border, marginBottom:4, flexShrink:0 }}/>
 
-        {/* Favourites */}
-        {pinnedItems.length > 0 && (
-          <>
-            <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"10px 14px 4px" }}>Favourites</div>
-            {pinnedItems.map(item=><NavBtn key={item.k} item={item} />)}
-          </>
-        )}
+        {/* Scrollable nav */}
+        <div style={{ flex:1, overflowY:"auto", padding:"4px 6px", display:"flex", flexDirection:"column", gap:2, alignItems:"center" }}>
+          {NAV_ITEMS.filter(n=>n.alwaysShow).map(item=>navBtn(item))}
 
-        {/* Applications flyout trigger */}
-        <div
-          ref={appsButtonRef}
-          onMouseEnter={openFlyout}
-          onMouseLeave={closeFlyout}
-          style={{ position:"relative", marginTop:4 }}
-        >
+          {pinnedItems.length > 0 && <>
+            <div style={{ width:24, height:1, background:T.border, margin:"4px 0" }}/>
+            {pinnedItems.map(item=>navBtn(item))}
+          </>}
+
+          {/* Apps button */}
+          <div style={{ width:24, height:1, background:T.border, margin:"4px 0" }}/>
           <button
-            style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"7px 14px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500, background: flyoutOpen ? "rgba(2,132,199,0.08)" : "transparent", color: flyoutOpen ? "#0284C7" : "#334155", textAlign:"left", fontFamily:"inherit", transition:"background 0.12s" }}
-            onMouseEnter={e=>{ openFlyout(); e.currentTarget.style.background="rgba(2,132,199,0.08)"; e.currentTarget.style.color="#0284C7"; }}
-            onMouseLeave={e=>{ closeFlyout(); if(!flyoutOpen){ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="#334155"; } }}
-          >
-            <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>▦</span>
-            <span style={{ flex:1 }}>Applications</span>
-            <span style={{ fontSize:11, opacity:0.5 }}>›</span>
-          </button>
+            ref={appsButtonRef}
+            onMouseEnter={e => { openFlyout(); const r=e.currentTarget.getBoundingClientRect(); setTooltip({label:"Applications",y:r.top+r.height/2}); if(!flyoutOpen) e.currentTarget.style.background=T.overlay; }}
+            onMouseLeave={e => { closeFlyout(); setTooltip(null); if(!flyoutOpen) e.currentTarget.style.background="transparent"; }}
+            style={{ width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"inherit", fontSize:16, background:flyoutOpen?T.accentBg:"transparent", color:flyoutOpen?T.accent:T.tx3, borderLeft:"3px solid transparent", transition:"background 0.12s, color 0.12s", flexShrink:0 }}
+          >▦</button>
+        </div>
 
-          {/* Flyout panel */}
-          {flyoutOpen && (
-            <div
-              ref={flyoutRef}
-              onMouseEnter={openFlyout}
-              onMouseLeave={closeFlyout}
-              style={{ position:"fixed", left:220, top:flyoutTop, background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, boxShadow:"0 8px 32px rgba(15,23,42,0.14)", width:260, padding:"8px 6px", zIndex:40, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
+        {/* Bottom divider */}
+        <div style={{ height:1, background:T.border, margin:"4px 0", flexShrink:0 }}/>
+
+        {/* Bottom items */}
+        <div style={{ padding:"4px 6px 8px", display:"flex", flexDirection:"column", gap:2, alignItems:"center", flexShrink:0 }}>
+          {bottomItems.map(item=>navBtn(item))}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              onMouseEnter={e => { const r=e.currentTarget.getBoundingClientRect(); setTooltip({label:"Sign Out",y:r.top+r.height/2}); e.currentTarget.style.background=T.redBg; e.currentTarget.style.color=T.red; }}
+              onMouseLeave={e => { setTooltip(null); e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.tx3; }}
+              style={{ width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", background:"transparent", color:T.tx3, borderLeft:"3px solid transparent", transition:"background 0.12s, color 0.12s", flexShrink:0 }}
             >
-              <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"4px 12px 8px" }}>All Applications</div>
-              {appItems.map(item => {
-                const isFav = favourites.includes(item.k);
-                return (
-                  <div
-                    key={item.k}
-                    onMouseEnter={() => setHoveredApp(item.k)}
-                    onMouseLeave={() => setHoveredApp(null)}
-                    style={{ display:"flex", alignItems:"center", gap:4, borderRadius:8, padding:"2px 4px 2px 8px", background: hoveredApp===item.k ? "#f8fafc" : "transparent", transition:"background 0.1s" }}
-                  >
-                    <button
-                      onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
-                      style={{ display:"flex", alignItems:"center", gap:9, flex:1, padding:"6px 6px 6px 0", border:"none", background:"transparent", cursor:"pointer", fontSize:13, fontWeight: view===item.k ? 600 : 500, color: view===item.k ? "#0284C7" : "#1e293b", textAlign:"left", fontFamily:"inherit" }}
-                    >
-                      <span style={{ fontSize:13, width:18, textAlign:"center", flexShrink:0, opacity:0.6 }}>{item.icon}</span>
-                      <div style={{ flex:1 }}>
-                        <div style={{ lineHeight:1.3 }}>{item.l}</div>
-                        {hoveredApp===item.k && <div style={{ fontSize:11, color:"#64748b", marginTop:2, lineHeight:1.4 }}>{item.desc}</div>}
-                      </div>
-                    </button>
-                    {/* Star / favourite toggle */}
-                    <button
-                      onClick={() => onToggleFavourite(item.k)}
-                      title={isFav ? "Remove from favourites" : "Add to favourites"}
-                      style={{ background:"none", border:"none", cursor:"pointer", fontSize:14, color: isFav ? "#f59e0b" : "#cbd5e1", padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
-                      onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#94a3b8"}
-                      onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":"#cbd5e1"}
-                    >★</button>
-                  </div>
-                );
-              })}
-            </div>
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+            </button>
           )}
         </div>
       </div>
 
-      {/* Bottom: settings / dev */}
-      <div style={{ padding:"8px 6px", borderTop:"1px solid #f1f5f9", display:"flex", flexDirection:"column", gap:1, flexShrink:0 }}>
-        {bottomItems.map(item => <NavBtn key={item.k} item={item} />)}
+      {/* Floating tooltip */}
+      {tooltip && (
+        <div style={{ position:"fixed", left:58, top:tooltip.y-14, background:T.surface, boxShadow:T.shadowMd, borderRadius:T.r, padding:"5px 10px", fontSize:12, fontWeight:500, color:T.tx1, whiteSpace:"nowrap", zIndex:200, pointerEvents:"none", transform:"translateY(0)" }}>
+          {tooltip.label}
+        </div>
+      )}
+
+      {/* Applications flyout panel */}
+      {flyoutOpen && (
+        <div
+          ref={flyoutRef}
+          onMouseEnter={openFlyout}
+          onMouseLeave={closeFlyout}
+          style={{ position:"fixed", left:58, top:flyoutTop, background:T.surface, borderRadius:T.rCard, boxShadow:T.shadowMd, width:260, padding:"8px 6px", zIndex:100, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
+        >
+          <div style={{ fontSize:11, fontWeight:500, color:T.tx3, padding:"4px 10px 8px" }}>Applications</div>
+          {appItems.map(item => {
+            const isFav = favourites.includes(item.k);
+            return (
+              <div key={item.k} onMouseEnter={()=>setHoveredApp(item.k)} onMouseLeave={()=>setHoveredApp(null)}
+                style={{ display:"flex", alignItems:"center", gap:4, borderRadius:T.r, padding:"2px 4px 2px 6px", background:hoveredApp===item.k?T.overlay:"transparent", transition:"background 0.1s" }}
+              >
+                <button
+                  onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
+                  style={{ display:"flex", alignItems:"center", gap:9, flex:1, padding:"6px 4px", border:"none", background:"transparent", cursor:"pointer", fontSize:13, fontWeight:view===item.k?600:400, color:view===item.k?T.accent:T.tx1, textAlign:"left", fontFamily:"inherit" }}
+                >
+                  <span style={{ fontSize:13, width:18, textAlign:"center", flexShrink:0, color:T.tx3 }}>{item.icon}</span>
+                  <div style={{ flex:1 }}>
+                    <div style={{ lineHeight:1.3 }}>{item.l}</div>
+                    {hoveredApp===item.k && <div style={{ fontSize:11, color:T.tx3, marginTop:2, lineHeight:1.4 }}>{item.desc}</div>}
+                  </div>
+                </button>
+                <button
+                  onClick={() => onToggleFavourite(item.k)}
+                  title={isFav ? "Remove from favourites" : "Add to favourites"}
+                  style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, color:isFav?"#f59e0b":T.border, padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
+                  onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#a8a29e"}
+                  onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":T.border}
+                >★</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Shared: mountain logo used on auth screens ────────────────────────────────
+function MountainLogo({size=56}){
+  return(
+    <svg viewBox="0 0 80 80" width={size} height={size} style={{display:"block"}}>
+      <rect width={80} height={80} rx={16} fill="#111"/>
+      <polygon points="6,62 18,44 22,48 28,36 34,44 40,16 46,44 52,36 58,48 62,44 74,62" fill="#fff"/>
+      <rect x={6} y={62} width={68} height={4} fill="#fff"/>
+    </svg>
+  );
+}
+
+// ── Account Setup Wizard (first launch) ──────────────────────────────────────
+function AccountSetup({onComplete}){
+  const [step,setStep]=useState(1); // 1=PIN, 2=Biometric, 3=TOTP
+  const [pinA,setPinA]=useState("");
+  const [pinB,setPinB]=useState("");
+  const [pinErr,setPinErr]=useState("");
+  const [bioStatus,setBioStatus]=useState("idle"); // idle|enrolling|done|skipped|error
+  const [bioErr,setBioErr]=useState("");
+  const [totpSecret]=useState(()=>genTOTPSecret());
+  const [totpInput,setTotpInput]=useState("");
+  const [totpErr,setTotpErr]=useState("");
+  const [savedHash,setSavedHash]=useState(null);
+  const [savedSalt,setSavedSalt]=useState(null);
+  const [credId,setCredId]=useState(null);
+  const [bioMethod,setBioMethod]=useState("webauthn"); // "touchid"|"webauthn"
+
+  const IS={width:"100%",padding:"12px 14px",borderRadius:10,border:"2px solid #e2e8f0",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",textAlign:"center",letterSpacing:6,transition:"border-color .2s"};
+
+  // Step 1: create PIN
+  const submitPin=async()=>{
+    if(pinA.length<4){setPinErr("PIN must be at least 4 digits");return;}
+    if(pinA!==pinB){setPinErr("PINs don't match — try again");return;}
+    const salt=genSalt();
+    const hash=await hashPin(pinA,salt);
+    setSavedHash(hash);setSavedSalt(salt);
+    setPinA("");setPinB("");setPinErr("");
+    setStep(2);
+  };
+
+  // Step 2: biometric
+  const enrollBio=async()=>{
+    setBioStatus("enrolling");setBioErr("");
+    try{
+      // macOS: native Touch ID via Electron IPC
+      if(window.electronBiometrics){
+        const avail=await window.electronBiometrics.available();
+        if(avail){
+          await window.electronBiometrics.prompt("verify your identity to enable Touch ID for CashHeap");
+          setCredId("native-touchid");
+          setBioMethod("touchid");
+          setBioStatus("done");return;
+        }
+      }
+      // Fallback: WebAuthn (Windows Hello / FIDO2)
+      const cred=await navigator.credentials.create({publicKey:{
+        challenge:crypto.getRandomValues(new Uint8Array(32)),
+        rp:{name:"CashHeap",id:window.location.hostname||"localhost"},
+        user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
+        pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
+        authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
+        timeout:60000,
+      }});
+      setCredId(_b64ue(cred.rawId));
+      setBioMethod("webauthn");
+      setBioStatus("done");
+    }catch(e){
+      setBioErr(e.name==="NotAllowedError"?"Cancelled — you can set this up later in Settings.":`Could not enroll: ${e.message}`);
+      setBioStatus("error");
+    }
+  };
+  const skipBio=()=>{setBioStatus("skipped");setStep(3);};
+  const nextAfterBio=()=>setStep(3);
+
+  // Step 3: TOTP
+  const verifyTOTP=async()=>{
+    const now=await calcTOTP(totpSecret);
+    const prev=await calcTOTP(totpSecret,Date.now()-30000);
+    if(totpInput===now||totpInput===prev){
+      finish(true);
+    }else{setTotpErr("Incorrect code — try again");}
+  };
+  const skipTOTP=()=>finish(false);
+
+  const finish=(totpEnabled)=>{
+    const cfg={
+      enabled:true,
+      pinHash:savedHash,
+      pinSalt:savedSalt,
+      webauthnCredId:credId||null,
+      webauthnEnabled:!!credId,
+      bioMethod:credId?bioMethod:"webauthn",
+      totpEnabled,
+      totpSecret:totpEnabled?totpSecret:null,
+      autoLockMinutes:5,
+    };
+    onComplete(cfg);
+  };
+
+  const steps=[{n:1,l:"Create PIN"},{n:2,l:"Biometrics"},{n:3,l:"2-Factor"}];
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",padding:24}}>
+      <div style={{marginBottom:12}}><MountainLogo size={48}/></div>
+      <div style={{color:T.tx1,fontSize:18,fontWeight:600,marginBottom:4}}>Welcome to CashHeap</div>
+      <div style={{color:T.tx3,fontSize:13,marginBottom:28,textAlign:"center"}}>Set up your account to keep your financial data secure.</div>
+
+      {/* Step progress */}
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:28}}>
+        {steps.map((s,i)=>(
+          <div key={s.n} style={{display:"flex",alignItems:"center"}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{width:26,height:26,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,
+                background:step>=s.n?T.accent:T.overlay,
+                color:step>=s.n?"#fff":T.tx3,
+                transition:"all .3s"
+              }}>{step>s.n?"✓":s.n}</div>
+              <div style={{fontSize:10,color:step>=s.n?T.accent:T.tx3,whiteSpace:"nowrap"}}>{s.l}</div>
+            </div>
+            {i<steps.length-1&&<div style={{width:44,height:1,background:step>s.n?T.accent:T.border,margin:"0 6px",marginBottom:20,transition:"background .3s"}}/>}
+          </div>
+        ))}
+      </div>
+
+      {/* Card */}
+      <div style={{background:T.surface,borderRadius:T.rCard,boxShadow:T.shadowMd,padding:"24px 28px",width:"100%",maxWidth:380}}>
+
+        {/* Step 1 — PIN */}
+        {step===1&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600,marginBottom:2}}>Create your PIN</div>
+            <div style={{color:T.tx3,fontSize:12,marginBottom:6,lineHeight:1.5}}>Your PIN unlocks CashHeap. Stored with PBKDF2 — never visible to us.</div>
+            <input type="password" inputMode="numeric" placeholder="Enter PIN (4–6 digits)" maxLength={6}
+              value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))}
+              style={IS}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
+            />
+            <input type="password" inputMode="numeric" placeholder="Confirm PIN" maxLength={6}
+              value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))}
+              style={IS}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
+              onKeyDown={e=>e.key==="Enter"&&pinA.length>=4&&pinA===pinB&&submitPin()}
+            />
+            {pinErr&&<div style={{color:T.red,fontSize:12}}>{pinErr}</div>}
+            <button onClick={submitPin} disabled={pinA.length<4||pinB.length<4}
+              style={{marginTop:4,padding:"10px 0",borderRadius:T.r,border:"none",background:pinA.length>=4&&pinB.length>=4?T.accent:T.overlay,color:pinA.length>=4&&pinB.length>=4?"#fff":T.tx3,fontSize:13,fontWeight:500,cursor:pinA.length>=4&&pinB.length>=4?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Continue →</button>
+          </div>
+        )}
+
+        {/* Step 2 — Biometric */}
+        {step===2&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",textAlign:"center"}}>
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600}}>Enable Biometrics</div>
+            <div style={{color:T.tx3,fontSize:12,lineHeight:1.6,marginBottom:4}}>
+              Use Touch ID, Face ID, Windows Hello, or your device's fingerprint sensor to unlock instantly.
+            </div>
+            {bioStatus==="idle"&&(
+              <button onClick={enrollBio} style={{width:"100%",padding:"10px 0",borderRadius:T.r,border:"none",background:T.accent,color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                Set Up Biometrics
+              </button>
+            )}
+            {bioStatus==="enrolling"&&(
+              <div style={{color:T.accent,fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:14,height:14,border:"2px solid "+T.accentBg,borderTopColor:T.accent,borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>
+                Follow the prompt on your device…
+              </div>
+            )}
+            {bioStatus==="done"&&(
+              <>
+                <div style={{color:T.green,fontSize:13}}>Biometrics enrolled successfully!</div>
+                <button onClick={nextAfterBio} style={{width:"100%",padding:"10px 0",borderRadius:T.r,border:"none",background:T.accent,color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Continue →</button>
+              </>
+            )}
+            {(bioStatus==="error"||bioStatus==="idle")&&bioErr&&<div style={{color:T.red,fontSize:12}}>{bioErr}</div>}
+            {bioStatus!=="done"&&bioStatus!=="enrolling"&&(
+              <button onClick={skipBio} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",marginTop:2}}>
+                Skip for now
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Step 3 — TOTP */}
+        {step===3&&(
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600,textAlign:"center",marginBottom:2}}>Two-Factor Authentication</div>
+            <div style={{color:T.tx3,fontSize:12,lineHeight:1.5,textAlign:"center",marginBottom:4}}>
+              Scan with Google Authenticator, Authy, or any TOTP app. Optional but recommended.
+            </div>
+            <div style={{textAlign:"center",margin:"4px 0 8px"}}>
+              <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:T.r,border:"1px solid "+T.border}}/>
+              <div style={{marginTop:6,fontSize:10,color:T.tx3}}>Manual key:</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:T.accent,letterSpacing:1,wordBreak:"break-all",marginTop:2}}>{totpSecret}</div>
+            </div>
+            <input placeholder="6-digit code" maxLength={6}
+              value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))}
+              onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyTOTP()}
+              style={{...IS,fontSize:20,letterSpacing:10,fontFamily:"monospace",textAlign:"center"}}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
+            />
+            {totpErr&&<div style={{color:T.red,fontSize:12}}>{totpErr}</div>}
+            <button onClick={verifyTOTP} disabled={totpInput.length!==6}
+              style={{padding:"10px 0",borderRadius:T.r,border:"none",background:totpInput.length===6?T.accent:T.overlay,color:totpInput.length===6?"#fff":T.tx3,fontSize:13,fontWeight:500,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Enable 2FA &amp; Finish</button>
+            <button onClick={skipTOTP} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",textAlign:"center"}}>
+              Skip — finish without 2FA
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Lock Screen ───────────────────────────────────────────────────────────────
+function LockScreen({authConfig,onUnlock}){
+  const [pin,setPin]=useState("");
+  const [totpCode,setTotpCode]=useState("");
+  const [phase,setPhase]=useState("pin"); // "pin" | "totp"
+  const [err,setErr]=useState("");
+  const [bioBusy,setBioBusy]=useState(false);
+  const [shaking,setShaking]=useState(false);
+  const MAX=6;
+
+  const shake=()=>{setShaking(true);setTimeout(()=>setShaking(false),500);};
+
+  const verifyPin=async(candidate)=>{
+    const h=await hashPin(candidate,authConfig.pinSalt);
+    if(h===authConfig.pinHash){
+      if(authConfig.totpEnabled&&authConfig.totpSecret){setPhase("totp");setPin("");}
+      else onUnlock();
+    } else{shake();setErr("Incorrect PIN");setPin("");}
+  };
+
+  const verifyTotp=async()=>{
+    const now=await calcTOTP(authConfig.totpSecret);
+    const prev=await calcTOTP(authConfig.totpSecret,Date.now()-30000);
+    if(totpCode===now||totpCode===prev){onUnlock();}
+    else{shake();setErr("Invalid code");setTotpCode("");}
+  };
+
+  useEffect(()=>{
+    if(phase!=="pin") return;
+    const onKey=e=>{
+      if(e.key>="0"&&e.key<="9") pressKey(e.key);
+      else if(e.key==="Backspace"||e.key==="Delete") pressKey("del");
+    };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[phase,pin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-trigger biometrics on mount if enrolled
+  useEffect(()=>{
+    if(authConfig.webauthnCredId) tryBiometric();
+  },[]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pressKey=async(k)=>{
+    if(phase==="totp") return;
+    setErr("");
+    if(k==="del"){setPin(p=>p.slice(0,-1));return;}
+    const next=pin+k;
+    setPin(next);
+    if(next.length===MAX) await verifyPin(next);
+  };
+
+  const tryBiometric=async()=>{
+    if(!authConfig.webauthnCredId){return;}
+    setBioBusy(true);setErr("");
+    try{
+      // macOS: native Touch ID via Electron IPC
+      if(authConfig.bioMethod==="touchid"&&window.electronBiometrics){
+        await window.electronBiometrics.prompt("unlock CashHeap");
+      } else {
+        // WebAuthn fallback (Windows Hello, FIDO2, etc.)
+        const credId=_b64ud(authConfig.webauthnCredId);
+        const challenge=crypto.getRandomValues(new Uint8Array(32));
+        await navigator.credentials.get({publicKey:{
+          challenge,
+          allowCredentials:[{type:"public-key",id:credId}],
+          userVerification:"required",
+          timeout:60000,
+          rpId:window.location.hostname||"localhost",
+        }});
+      }
+      if(authConfig.totpEnabled&&authConfig.totpSecret){setPhase("totp");}
+      else onUnlock();
+    }catch(e){
+      if(e.name!=="NotAllowedError") setErr("Biometric failed — use your PIN.");
+    }
+    setBioBusy(false);
+  };
+
+  const keys=["1","2","3","4","5","6","7","8","9","","0","del"];
+
+  // numpad is 3×72 + 2×8 = 232px; everything is pinned to that width
+  const NW=232; // numpad + bio button width
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      {/* Single centred column — margin auto + absolute centering is the most reliable cross-browser approach */}
+      <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:NW,display:"flex",flexDirection:"column",alignItems:"center"}}>
+        <div style={{marginBottom:14}}><MountainLogo size={48}/></div>
+        <div style={{color:T.tx1,fontSize:18,fontWeight:600,marginBottom:3,textAlign:"center"}}>CashHeap</div>
+        <div style={{color:T.tx3,fontSize:13,marginBottom:32,textAlign:"center"}}>
+          {phase==="totp"?"Enter your authenticator code":"Enter your PIN to continue"}
+        </div>
+
+        {phase==="pin"&&(
+          <>
+            <div style={{display:"flex",gap:14,marginBottom:32,animation:shaking?"shake 0.4s ease":"none",justifyContent:"center",width:NW}}>
+              {Array.from({length:MAX}).map((_,i)=>(
+                <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<pin.length?T.tx1:T.border,transition:"background .15s",flexShrink:0}}/>
+              ))}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:8,marginBottom:16,width:NW}}>
+              {keys.map((k,i)=>(
+                <button key={i} onClick={()=>k&&pressKey(k)}
+                  style={{height:72,borderRadius:"50%",border:"none",cursor:k?"pointer":"default",
+                    background:k?T.overlay:"transparent",
+                    color:T.tx1,fontSize:k==="del"?16:22,fontWeight:500,fontFamily:"inherit",
+                    transition:"background .1s",opacity:k?1:0
+                  }}
+                  onMouseDown={e=>{if(k)e.currentTarget.style.background=T.border;}}
+                  onMouseUp={e=>{if(k)e.currentTarget.style.background=T.overlay;}}
+                  onMouseLeave={e=>{if(k)e.currentTarget.style.background=T.overlay;}}
+                >{k==="del"?"⌫":k}</button>
+              ))}
+            </div>
+
+            {authConfig.webauthnCredId&&(
+              <button onClick={tryBiometric} disabled={bioBusy}
+                style={{width:NW,boxSizing:"border-box",height:44,borderRadius:T.r,border:bioBusy?"none":"1px solid "+T.border,background:bioBusy?"transparent":T.surface,color:bioBusy?T.tx3:T.tx1,fontSize:13,cursor:bioBusy?"default":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:bioBusy?"center":"flex-start",paddingLeft:bioBusy?0:16,marginBottom:12,transition:"color .2s, background .15s"}}
+                onMouseEnter={e=>{if(!bioBusy)e.currentTarget.style.background=T.overlay;}}
+                onMouseLeave={e=>{if(!bioBusy)e.currentTarget.style.background=T.surface;}}
+              >
+                {bioBusy&&<span style={{width:12,height:12,border:"1.5px solid "+T.border,borderTopColor:T.tx2,borderRadius:"50%",display:"inline-block",animation:"spin 0.7s linear infinite",willChange:"transform",marginRight:7,flexShrink:0}}/>}
+                {bioBusy?"Verifying...":"Biometrics"}
+              </button>
+            )}
+          </>
+        )}
+
+        {phase==="totp"&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12,width:NW}}>
+            <div style={{animation:shaking?"shake 0.4s ease":"none",width:"100%",display:"flex",justifyContent:"center"}}>
+              <input autoFocus value={totpCode}
+                onChange={e=>setTotpCode(e.target.value.replace(/\D/g,"").slice(0,6))}
+                placeholder="000000"
+                style={{width:160,textAlign:"center",fontSize:26,fontWeight:500,letterSpacing:8,padding:"12px 0",background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,color:T.tx1,fontFamily:"monospace",outline:"none"}}
+                onKeyDown={e=>e.key==="Enter"&&totpCode.length===6&&verifyTotp()}
+              />
+            </div>
+            <button onClick={verifyTotp} disabled={totpCode.length!==6}
+              style={{background:totpCode.length===6?T.accent:T.overlay,color:totpCode.length===6?"#fff":T.tx3,border:"none",borderRadius:T.r,padding:"10px 32px",fontSize:13,fontWeight:500,cursor:totpCode.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Verify</button>
+            <button onClick={()=>{setPhase("pin");setTotpCode("");setErr("");}} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back to PIN</button>
+          </div>
+        )}
+
+        {err&&<div style={{marginTop:8,color:T.red,fontSize:12,textAlign:"center"}}>{err}</div>}
       </div>
     </div>
   );
@@ -6474,7 +7721,7 @@ function UpdateBanner() {
   if (!status) return null;
   return (
     <div style={{position:'fixed',top:0,left:0,right:0,zIndex:99999,background:status==='ready'?'#0284C7':'#0f172a',color:'#fff',fontSize:12,fontWeight:600,padding:'8px 20px',display:'flex',alignItems:'center',justifyContent:'center',gap:12,fontFamily:'system-ui,sans-serif'}}>
-      {status==='available' ? `⬇️ Downloading update v${version}…` : `✅ Update v${version} ready — `}
+      {status==='available' ? `Downloading update v${version}...` : `Update v${version} ready — `}
       {status==='ready' && <button onClick={()=>window.electronUpdater.restartAndInstall()} style={{background:'#fff',color:'#0284C7',border:'none',borderRadius:6,padding:'3px 12px',fontWeight:700,cursor:'pointer',fontSize:12}}>Restart now</button>}
     </div>
   );
@@ -6501,6 +7748,9 @@ export default function App(){
   const [subscriptions,setSubscriptions]=useState([]);
   const [taxItems,setTaxItems]=useState([]);
   const [wishlist,setWishlist]=useState([]);
+  const [members,setMembers]=useState([]);
+  const [splits,setSplits]=useState({});
+  const [settlements,setSettlements]=useState([]);
   const [settings,setSettings]=useState(DEFAULT_SETTINGS);
   const [schema,setSchema]=useState(DEFAULT_SCHEMA);
   const [insightWidgets,setInsightWidgets]=useState([]);
@@ -6515,10 +7765,41 @@ export default function App(){
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
   const [showWhatsNew,setShowWhatsNew]=useState(false);
   const [tosAccepted,setTosAccepted]=useState(false);
+  const [authConfig,setAuthConfig]=useState({});
+  const [isUnlocked,setIsUnlocked]=useState(true); // becomes false once authConfig.enabled is confirmed
+  const [idleBlur,setIdleBlur]=useState(false); // pixelation overlay shown before full lock
+  const lastActivityRef=useRef(Date.now());
+  const lockTimerRef=useRef(null);
   const [toast,setToast]=useState(null);
   const toastTimer=useRef(null);
   const showToast=(msg,undoFn)=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast({msg,undoFn});toastTimer.current=setTimeout(()=>setToast(null),5000);};
   const dismissToast=()=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast(null);};
+
+  // Auto-lock + idle pixelation
+  useEffect(()=>{
+    if(!authConfig.pinHash) return; // no account yet
+    const idleMs=(authConfig.autoLockMinutes||5)*60*1000;
+    const blurMs=idleMs*0.8; // show blur at 80% of lock time
+    const onActivity=()=>{
+      lastActivityRef.current=Date.now();
+      if(idleBlur){setIdleBlur(false);}
+    };
+    document.addEventListener("mousemove",onActivity,{passive:true});
+    document.addEventListener("keydown",onActivity,{passive:true});
+    document.addEventListener("click",onActivity,{passive:true});
+    lockTimerRef.current=setInterval(()=>{
+      if(!isUnlocked) return;
+      const idle=Date.now()-lastActivityRef.current;
+      if(idle>idleMs){setIdleBlur(false);setIsUnlocked(false);}
+      else if(idle>blurMs){setIdleBlur(true);}
+    },10000);
+    return()=>{
+      document.removeEventListener("mousemove",onActivity);
+      document.removeEventListener("keydown",onActivity);
+      document.removeEventListener("click",onActivity);
+      clearInterval(lockTimerRef.current);
+    };
+  },[authConfig.pinHash,authConfig.autoLockMinutes,isUnlocked,idleBlur]);
 
   useEffect(()=>{
     loadServerData().then(d => {
@@ -6544,7 +7825,14 @@ export default function App(){
       if(d.subscriptions) setSubscriptions(d.subscriptions);
       if(d.taxItems) setTaxItems(d.taxItems);
       if(d.wishlist) setWishlist(d.wishlist);
+      if(d.members) setMembers(d.members);
+      if(d.splits) setSplits(d.splits);
+      if(d.settlements) setSettlements(d.settlements);
       if(d.tosAccepted) setTosAccepted(true);
+      if(d.authConfig&&typeof d.authConfig==="object"){
+        setAuthConfig(d.authConfig);
+        if(d.authConfig.enabled) setIsUnlocked(false);
+      }
       setReady(true);
     });
   },[]);
@@ -6566,6 +7854,10 @@ export default function App(){
   const saveSubscriptions=s=>{setSubscriptions(s);saveServerData({subscriptions:s})};
   const saveTaxItems=t=>{setTaxItems(t);saveServerData({taxItems:t})};
   const saveWishlist=w=>{setWishlist(w);saveServerData({wishlist:w})};
+  const saveMembers=m=>{setMembers(m);saveServerData({members:m})};
+  const saveSplits=s=>{setSplits(s);saveServerData({splits:s})};
+  const saveSettlements=s=>{setSettlements(s);saveServerData({settlements:s})};
+  const saveAuthConfig=c=>{setAuthConfig(c);saveServerData({authConfig:c});if(!c.enabled)setIsUnlocked(true);};
   const saveSettings=s=>{setSettings(s);saveServerData({settings:s})};
   const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
   // Auto-persist insight chat & widgets whenever they change (skip initial empty load)
@@ -6592,6 +7884,10 @@ export default function App(){
   };
 
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
+  // First launch: no account exists yet → show setup wizard
+  if(!authConfig.pinHash) return <AccountSetup onComplete={cfg=>{saveAuthConfig(cfg);setIsUnlocked(true);}}/>;
+  // Locked → show lock screen
+  if(!isUnlocked) return <LockScreen authConfig={authConfig} onUnlock={()=>{setIsUnlocked(true);setIdleBlur(false);lastActivityRef.current=Date.now();}}/>;
 
   const pendingCount=expected.filter(e=>!e.confirmed).length;
   const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
@@ -6621,8 +7917,17 @@ export default function App(){
       </defs>
     </svg>
     <UpdateBanner/>
+    {/* Idle pixelation overlay — shown before full auto-lock kicks in */}
+    {idleBlur&&isUnlocked&&(
+      <div onClick={()=>{lastActivityRef.current=Date.now();setIdleBlur(false);}}
+        style={{position:"fixed",inset:0,zIndex:9000,backdropFilter:"blur(24px) brightness(0.6)",WebkitBackdropFilter:"blur(24px) brightness(0.6)",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+        <MountainLogo size={48}/>
+        <div style={{color:"rgba(255,255,255,0.9)",fontSize:14,fontWeight:600,fontFamily:"system-ui,sans-serif"}}>CashHeap is idle</div>
+        <div style={{color:"rgba(255,255,255,0.5)",fontSize:12,fontFamily:"system-ui,sans-serif"}}>Click anywhere to continue</div>
+      </div>
+    )}
     {!tosAccepted&&<TermsOfServiceModal onAccept={()=>{setTosAccepted(true);saveServerData({tosAccepted:true});}} onDecline={()=>{ if(window.electronApp?.quit) window.electronApp.quit(); else window.close(); }}/>}
-    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff",filter:rootFilter}}>
+    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:T.tx1,background:T.bg,filter:rootFilter}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
 
@@ -6636,10 +7941,11 @@ export default function App(){
         unpaidBillCount={unpaidBillCount}
         devMode={settings.devMode}
         onShowWhatsNew={()=>setShowWhatsNew(v=>!v)}
+        onSignOut={authConfig.pinHash?()=>{setIsUnlocked(false);setIdleBlur(false);}:undefined}
       />
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
         {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><HealthScore txns={visibleTxns} accounts={accounts} holdings={holdings} catBudgets={catBudgets} goals={goals} bills={bills} billPayments={billPayments} month={month} fxRate={fxRate} stockPrices={stockPrices}/></div><div style={{marginTop:8}}><SpendingAnomalies txns={visibleTxns} cats={cats} month={month}/></div><div style={{marginTop:8}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
@@ -6665,7 +7971,8 @@ export default function App(){
         {view==="calendar"&&<FinancialCalendar bills={bills} billPayments={billPayments} expected={expected} goals={goals} vacations={vacations} txns={txns}/>}
         {view==="wishlist"&&<WishlistPage wishlist={wishlist} onSave={saveWishlist} txns={txns} goals={goals} onSaveGoals={saveGoals}/>}
         {view==="mortgage"&&<MortgageCalculator accounts={accounts} onSaveAccounts={saveAccounts}/>}
-        {view==="settings"&&<Settings settings={settings} onSave={saveSettings}/>}
+        {view==="household"&&<Household members={members} onSaveMembers={saveMembers} txns={txns} onSaveTxns={saveTxns} splits={splits} onSaveSplits={saveSplits} settlements={settlements} onSaveSettlements={saveSettlements}/>}
+        {view==="settings"&&<Settings settings={settings} onSave={saveSettings} authConfig={authConfig} onSaveAuthConfig={saveAuthConfig}/>}
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
         {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
       </div>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, systemPreferences } from 'electron'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
@@ -108,7 +108,7 @@ app.whenReady().then(async () => {
     process.env.SERVER_PORT = String(port)
     await import('../server/index.js')
     await waitForPort(port)
-    url = `http://127.0.0.1:${port}`
+    url = `http://localhost:${port}`
   }
 
   const win = new BrowserWindow({
@@ -138,6 +138,18 @@ app.whenReady().then(async () => {
   autoUpdater.on('error',                (err)  => win.webContents.send('update-error', err?.message || String(err)))
 
   ipcMain.on('quit-app', () => { app.quit() })
+
+  // ── Native biometrics (Touch ID on macOS) ─────────────────────────────────
+  ipcMain.handle('biometrics-available', () => {
+    if (process.platform !== 'darwin') return false
+    try { return systemPreferences.canPromptTouchID() } catch { return false }
+  })
+  ipcMain.handle('biometrics-prompt', async (_e, reason) => {
+    if (process.platform !== 'darwin') throw new Error('Not macOS')
+    if (!systemPreferences.canPromptTouchID()) throw new Error('Touch ID not available')
+    await systemPreferences.promptTouchID(reason || 'unlock CashHeap')
+    return true
+  })
 
   ipcMain.on('check-for-updates', () => { try { autoUpdater.checkForUpdates() } catch(e) { win.webContents.send('update-error', e.message) } })
   ipcMain.on('restart-and-install', () => { autoUpdater.quitAndInstall() })
