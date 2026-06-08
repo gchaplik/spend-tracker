@@ -480,7 +480,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
           <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f8fafc"}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <div style={{width:36,height:36,borderRadius:10,background:t.type==="income"?"#f0fdf4":"#fafafa",border:"1px solid "+(t.type==="income"?"#bbf7d0":"#f1f5f9"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>
-                {t.type==="income"?"💰":"🧾"}
+                null
               </div>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -640,7 +640,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
             <div style={{display:"flex",gap:8}}>
               {["CAD","USD"].map(cur=>(
                 <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
-                  {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                  {cur==="CAD"?"CAD":"USD"}
                 </button>
               ))}
             </div>
@@ -656,7 +656,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
             <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"11px 14px",marginBottom:14}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
                 <span style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD</span>
-                {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate…</span>}
+                {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate...</span>}
                 {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
                 {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.expectedDate}</span>}
               </div>
@@ -727,7 +727,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
                   <div style={{display:"flex",gap:8}}>
                     {["CAD","USD"].map(cur=>(
                       <button key={cur} onClick={()=>setEd(p=>({...p,currency:cur}))} style={{flex:1,padding:"6px 0",borderRadius:8,border:`2px solid ${ed.currency===cur?"#0284C7":"#e2e8f0"}`,background:ed.currency===cur?"#f0f9ff":"#fff",color:ed.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-                        {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                        {cur==="CAD"?"CAD":"USD"}
                       </button>
                     ))}
                   </div>
@@ -767,7 +767,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
                   {isPast&&<span style={{fontSize:10,background:"#fee2e2",color:"#b91c1c",padding:"1px 7px",borderRadius:20,fontWeight:500}}>Overdue</span>}
                   {!e.confirmed&&!selectMode&&<span style={{fontSize:10,color:"#cbd5e1"}}>click to edit</span>}
                 </div>
-                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}{e.originalAmountUSD?" · 🇺🇸 $"+e.originalAmountUSD.toFixed(2)+" USD @ "+Number(e.fxRate).toFixed(4):""}</div>
+                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}{e.originalAmountUSD?" · $"+e.originalAmountUSD.toFixed(2)+" USD @ "+Number(e.fxRate).toFixed(4):""}</div>
                 {e.confirmed&&<div style={{fontSize:11,color:"#059669",marginTop:1}}>Confirmed {e.confirmedDate}</div>}
               </div>
               <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#0284C7",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
@@ -841,7 +841,7 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
         loadFromHandle(handle, receiptFPs);
       } else {
         setNeedsPermission(true);
-        setStatus({ t: "info", m: `Click "Restore Access" to reconnect to 📁 ${handle.name}.` });
+        setStatus({ t: "info", m: `Click "Restore Access" to reconnect to ${handle.name}.` });
       }
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -992,8 +992,8 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
         <input ref={folderRef} type="file" webkitdirectory="" multiple onChange={handleFolderInput} style={{display:"none"}}/>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
           {needsPermission
-            ? <Btn onClick={restoreAccess} disabled={syncing} full v="secondary">🔑 Restore Access to 📁 {dirName}</Btn>
-            : <Btn onClick={pickFolder} disabled={syncing} full v="secondary">{dirName ? `📁 ${dirName}` : "Pick Folder"}</Btn>}
+            ? <Btn onClick={restoreAccess} disabled={syncing} full v="secondary">Restore Access to Folder: {dirName}</Btn>
+            : <Btn onClick={pickFolder} disabled={syncing} full v="secondary">{dirName ? dirName : "Pick Folder"}</Btn>}
           <Btn onClick={scan} disabled={syncing || pendingFiles.length === 0} full>
             {syncing ? "Scanning…" : `Scan${pendingFiles.length > 0 ? ` ${pendingFiles.length} File${pendingFiles.length !== 1 ? "s" : ""}` : ""} with AI`}
           </Btn>
@@ -1090,7 +1090,7 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
           onDrop={e=>{e.preventDefault();loadFiles(e.dataTransfer.files);}}
           style={{border:"2px dashed #c7d2fe",borderRadius:16,padding:"36px 20px",textAlign:"center",cursor:"pointer",background:"linear-gradient(135deg,#fafbff,#f5f3ff)",userSelect:"none",transition:"border-color 0.15s"}}
         >
-          <div style={{fontSize:28,marginBottom:10}}>📄</div>
+          
           <div style={{fontWeight:700,fontSize:14,marginBottom:4,color:"#1E293B"}}>Tap to select receipts or drag and drop</div>
           <div style={{fontSize:12,color:"#94a3b8",fontWeight:500}}>JPG, PNG, HEIC, PDF — multiple files supported</div>
           <input ref={ref} type="file" multiple accept="image/*,application/pdf" style={{display:"none"}} onChange={e=>loadFiles(e.target.files)}/>
@@ -1224,7 +1224,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
           <div style={{display:"flex",gap:8}}>
             {["CAD","USD"].map(cur=>(
               <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"8px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
-                {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                {cur==="CAD"?"CAD":"USD"}
               </button>
             ))}
           </div>
@@ -1240,7 +1240,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
           <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"12px 14px",marginBottom:16}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
               <span style={{fontSize:12,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD Conversion</span>
-              {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate…</span>}
+              {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate...</span>}
               {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
               {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.date}</span>}
             </div>
@@ -1414,7 +1414,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
                 ?<div style={{padding:"12px 0"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}><Fld label="Merchant / Source"><input style={IS} value={ed.merchant||ed.source||""} onChange={e=>setEd(d=>({...d,merchant:e.target.value,source:e.target.value}))}/></Fld><Fld label="Amount ($)"><input style={IS} type="number" value={ed.amount||""} onChange={e=>setEd(d=>({...d,amount:e.target.value}))}/></Fld><Fld label="Date"><input style={IS} type="date" value={ed.date||""} onChange={e=>setEd(d=>({...d,date:e.target.value}))}/></Fld>{ed.type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={ed.category||cats[0]} onChange={e=>setEd(d=>({...d,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}<Fld label="Note"><input style={IS} value={ed.note||""} onChange={e=>setEd(d=>({...d,note:e.target.value}))}/></Fld></div><div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div></div>
                 :<div style={{display:"flex",alignItems:"center",padding:"9px 0",gap:10,background:selectMode&&selected.has(t.id)?"#eff6ff":"transparent",borderRadius:4}}>
                   {selectMode&&<input type="checkbox" checked={selected.has(t.id)} onChange={()=>toggleSelect(t.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · 🇺🇸 $"+t.originalAmountUSD.toFixed(2)+" USD @ "+Number(t.fxRate).toFixed(4):""}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · $"+t.originalAmountUSD.toFixed(2)+" USD @ "+Number(t.fxRate).toFixed(4):""}</div></div>
                   <div style={{fontWeight:600,fontSize:13,color:t.type==="income"?"#059669":"#111827",whiteSpace:"nowrap"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
                   {!selectMode&&<div style={{display:"flex",gap:5,flexShrink:0}}>{rBtn(()=>startEdit(t),"#e5e7eb","#6b7280","Edit")}{rBtn(()=>del(t.id),"#fecaca","#dc2626","Delete")}</div>}
                 </div>}
@@ -1546,7 +1546,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
           <button onClick={()=>{setView("list");setEditingMeta(false);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
           <h2 style={{margin:0,fontSize:19,fontWeight:600,flex:1}}>{vac.name}</h2>
           {!editingMeta&&<button onClick={()=>startEditMeta(vac)} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>}
-          {!editingMeta&&<button onClick={()=>toggleComplete(vac.id)} style={{background:vac.completed?"#f0fdf4":"none",border:`1px solid ${vac.completed?"#86efac":"#e5e7eb"}`,borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:vac.completed?"#15803d":"#6b7280",fontFamily:"inherit",fontWeight:vac.completed?600:400}}>{vac.completed?"✓ Completed":"Mark Complete"}</button>}
+          {!editingMeta&&<button onClick={()=>toggleComplete(vac.id)} style={{background:vac.completed?"#f0fdf4":"none",border:`1px solid ${vac.completed?"#86efac":"#e5e7eb"}`,borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:vac.completed?"#15803d":"#6b7280",fontFamily:"inherit",fontWeight:vac.completed?600:400}}>{vac.completed?"Completed":"Mark Complete"}</button>}
         </div>
         {editingMeta&&(
           <div style={{...CA,marginBottom:16}}>
@@ -1650,7 +1650,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
                     <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{vTxns.length} expense{vTxns.length!==1?"s":""}</div>
                   </div>
                   <button onClick={e=>{e.stopPropagation();toggleComplete(v.id);}} style={{fontSize:11,padding:"3px 9px",borderRadius:6,border:`1px solid ${v.completed?"#86efac":"#e2e8f0"}`,background:v.completed?"#f0fdf4":"#fff",color:v.completed?"#15803d":"#6b7280",cursor:"pointer",fontFamily:"inherit",fontWeight:v.completed?600:400,whiteSpace:"nowrap"}}>
-                    {v.completed?"✓ Done":"Mark Complete"}
+                    {v.completed?"Done":"Mark Complete"}
                   </button>
                 </div>
               </div>
@@ -1663,19 +1663,19 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
 }
 
 const WHATS_NEW = [
-  { icon: "🔒", title: "Account Security", desc: "Protect your financial data with a PIN, biometric unlock (Touch ID / Windows Hello), and optional two-factor authentication. Set up on first launch or in Settings." },
-  { icon: "🏠", title: "Household Members", desc: "Add people to your household, split shared transactions equally or by income, and track balances with a built-in settlement log. Try Household." },
-  { icon: "🇺🇸", title: "USD Income & Expenses", desc: "Record income or expenses in USD and CashHeap automatically converts to CAD using the real FX rate for that day. Works in Add Expense, Add Income, and Expected Income." },
-  { icon: "✅", title: "Mark Vacation Complete", desc: "Once a trip is done, mark it complete — it gets a green badge and moves to the bottom of the list so active trips stay front and centre." },
-  { icon: "✏️", title: "Edit Bills Inline", desc: "Click Edit on any bill row in the Bills tab to update the name, amount, due date, or category without leaving the page." },
-  { icon: "✦", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
-  { icon: "✦", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
-  { icon: "✦", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
-  { icon: "✦", title: "Expected Income", desc: "Schedule future income and mark it received when it lands. Overdue items are flagged and pending totals show on the Dashboard. Try Expected Income." },
-  { icon: "✦", title: "Vacation Budgets", desc: "Track trip expenses in a separate budget so they don't distort your monthly spending. Spending also rolls up to the Dashboard. Try Vacations." },
-  { icon: "✦", title: "Category Budgets", desc: "Set a monthly cap per category. Progress bars and over-budget alerts appear on the Dashboard and in History. Try Categories." },
-  { icon: "✦", title: "Bulk Select & Edit", desc: "In History and Expected Income, tap Select to check multiple rows and delete or confirm them all at once." },
-  { icon: "✦", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
+  { icon: "—", title: "Account Security", desc: "Protect your financial data with a PIN, biometric unlock (Touch ID / Windows Hello), and optional two-factor authentication. Set up on first launch or in Settings." },
+  { icon: "—", title: "Household Members", desc: "Add people to your household, split shared transactions equally or by income, and track balances with a built-in settlement log. Try Household." },
+  { icon: "—", title: "USD Income & Expenses", desc: "Record income or expenses in USD and CashHeap automatically converts to CAD using the real FX rate for that day. Works in Add Expense, Add Income, and Expected Income." },
+  { icon: "—", title: "Mark Vacation Complete", desc: "Once a trip is done, mark it complete — it gets a green badge and moves to the bottom of the list so active trips stay front and centre." },
+  { icon: "—", title: "Edit Bills Inline", desc: "Click Edit on any bill row in the Bills tab to update the name, amount, due date, or category without leaving the page." },
+  { icon: "—", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
+  { icon: "—", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
+  { icon: "—", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
+  { icon: "—", title: "Expected Income", desc: "Schedule future income and mark it received when it lands. Overdue items are flagged and pending totals show on the Dashboard. Try Expected Income." },
+  { icon: "—", title: "Vacation Budgets", desc: "Track trip expenses in a separate budget so they don't distort your monthly spending. Spending also rolls up to the Dashboard. Try Vacations." },
+  { icon: "—", title: "Category Budgets", desc: "Set a monthly cap per category. Progress bars and over-budget alerts appear on the Dashboard and in History. Try Categories." },
+  { icon: "—", title: "Bulk Select & Edit", desc: "In History and Expected Income, tap Select to check multiple rows and delete or confirm them all at once." },
+  { icon: "—", title: "6-Month Cashflow Chart", desc: "The Dashboard charts income, expenses, and pending expected income across the last 6 months so you can spot trends at a glance." },
 ];
 
 function Toast({msg,undoFn,onClose}){
@@ -2253,7 +2253,7 @@ function CSVImport({txns,cats,onImport}){
 
   if(step==="done") return(
     <div style={HL}>
-      <div style={{fontSize:32,marginBottom:12}}>✅</div>
+      <div style={{fontSize:32,marginBottom:12,color:"#059669",fontWeight:700}}>✓</div>
       <div style={{fontSize:20,fontWeight:700,color:"#0f172a",marginBottom:8}}>Import complete</div>
       <div style={{color:"#475569",marginBottom:20}}>{imported} transaction{imported!==1?"s":""} added to your history.</div>
       <Btn onClick={()=>{setStep("upload");setRawRows([]);setImported(null);if(fileRef.current)fileRef.current.value="";}}>Import another file</Btn>
@@ -2285,13 +2285,13 @@ function CSVImport({txns,cats,onImport}){
             </select>
           </div>
           <div style={{border:"2px dashed #bae6fd",borderRadius:12,padding:40,textAlign:"center",cursor:"pointer",background:"#f8fafc"}} onClick={()=>fileRef.current?.click()}>
-            <div style={{fontSize:36,marginBottom:8}}>📂</div>
+            
             <div style={{fontWeight:600,color:"#0369a1",marginBottom:4}}>Click to select your CSV file</div>
             <div style={{fontSize:12,color:"#94a3b8"}}>Exported from your online banking portal</div>
             <input ref={fileRef} type="file" accept=".csv,.txt" style={{display:"none"}} onChange={onFile}/>
           </div>
           <div style={{marginTop:16,fontSize:12,color:"#94a3b8"}}>
-            💡 In TD: Accounts → Download → CSV &nbsp;|&nbsp; RBC: My Accounts → Download Transactions → CSV &nbsp;|&nbsp; BMO: Accounts → Download → Spreadsheet
+            Tip — In TD: Accounts → Download → CSV &nbsp;|&nbsp; RBC: My Accounts → Download Transactions → CSV &nbsp;|&nbsp; BMO: Accounts → Download → Spreadsheet
           </div>
         </div>
       )}
@@ -2356,7 +2356,7 @@ function CSVImport({txns,cats,onImport}){
                   <select value={r.category||cats[0]} onChange={e=>setPreview(p=>p.map(x=>x._id===r._id?{...x,category:e.target.value}:x))} style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,padding:"2px 4px",background:"#fff",fontFamily:"inherit"}}>
                     {r.type==="income"?<option value="income">Income</option>:cats.map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
-                  {r.isDupe&&<span title="Possible duplicate" style={{fontSize:14}}>⚠️</span>}
+                  {r.isDupe&&<span title="Possible duplicate" style={{fontSize:11,fontWeight:700,color:"#f59e0b"}}>!</span>}
                 </div>
               ))}
             </div>
@@ -2473,7 +2473,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
 
       {firstDanger&&(
         <div style={{background:"#fef9c3",borderRadius:12,border:"1px solid #fde047",padding:"12px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:20}}>⚠️</span>
+          <span style={{fontSize:13,fontWeight:800,color:"#f59e0b"}}>!</span>
           <div><strong>Balance warning:</strong> your balance is projected to drop below {fmt(threshold)} around <strong>{new Date(firstDanger.date).toLocaleDateString("en-CA",{month:"long",day:"numeric"})}</strong>.</div>
         </div>
       )}
@@ -2496,12 +2496,12 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
       {/* Controls */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>⚠️ Warning Threshold</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>Warning Threshold</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Alert when balance drops below:</div>
           <input type="number" min={0} step={100} value={threshold} onChange={e=>setThreshold(+e.target.value)} style={{...IS,width:"100%"}}/>
         </div>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧮 What-If Scenario</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>What-If Scenario</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Add a hypothetical one-time expense:</div>
           <div style={{display:"flex",gap:8}}>
             <input placeholder="Label" value={extraLabel} onChange={e=>setExtraLabel(e.target.value)} style={{...IS,flex:1}}/>
@@ -2517,7 +2517,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
           {projection.filter(d=>d.events.length>0).slice(0,20).map(d=>d.events.map((ev,i)=>(
             <div key={d.date+i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9",fontSize:12}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span>{ev.type==="bill"?"🧾":ev.type==="income"?"💰":"🔮"}</span>
+                <span>{""}</span>
                 <div>
                   <div style={{fontWeight:600}}>{ev.label}</div>
                   <div style={{color:"#94a3b8"}}>{new Date(d.date).toLocaleDateString("en-CA",{month:"short",day:"numeric"})}</div>
@@ -2608,7 +2608,7 @@ function DebtTracker({debts=[],onSaveDebts}){
 
       {/* Add/Edit form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Debt":"➕ Add Debt"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Debt":"Add Debt"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. TD Visa"/></Fld>
           <Fld label="Type"><select style={IS} value={form.type} onChange={e=>set("type",e.target.value)}>{DEBT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Fld>
@@ -2657,7 +2657,7 @@ function DebtTracker({debts=[],onSaveDebts}){
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
           <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>Payoff Strategy</div>
           <div style={{display:"flex",gap:16,marginBottom:16,flexWrap:"wrap"}}>
-            {[["avalanche","🏔️ Avalanche","Highest rate first — minimises total interest"],["snowball","⛄ Snowball","Lowest balance first — fastest wins, best for motivation"]].map(([k,l,d])=>(
+            {[["avalanche","Avalanche","Highest rate first — minimises total interest"],["snowball","Snowball","Lowest balance first — fastest wins, best for motivation"]].map(([k,l,d])=>(
               <label key={k} style={{display:"flex",alignItems:"flex-start",gap:8,cursor:"pointer",flex:1,minWidth:200,background:strategy===k?"#f0f9ff":"#f8fafc",border:`1.5px solid ${strategy===k?"#0284C7":"#e2e8f0"}`,borderRadius:10,padding:12}}>
                 <input type="radio" name="strategy" value={k} checked={strategy===k} onChange={()=>setStrategy(k)} style={{marginTop:2,accentColor:"#0284C7"}}/>
                 <div><div style={{fontWeight:700,fontSize:12}}>{l}</div><div style={{fontSize:11,color:"#64748b"}}>{d}</div></div>
@@ -2787,7 +2787,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
 
         {/* Transactions export */}
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📋 Transaction Export</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Transaction Export</div>
           <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>Export a filtered list of transactions to CSV.</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
             {[["monthly","Monthly"],["annual","Annual"],["tax","Tax Year"]].map(([k,l])=>(
@@ -2805,20 +2805,20 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
               <option value="all">All Categories</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}
             </select>
           </div>
-          <Btn full onClick={exportTransactions}>⬇ Download CSV</Btn>
+          <Btn full onClick={exportTransactions}>Download CSV</Btn>
         </div>
 
         {/* Summary reports */}
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>📅 Monthly Summary</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Monthly Summary</div>
             <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>All months in {year} — income, expenses, net per month.</div>
-            <Btn full onClick={exportMonthlySummary}>⬇ Download CSV</Btn>
+            <Btn full onClick={exportMonthlySummary}>Download CSV</Btn>
           </div>
           <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>🏷️ Category Breakdown</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:4}}>Category Breakdown</div>
             <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>Annual spending by category vs budget for {year}.</div>
-            <Btn full onClick={exportCategoryBreakdown}>⬇ Download CSV</Btn>
+            <Btn full onClick={exportCategoryBreakdown}>Download CSV</Btn>
           </div>
         </div>
 
@@ -2826,7 +2826,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
 
       {/* Tax summary table */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>🧾 {year} Tax Year Summary</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>{year} Tax Year Summary</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}}>
           {[
             {label:"Total Income",val:fmt(totalIncome)},
@@ -2840,7 +2840,7 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
           ))}
         </div>
         <div style={{fontSize:12,color:"#94a3b8",fontStyle:"italic"}}>
-          💡 For tax deductions tracking, tag individual transactions as deductible (coming in Phase 2 Tax Tracker feature).
+          Tip: For tax deductions tracking, tag individual transactions as deductible (coming in Phase 2 Tax Tracker feature).
         </div>
       </div>
     </div>
@@ -2861,7 +2861,7 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
       const dueStr=curMonth+"-"+String(b.dueDay||15).padStart(2,"0");
       const daysUntil=Math.ceil((new Date(dueStr)-new Date(todayStr))/(1000*60*60*24));
       if(daysUntil<=3&&daysUntil>=-3){
-        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"🔴":"🟡",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
+        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"high":"medium",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
       }
     });
 
@@ -2871,23 +2871,23 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
       if(!budget) return;
       const spent=mt.filter(t=>t.category===cat).reduce((s,t)=>s+t.amount,0);
       const pct=spent/budget*100;
-      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"🔴",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
-      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"🟡",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
+      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"high",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
+      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"medium",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
     });
 
     // 3. Goals close to target
     goals.forEach(g=>{
       if(!g.target||!g.saved) return;
       const pct=g.saved/g.target*100;
-      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"🎉",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
-      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"🟢",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
+      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"done",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
+      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"info",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
     });
 
     // 4. Large transaction alert
     const largeThreshold=settings?.largeTransactionAlert||500;
     const bigTxns=mt.filter(t=>t.amount>=largeThreshold);
     bigTxns.forEach(t=>{
-      found.push({id:"large-"+t.id,type:"large",icon:"💸",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
+      found.push({id:"large-"+t.id,type:"large",icon:"expense",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
     });
 
     return found;
@@ -2905,13 +2905,13 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
     <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>🔔 Alerts</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>Alerts</div>
           <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{visible.length===0?"All clear":""+highCount+" urgent · "+medCount+" warnings"}</div>
         </div>
         {visible.length>0&&<button onClick={()=>setDismissed(new Set(alerts.map(a=>a.id)))} style={{fontSize:11,padding:"4px 10px",border:"1px solid #e2e8f0",borderRadius:7,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>Dismiss all</button>}
       </div>
       {visible.length===0&&(
-        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>✅ No alerts right now — you're on track!</div>
+        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>No alerts right now — you're on track!</div>
       )}
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {visible.map(a=>(
@@ -3045,11 +3045,11 @@ function SpendingAnomalies({txns,cats,month}){
   if(anomalies.catAnomalies.length===0&&anomalies.dupes.length===0) return null;
   return(
     <div style={{background:"#fff",borderRadius:16,border:"1px solid #fde047",padding:20,marginBottom:24}}>
-      <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🔍 Spending Insights</div>
+      <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>Spending Insights</div>
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {anomalies.catAnomalies.map(a=>(
           <div key={a.cat} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,padding:"8px 10px",background:a.type==="high"?"#fffbeb":"#f0fdf4",borderRadius:8,border:`1px solid ${a.type==="high"?"#fde047":"#bbf7d0"}`}}>
-            <span>{a.type==="high"?"⬆️":"⬇️"}</span>
+            <span>{a.type==="high"?"↑":"↓"}</span>
             <div style={{flex:1}}>
               <strong>{a.cat}</strong> spending is <strong>{a.type==="high"?"+"+((a.ratio-1)*100).toFixed(0):"-"+((1-a.ratio)*100).toFixed(0)}%</strong> vs your 3-month average
             </div>
@@ -3058,7 +3058,7 @@ function SpendingAnomalies({txns,cats,month}){
         ))}
         {anomalies.dupes.length>0&&(
           <div style={{fontSize:12,padding:"8px 10px",background:"#fef2f2",borderRadius:8,border:"1px solid #fecaca",display:"flex",alignItems:"center",gap:8}}>
-            <span>⚠️</span>
+            <span style={{fontWeight:800,color:"#f59e0b",fontSize:12}}>!</span>
             <span><strong>{anomalies.dupes.length}</strong> possible duplicate transaction{anomalies.dupes.length!==1?"s":""} this month — check your history.</span>
           </div>
         )}
@@ -3133,7 +3133,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
       {detected.length>0&&(
         <div style={{background:"#f0f9ff",borderRadius:14,border:"1px solid #bae6fd",padding:16,marginBottom:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showDetect?12:0}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#0369a1"}}>🔍 {detected.length} potential subscription{detected.length!==1?"s":""} detected from your history</div>
+            <div style={{fontSize:13,fontWeight:700,color:"#0369a1"}}>{detected.length} potential subscription{detected.length!==1?"s":""} detected from your history</div>
             <button onClick={()=>setShowDetect(p=>!p)} style={{fontSize:11,padding:"4px 10px",border:"1px solid #bae6fd",borderRadius:7,cursor:"pointer",background:"#fff",color:"#0369a1",fontFamily:"inherit"}}>{showDetect?"Hide":"Review"}</button>
           </div>
           {showDetect&&(
@@ -3151,7 +3151,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
 
       {/* Add/Edit form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Subscription":"➕ Add Subscription"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Subscription":"Add Subscription"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Service Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Netflix, Spotify"/></Fld>
           <Fld label="Amount *"><input type="number" style={IS} value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
@@ -3182,7 +3182,7 @@ function SubscriptionManager({subscriptions,onSave,txns}){
           return(
             <div key={s.id} style={{background:"#fff",borderRadius:12,border:`1px solid ${s.active===false?"#e2e8f0":"#bae6fd"}`,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,opacity:s.active===false?0.55:1}}>
               <div style={{width:40,height:40,borderRadius:10,background:"#f0f9ff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>
-                {s.active===false?"⏸️":"🔄"}
+                {s.active===false?"Paused":"Active"}
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
@@ -3278,7 +3278,7 @@ function TaxTracker({txns,taxItems,onSaveTaxItems,settings}){
       {/* RRSP & TFSA */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>📊 RRSP ({year})</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>RRSP ({year})</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
             <Fld label="Contribution Room ($)"><input type="number" style={IS} value={rrspRoom} onChange={e=>setRrspRoom(e.target.value)} placeholder={String(RRSP_LIMIT_2026)}/></Fld>
             <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={rrspContrib} onChange={e=>setRrspContrib(e.target.value)} placeholder="0"/></Fld>
@@ -3297,7 +3297,7 @@ function TaxTracker({txns,taxItems,onSaveTaxItems,settings}){
           )}
         </div>
         <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🏦 TFSA ({year})</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>TFSA ({year})</div>
           <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={tfsa} onChange={e=>setTfsa(e.target.value)} placeholder="0"/></Fld>
           <div style={{fontSize:11,color:"#94a3b8",marginTop:8}}>2026 TFSA annual limit: $7,000 · Lifetime limit varies by birth year.</div>
         </div>
@@ -3434,7 +3434,7 @@ function RetirementPlanner({txns,accounts,settings}){
                 {[
                   {l:"Projected at "+retireAge,v:fmt(projected),c:projected>=retireTarget?GREEN:RED},
                   {l:"Target",v:fmt(retireTarget),c:"#0f172a"},
-                  {l:"Gap",v:gap>0?fmt(gap):"None 🎉",c:gap>0?RED:GREEN},
+                  {l:"Gap",v:gap>0?fmt(gap):"None",c:gap>0?RED:GREEN},
                   {l:"Extra needed/mo",v:extraNeeded>0?fmt(extraNeeded):"-",c:extraNeeded>0?"#f59e0b":GREEN},
                 ].map(r=><div key={r.l} style={{background:"#f8fafc",borderRadius:8,padding:10}}><div style={{fontSize:10,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em"}}>{r.l}</div><div style={{fontSize:15,fontWeight:800,color:r.c,marginTop:2}}>{r.v}</div></div>)}
               </div>
@@ -3481,18 +3481,18 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
       const dueDate=ym+"-"+String(b.dueDay||15).padStart(2,"0");
       if(dueDate.startsWith(ym)){
         const paid=billPayments.some(p=>p.billId===b.id&&p.month===ym);
-        add(dueDate,{type:"bill",label:b.name,amount:b.amount,paid,color:paid?"#059669":"#f59e0b",icon:"🧾"});
+        add(dueDate,{type:"bill",label:b.name,amount:b.amount,paid,color:paid?"#059669":"#f59e0b",icon:"bill"});
       }
     });
 
     // Expected income
     expected.filter(e=>e.date?.startsWith(ym)).forEach(e=>{
-      add(e.date,{type:"income",label:e.source,amount:e.amount,confirmed:e.confirmed,color:e.confirmed?"#059669":"#0284C7",icon:"💰"});
+      add(e.date,{type:"income",label:e.source,amount:e.amount,confirmed:e.confirmed,color:e.confirmed?"#059669":"#0284C7",icon:"income"});
     });
 
     // Actual transactions
     txns.filter(t=>t.date?.startsWith(ym)).forEach(t=>{
-      add(t.date,{type:"txn",label:t.merchant||t.source,amount:t.amount,txnType:t.type,color:t.type==="income"?"#059669":"#94a3b8",icon:t.type==="income"?"💚":"💸"});
+      add(t.date,{type:"txn",label:t.merchant||t.source,amount:t.amount,txnType:t.type,color:t.type==="income"?"#059669":"#94a3b8",icon:t.type==="income"?"income":"expense"});
     });
 
     // Vacations
@@ -3501,7 +3501,7 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
       const s=new Date(v.startDate),e=new Date(v.endDate);
       for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){
         const ds=d.toISOString().split("T")[0];
-        if(ds.startsWith(ym)) add(ds,{type:"vacation",label:v.name,color:"#8b5cf6",icon:"✈️"});
+        if(ds.startsWith(ym)) add(ds,{type:"vacation",label:v.name,color:"#8b5cf6",icon:"trip"});
       }
     });
 
@@ -3565,7 +3565,7 @@ function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
           {/* Legend */}
           <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
             <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>Legend</div>
-            {[["🧾","#f59e0b","Bill due"],["🧾","#059669","Bill paid"],["💰","#0284C7","Expected income"],["💚","#059669","Income received"],["💸","#94a3b8","Expense"],["✈️","#8b5cf6","Vacation"]].map(([icon,color,label])=>(
+            {[["B","#f59e0b","Bill due"],["B","#059669","Bill paid"],["$","#0284C7","Expected income"],["$","#059669","Income received"],["–","#94a3b8","Expense"],["T","#8b5cf6","Vacation"]].map(([icon,color,label])=>(
               <div key={label} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:11}}>
                 <span style={{fontSize:14}}>{icon}</span>
                 <div style={{width:10,height:10,borderRadius:2,background:color}}/>
@@ -3639,7 +3639,7 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
     onSave(wishlist.map(w=>w.id===item.id?{...w,promotedToGoal:true}:w));
   };
 
-  const priorities=[["essential","🔴 Essential"],["want","🟡 Want"],["nice-to-have","🟢 Nice to Have"]];
+  const priorities=[["essential","Essential"],["want","Want"],["nice-to-have","Nice to Have"]];
   const sorted=[...wishlist].sort((a,b)=>{const o={essential:0,want:1,"nice-to-have":2};return(o[a.priority]||2)-(o[b.priority]||2);});
 
   return(
@@ -3649,14 +3649,14 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
 
       {monthlySavings>0&&(
         <div style={{background:"#f0f9ff",borderRadius:12,border:"1px solid #bae6fd",padding:"12px 16px",marginBottom:20,fontSize:12,display:"flex",alignItems:"center",gap:8}}>
-          <span>💡</span>
+          
           <span>You're currently saving <strong>{fmt(monthlySavings)}/month</strong> on average. Affordability estimates are based on this rate.</span>
         </div>
       )}
 
       {/* Form */}
       <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Item":"➕ Add to Wishlist"}</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"Edit Item":"Add to Wishlist"}</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
           <Fld label="Item Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. MacBook Pro"/></Fld>
           <Fld label="Estimated Cost *"><input type="number" style={IS} value={form.cost} onChange={e=>set("cost",e.target.value)} placeholder="0.00"/></Fld>
@@ -3686,13 +3686,13 @@ function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
               <div style={{width:8,height:40,borderRadius:99,background:priorityColor,flexShrink:0}}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                  <span style={{fontWeight:700,fontSize:14}}>{item.purchased?"✅ ":""}{item.name}</span>
+                  <span style={{fontWeight:700,fontSize:14}}>{item.purchased?"✓ ":""}{item.name}</span>
                   {item.promotedToGoal&&<span style={{fontSize:10,background:"#f0fdf4",color:"#059669",padding:"2px 6px",borderRadius:99,fontWeight:600}}>→ Goal created</span>}
                 </div>
                 <div style={{fontSize:11,color:"#64748b"}}>{fmt(item.cost)}{item.note?` · ${item.note}`:""}{affordDate&&!item.purchased?` · Affordable in ~${months} month${months!==1?"s":""} (${affordDate})`:""}</div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
-                {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#64748b"}}>🔗</a>}
+                {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#64748b"}}>Link</a>}
                 {!item.purchased&&!item.promotedToGoal&&<button onClick={()=>promoteToGoal(item)} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bbf7d0",borderRadius:6,cursor:"pointer",background:"#f0fdf4",color:"#059669",fontFamily:"inherit"}}>→ Goal</button>}
                 <button onClick={()=>onSave(wishlist.map(w=>w.id===item.id?{...w,purchased:!w.purchased}:w))} style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>{item.purchased?"Unpurchase":"✓ Bought"}</button>
                 <button onClick={()=>{setForm({...item,cost:String(item.cost)});setEditing(true);window.scrollTo(0,0);}} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bae6fd",borderRadius:6,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Edit</button>
@@ -3795,7 +3795,7 @@ function MortgageCalculator({accounts,onSaveAccounts}){
 
           {extra>0&&(
             <div style={{background:"#f0fdf4",borderRadius:14,border:"1px solid #bbf7d0",padding:16}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:8}}>💡 Extra Payment Impact</div>
+              <div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:8}}>Extra Payment Impact</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,fontSize:12}}>
                 <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Years saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{yearsSaved} yrs</div></div>
                 <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Interest saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{fmt(+intSaved)}</div></div>
@@ -3850,11 +3850,11 @@ function MortgageCalculator({accounts,onSaveAccounts}){
 // ── Household ────────────────────────────────────────────────────────────────
 
 const MEMBER_COLORS=["#0284C7","#7C3AED","#059669","#D97706","#DB2777","#0891B2"];
-const MEMBER_AVATARS=["👤","👩","👨","🧑","👧","👦","🧔","👩‍💼","👨‍💼","🧑‍💻"];
+const MEMBER_AVATARS=["A","B","C","D","E","F","G","H","I","J"];
 
 function Household({members,onSaveMembers,txns,onSaveTxns,splits,onSaveSplits,settlements,onSaveSettlements}){
   const [tab,setTab]=useState("members"); // members | splits | balances
-  const [form,setForm]=useState({name:"",avatar:"👤",color:MEMBER_COLORS[0],monthlyIncome:""});
+  const [form,setForm]=useState({name:"",avatar:"",color:MEMBER_COLORS[0],monthlyIncome:""});
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState({});
   const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
@@ -3865,7 +3865,7 @@ function Household({members,onSaveMembers,txns,onSaveTxns,splits,onSaveSplits,se
     const usedColors=members.map(m=>m.color);
     const nextColor=MEMBER_COLORS.find(c=>!usedColors.includes(c))||MEMBER_COLORS[members.length%MEMBER_COLORS.length];
     onSaveMembers([...members,{id:uid(),name:form.name.trim(),avatar:form.avatar,color:form.color||nextColor,monthlyIncome:parseFloat(form.monthlyIncome)||0,joinedDate:today()}]);
-    setForm({name:"",avatar:"👤",color:nextColor,monthlyIncome:""});
+    setForm({name:"",avatar:"",color:nextColor,monthlyIncome:""});
   };
   const removeMember=id=>onSaveMembers(members.filter(m=>m.id!==id));
   const startEdit=m=>{setEditId(m.id);setEditForm({name:m.name,avatar:m.avatar,color:m.color,monthlyIncome:String(m.monthlyIncome||"")});};
@@ -4322,14 +4322,14 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
 }
 
 function Goals({goals,onSaveGoals}){
-  const [form,setForm]=useState({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+  const [form,setForm]=useState({name:"",emoji:"",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [contrib,setContrib]=useState({});
   const GOAL_COLORS=["#0284C7","#059669","#d97706","#7c3aed","#db2777","#0891b2"];
   const add=()=>{
     if(!form.name.trim()||!form.targetAmount)return;
-    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"🎯",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
-    setForm({name:"",emoji:"🎯",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
+    onSaveGoals([...goals,{id:uid(),name:form.name.trim(),emoji:form.emoji||"",targetAmount:parseFloat(form.targetAmount)||0,currentAmount:parseFloat(form.currentAmount)||0,monthlyTarget:parseFloat(form.monthlyTarget)||0,deadline:form.deadline,color:form.color,createdAt:today()}]);
+    setForm({name:"",emoji:"",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
   };
   const logContrib=id=>{
     const amt=parseFloat(contrib[id])||0;if(!amt)return;
@@ -4362,7 +4362,7 @@ function Goals({goals,onSaveGoals}){
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:pct<1?12:0}}>
                   <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% saved</span>
                   {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{fmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
-                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached! 🎉</span>}
+                  {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached!</span>}
                 </div>
                 {pct<1&&(
                   <div style={{display:"flex",gap:8,borderTop:"1px solid #f1f5f9",paddingTop:10}}>
@@ -4379,7 +4379,7 @@ function Goals({goals,onSaveGoals}){
         <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>{goals.length===0?"Create Your First Goal":"Add Another Goal"}</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <Fld label="Goal Name"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Emergency Fund, House"/></Fld>
-          <Fld label="Emoji"><input style={{...IS}} value={form.emoji} onChange={e=>set("emoji",e.target.value)} placeholder="🎯"/></Fld>
+          
           <Fld label="Target Amount ($)"><input style={IS} type="number" value={form.targetAmount} onChange={e=>set("targetAmount",e.target.value)} placeholder="10000"/></Fld>
           <Fld label="Already Saved ($)"><input style={IS} type="number" value={form.currentAmount} onChange={e=>set("currentAmount",e.target.value)} placeholder="0"/></Fld>
           <Fld label="Monthly Target ($)"><input style={IS} type="number" value={form.monthlyTarget} onChange={e=>set("monthlyTarget",e.target.value)} placeholder="Optional"/></Fld>
@@ -4822,7 +4822,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
                 <span style={{position:"absolute",top:3,left:f.devMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
               </button>
             </div>
-            {f.devMode&&<div style={{fontSize:11,color:"#854d0e",background:"#fef9c3",border:"1px solid #fde047",borderRadius:8,padding:"7px 10px"}}>⚠ Dev mode enabled — Data Model tab is now visible in the nav.</div>}
+            {f.devMode&&<div style={{fontSize:11,color:"#854d0e",background:"#fef9c3",border:"1px solid #fde047",borderRadius:8,padding:"7px 10px"}}>Dev mode enabled — Data Model tab is now visible in the nav.</div>}
           </div>
 
         </div>
@@ -4896,7 +4896,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
             </Fld>
             <div style={{display:"flex",gap:8,marginTop:4,marginBottom:12}}>
               <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>
-                {testing?"Testing…":"⚡ Test Connection"}
+                {testing?"Testing…":"Test Connection"}
               </button>
               <Btn onClick={save}>Save</Btn>
             </div>
@@ -4959,7 +4959,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
               >
                 {localStatus==='building'
                   ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
-                  :localStatus==='error'?'↺ Retry':'🔄 Build & Install'}
+                  :localStatus==='error'?'↺ Retry':'Build & Install'}
               </button>
               {localLog.length>0&&(
                 <div style={{marginTop:10,background:"#0f172a",borderRadius:7,padding:"8px 12px",maxHeight:130,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6}}>
@@ -4981,7 +4981,7 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
                   ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Checking…</>
                   :ghStatus==='downloading'
                   ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Downloading…</>
-                  :ghStatus==='ready'?`✅ Restart to install v${ghVersion}`
+                  :ghStatus==='ready'?`Restart to install v${ghVersion}`
                   :ghStatus==='up-to-date'?'✓ Up to date'
                   :ghStatus==='error'?'↺ Retry'
                   :'Check for Updates'}
@@ -6352,7 +6352,7 @@ Current month: ${curMonth}`;
       }
     }catch(e){
       setError(e.message);
-      setMessages(prev=>[...prev,{role:"assistant",display:"⚠ "+e.message,content:"",widgets:[]}]);
+      setMessages(prev=>[...prev,{role:"assistant",display:"Error: "+e.message,content:"",widgets:[]}]);
     }
 
     // Last-resort fallback: if no query succeeded (refused, errored, or never tried)
@@ -6897,7 +6897,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
         style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:open?"#475569":"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:open?18:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 18px rgba(2,132,199,0.5)",zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
         onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
         onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-      >{open?"✕":"💬"}</button>
+      >{open?"✕":"AI"}</button>
 
       {/* Panel */}
       {open&&(
@@ -6905,10 +6905,10 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
 
           {/* Header */}
           <div style={{display:"flex",alignItems:"center",gap:9,padding:"13px 16px 11px",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(135deg,#f8fafc,#eff6ff)",flexShrink:0}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>💬</div>
+            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",flexShrink:0}}>AI</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}{settings?.jarvisVoice?" · 🔊":""}</div>
+              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}</div>
             </div>
             <button
               onClick={()=>onSetInDepthMode(!inDepthMode)}
@@ -6973,7 +6973,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
               onFocus={e=>e.target.style.borderColor="#0284C7"}
               onBlur={e=>e.target.style.borderColor="#e2e8f0"}
             />
-            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"🔊":"🎤"}</button>
+            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"▐▐":"●"}</button>
             <button onClick={send} disabled={loading||(!input.trim()&&selectedItems.length===0)} style={{width:34,height:34,borderRadius:"50%",background:"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:loading||(!input.trim()&&selectedItems.length===0)?0.4:1,transition:"opacity .15s"}}>↑</button>
           </div>
         </div>
@@ -7002,7 +7002,7 @@ function DevUpdateButton(){
       {status==='building'
         ?<><span style={{display:"inline-block",width:10,height:10,border:"2px solid currentColor",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
         :status==='error'?'✗ Build failed'
-        :'🔄 Update App'}
+        :'Update App'}
     </button>
   );
 }
@@ -7016,7 +7016,7 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   const flyoutTimer = useRef(null);
 
   const appItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom);
-  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"⚙", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
+  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"DM", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
   const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom), ...devItems];
   const pinnedItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom && favourites.includes(n.k));
 
@@ -7330,7 +7330,7 @@ function AccountSetup({onComplete}){
         {/* Step 2 — Biometric */}
         {step===2&&(
           <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",textAlign:"center"}}>
-            <div style={{fontSize:40,marginBottom:4}}>{bioStatus==="done"?"✅":"👆"}</div>
+            <div style={{fontSize:40,marginBottom:4}}>"Biometrics"</div>
             <div style={{color:"#fff",fontSize:16,fontWeight:700}}>Enable Biometrics</div>
             <div style={{color:"#9ca3af",fontSize:12,lineHeight:1.6,marginBottom:4}}>
               Use Touch ID, Face ID, Windows Hello, or your device's fingerprint sensor to unlock CashHeap instantly.
@@ -7509,7 +7509,7 @@ function LockScreen({authConfig,onUnlock}){
               onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.5)";e.currentTarget.style.color="#fff";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.2)";e.currentTarget.style.color="rgba(255,255,255,0.7)";}}
             >
-              {bioBusy?<span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>:"👆"}
+              {bioBusy?<span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>:"Touch ID"}
               {bioBusy?"Verifying…":"Use Touch ID / Biometrics"}
             </button>
           )}
@@ -7696,7 +7696,7 @@ function UpdateBanner() {
   if (!status) return null;
   return (
     <div style={{position:'fixed',top:0,left:0,right:0,zIndex:99999,background:status==='ready'?'#0284C7':'#0f172a',color:'#fff',fontSize:12,fontWeight:600,padding:'8px 20px',display:'flex',alignItems:'center',justifyContent:'center',gap:12,fontFamily:'system-ui,sans-serif'}}>
-      {status==='available' ? `⬇️ Downloading update v${version}…` : `✅ Update v${version} ready — `}
+      {status==='available' ? `Downloading update v${version}...` : `Update v${version} ready — `}
       {status==='ready' && <button onClick={()=>window.electronUpdater.restartAndInstall()} style={{background:'#fff',color:'#0284C7',border:'none',borderRadius:6,padding:'3px 12px',fontWeight:700,cursor:'pointer',fontSize:12}}>Restart now</button>}
     </div>
   );
