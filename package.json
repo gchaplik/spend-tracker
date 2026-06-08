@@ -12,7 +12,10 @@
     "test:ui": "vitest --ui",
     "electron:dev": "concurrently \"vite\" \"electron .\"",
     "electron:build": "vite build && electron-builder",
+    "electron:build:mac": "vite build && electron-builder --mac",
     "electron:build:win": "vite build && electron-builder --win --x64",
+    "electron:build:linux": "vite build && electron-builder --linux --x64",
+    "electron:build:all": "vite build && electron-builder --mac --win --linux",
     "update:local": "bash scripts/local-update.sh",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -65,6 +68,14 @@
         }
       ],
       "icon": "electron/icons/mac/icon.icns"
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb",      "arch": ["x64"] }
+      ],
+      "icon": "electron/icons/png",
+      "category": "Finance"
     },
     "publish": {
       "provider": "github",

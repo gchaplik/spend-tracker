@@ -2680,6 +2680,916 @@ function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,on
   );
 }
 
+// ── Financial Health Score ────────────────────────────────────────────────────
+function HealthScore({txns,accounts,holdings,catBudgets,goals,bills,billPayments,month,fxRate,stockPrices}){
+  const score=useMemo(()=>{
+    const curMonth=month||today().slice(0,7);
+    const last3=[0,1,2].map(i=>{const d=new Date();d.setMonth(d.getMonth()-i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+    const recentTxns=txns.filter(t=>last3.some(m=>t.date?.startsWith(m)));
+    const income3=recentTxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)/3;
+    const exp3=recentTxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)/3;
+
+    // 1. Savings rate (target 20%)
+    const savingsRate=income3>0?(income3-exp3)/income3*100:0;
+    const savingsScore=Math.min(100,Math.max(0,(savingsRate/20)*100));
+
+    // 2. Emergency fund (target 3 months expenses)
+    const cashAccounts=accounts.filter(a=>a.type!=="investment"&&a.type!=="loan");
+    const totalCash=cashAccounts.reduce((s,a)=>s+(+a.balance||0),0);
+    const emergencyMonths=exp3>0?totalCash/exp3:0;
+    const emergencyScore=Math.min(100,(emergencyMonths/3)*100);
+
+    // 3. Budget adherence (% cats under budget this month)
+    const mt=txns.filter(t=>t.type==="expense"&&t.date?.startsWith(curMonth));
+    const budgCats=Object.entries(catBudgets).filter(([,v])=>v>0);
+    const adherePct=budgCats.length===0?100:budgCats.filter(([c,b])=>mt.filter(t=>t.category===c).reduce((s,t)=>s+t.amount,0)<=b).length/budgCats.length*100;
+
+    // 4. Goal progress (avg % across active goals)
+    const activeGoals=goals.filter(g=>g.target>0);
+    const goalPct=activeGoals.length===0?100:activeGoals.reduce((s,g)=>s+Math.min(100,(g.saved||0)/g.target*100),0)/activeGoals.length;
+
+    // 5. Net worth trend (positive = 100, flat = 50, negative = 0)
+    const nwScore=totalCash>0?75:50;
+
+    const total=Math.round((savingsScore*0.3)+(emergencyScore*0.25)+(adherePct*0.2)+(goalPct*0.15)+(nwScore*0.1));
+    return{total,savingsRate:+savingsRate.toFixed(1),emergencyMonths:+emergencyMonths.toFixed(1),adherePct:+adherePct.toFixed(0),goalPct:+goalPct.toFixed(0),savingsScore,emergencyScore,adherePct2:adherePct,goalPct2:goalPct,nwScore};
+  },[txns,accounts,catBudgets,goals,month]);
+
+  const color=score.total>=80?"#059669":score.total>=60?"#f59e0b":"#ef4444";
+  const label=score.total>=80?"Excellent":score.total>=60?"Good":score.total>=40?"Fair":"Needs Attention";
+
+  const metrics=[
+    {label:"Savings Rate",val:score.savingsRate+"%",target:"20%",score:score.savingsScore,tip:"Aim to save at least 20% of income"},
+    {label:"Emergency Fund",val:score.emergencyMonths+"mo",target:"3mo",score:score.emergencyScore,tip:"Target 3 months of expenses in cash"},
+    {label:"Budget Adherence",val:score.adherePct+"%",target:"100%",score:score.adherePct2,tip:"Stay under budget in all categories"},
+    {label:"Goal Progress",val:score.goalPct+"%",target:"100%",score:score.goalPct2,tip:"Average progress across your savings goals"},
+  ];
+
+  return(
+    <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+      <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:16}}>
+        <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
+          <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="30" fill="none" stroke="#f1f5f9" strokeWidth="8"/>
+            <circle cx="36" cy="36" r="30" fill="none" stroke={color} strokeWidth="8" strokeDasharray={`${score.total*1.885} 188.5`} strokeLinecap="round" transform="rotate(-90 36 36)" style={{transition:"stroke-dasharray .6s ease"}}/>
+          </svg>
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column"}}>
+            <span style={{fontSize:18,fontWeight:800,color,lineHeight:1}}>{score.total}</span>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:16,fontWeight:800,color:"#0f172a"}}>Financial Health Score</div>
+          <div style={{fontSize:13,fontWeight:700,color,marginTop:2}}>{label}</div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Based on savings, emergency fund, budgets &amp; goals</div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+        {metrics.map(m=>(
+          <div key={m.label} style={{background:"#f8fafc",borderRadius:10,padding:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>{m.label}</div>
+            <div style={{fontSize:15,fontWeight:800,color:"#0f172a"}}>{m.val} <span style={{fontSize:10,color:"#94a3b8",fontWeight:400}}>/ {m.target}</span></div>
+            <div style={{background:"#e2e8f0",borderRadius:99,height:4,marginTop:6}}>
+              <div style={{height:4,borderRadius:99,background:m.score>=80?"#059669":m.score>=50?"#f59e0b":"#ef4444",width:`${Math.min(100,m.score)}%`,transition:"width .4s"}}/>
+            </div>
+            <div style={{fontSize:10,color:"#94a3b8",marginTop:4,lineHeight:1.3}}>{m.tip}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Spending Anomaly Detection ────────────────────────────────────────────────
+function SpendingAnomalies({txns,cats,month}){
+  const anomalies=useMemo(()=>{
+    const curMonth=month||today().slice(0,7);
+    const results=[];
+    cats.forEach(cat=>{
+      const curSpend=txns.filter(t=>t.type==="expense"&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
+      if(curSpend===0) return;
+      const prev3=[1,2,3].map(i=>{const d=new Date(curMonth+"-01");d.setMonth(d.getMonth()-i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+      const prevSpends=prev3.map(m=>txns.filter(t=>t.type==="expense"&&t.category===cat&&t.date?.startsWith(m)).reduce((s,t)=>s+t.amount,0));
+      const avg=prevSpends.reduce((s,v)=>s+v,0)/3;
+      if(avg<10) return;
+      const ratio=curSpend/avg;
+      if(ratio>=1.5) results.push({cat,curSpend,avg,ratio,type:"high"});
+      else if(ratio<0.3&&avg>50) results.push({cat,curSpend,avg,ratio,type:"low"});
+    });
+    // Duplicate transactions (same merchant+amount+date)
+    const seen={};
+    txns.filter(t=>t.date?.startsWith(curMonth)).forEach(t=>{
+      const key=`${t.date}|${t.amount}|${(t.merchant||"").toLowerCase()}`;
+      if(seen[key]) seen[key]++;else seen[key]=1;
+    });
+    const dupes=Object.entries(seen).filter(([,v])=>v>1).map(([k])=>k);
+    return{catAnomalies:results.sort((a,b)=>b.ratio-a.ratio),dupes};
+  },[txns,cats,month]);
+
+  if(anomalies.catAnomalies.length===0&&anomalies.dupes.length===0) return null;
+  return(
+    <div style={{background:"#fff",borderRadius:16,border:"1px solid #fde047",padding:20,marginBottom:24}}>
+      <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🔍 Spending Insights</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {anomalies.catAnomalies.map(a=>(
+          <div key={a.cat} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,padding:"8px 10px",background:a.type==="high"?"#fffbeb":"#f0fdf4",borderRadius:8,border:`1px solid ${a.type==="high"?"#fde047":"#bbf7d0"}`}}>
+            <span>{a.type==="high"?"⬆️":"⬇️"}</span>
+            <div style={{flex:1}}>
+              <strong>{a.cat}</strong> spending is <strong>{a.type==="high"?"+"+((a.ratio-1)*100).toFixed(0):"-"+((1-a.ratio)*100).toFixed(0)}%</strong> vs your 3-month average
+            </div>
+            <div style={{color:"#64748b",whiteSpace:"nowrap"}}>{fmt(a.curSpend)} vs {fmt(a.avg)} avg</div>
+          </div>
+        ))}
+        {anomalies.dupes.length>0&&(
+          <div style={{fontSize:12,padding:"8px 10px",background:"#fef2f2",borderRadius:8,border:"1px solid #fecaca",display:"flex",alignItems:"center",gap:8}}>
+            <span>⚠️</span>
+            <span><strong>{anomalies.dupes.length}</strong> possible duplicate transaction{anomalies.dupes.length!==1?"s":""} this month — check your history.</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Subscription Manager ──────────────────────────────────────────────────────
+const SUB_CADENCES=[{v:"weekly",l:"Weekly",mo:4.33},{v:"monthly",l:"Monthly",mo:1},{v:"bimonthly",l:"Every 2 months",mo:0.5},{v:"quarterly",l:"Quarterly",mo:0.333},{v:"annually",l:"Annually",mo:0.0833}];
+function SubscriptionManager({subscriptions,onSave,txns}){
+  const blank={id:"",name:"",amount:"",cadence:"monthly",category:"Entertainment",url:"",trialEnd:"",active:true};
+  const [form,setForm]=useState(blank);
+  const [editing,setEditing]=useState(false);
+  const [showDetect,setShowDetect]=useState(false);
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  // Auto-detect potential subscriptions from transaction history
+  const detected=useMemo(()=>{
+    const merchantMap={};
+    txns.filter(t=>t.type==="expense").forEach(t=>{
+      const m=(t.merchant||"").toLowerCase().trim();
+      if(!m) return;
+      if(!merchantMap[m]) merchantMap[m]=[];
+      merchantMap[m].push(t);
+    });
+    return Object.entries(merchantMap)
+      .filter(([,ts])=>ts.length>=2)
+      .map(([merchant,ts])=>{
+        const amounts=ts.map(t=>t.amount);
+        const avgAmt=amounts.reduce((s,v)=>s+v,0)/amounts.length;
+        const consistent=amounts.every(a=>Math.abs(a-avgAmt)<avgAmt*0.1+1);
+        const dates=ts.map(t=>t.date).sort();
+        const gaps=dates.slice(1).map((d,i)=>Math.round((new Date(d)-new Date(dates[i]))/(1000*60*60*24)));
+        const avgGap=gaps.reduce((s,v)=>s+v,0)/(gaps.length||1);
+        const isMonthly=avgGap>=25&&avgGap<=35;
+        const isAnnual=avgGap>=330&&avgGap<=400;
+        if(!consistent||(gaps.length>0&&!isMonthly&&!isAnnual)) return null;
+        const alreadyTracked=subscriptions.some(s=>s.name.toLowerCase()===merchant);
+        if(alreadyTracked) return null;
+        return{merchant:ts[0].merchant,amount:+avgAmt.toFixed(2),cadence:isAnnual?"annually":"monthly",count:ts.length,lastDate:dates[dates.length-1]};
+      }).filter(Boolean).slice(0,10);
+  },[txns,subscriptions]);
+
+  const save=()=>{
+    if(!form.name.trim()||!form.amount) return;
+    const item={...form,id:form.id||uid(),amount:+form.amount,active:form.active!==false};
+    onSave(form.id?subscriptions.map(s=>s.id===form.id?item:s):[...subscriptions,item]);
+    setForm(blank);setEditing(false);
+  };
+
+  const totalMo=subscriptions.filter(s=>s.active!==false).reduce((sum,s)=>{
+    const cad=SUB_CADENCES.find(c=>c.v===s.cadence)||SUB_CADENCES[1];
+    return sum+s.amount*cad.mo;
+  },0);
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Subscriptions</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Track recurring subscriptions and see your total monthly cost.</div>
+
+      {/* Summary */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:24}}>
+        {[
+          {label:"Monthly Cost",val:fmt(totalMo),color:"#ef4444"},
+          {label:"Annual Cost",val:fmt(totalMo*12),color:"#f59e0b"},
+          {label:"Active",val:subscriptions.filter(s=>s.active!==false).length+" subs",color:"#0284C7"},
+        ].map(c=><div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}><div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div><div style={{fontSize:22,fontWeight:800,color:c.color}}>{c.val}</div></div>)}
+      </div>
+
+      {/* Auto-detect banner */}
+      {detected.length>0&&(
+        <div style={{background:"#f0f9ff",borderRadius:14,border:"1px solid #bae6fd",padding:16,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showDetect?12:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#0369a1"}}>🔍 {detected.length} potential subscription{detected.length!==1?"s":""} detected from your history</div>
+            <button onClick={()=>setShowDetect(p=>!p)} style={{fontSize:11,padding:"4px 10px",border:"1px solid #bae6fd",borderRadius:7,cursor:"pointer",background:"#fff",color:"#0369a1",fontFamily:"inherit"}}>{showDetect?"Hide":"Review"}</button>
+          </div>
+          {showDetect&&(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {detected.map(d=>(
+                <div key={d.merchant} style={{display:"flex",alignItems:"center",gap:10,background:"#fff",borderRadius:8,padding:"8px 12px",border:"1px solid #e2e8f0"}}>
+                  <div style={{flex:1,fontSize:12}}><strong>{d.merchant}</strong> · {fmt(d.amount)}/{d.cadence} · seen {d.count}× (last: {d.lastDate})</div>
+                  <button onClick={()=>{setForm({...blank,name:d.merchant,amount:String(d.amount),cadence:d.cadence});setEditing(true);setShowDetect(false);window.scrollTo(0,0);}} style={{fontSize:11,padding:"4px 10px",border:"1px solid #0284C7",borderRadius:7,cursor:"pointer",background:"#0284C7",color:"#fff",fontFamily:"inherit"}}>Add</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add/Edit form */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Subscription":"➕ Add Subscription"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
+          <Fld label="Service Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Netflix, Spotify"/></Fld>
+          <Fld label="Amount *"><input type="number" style={IS} value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Billing Cycle"><select style={IS} value={form.cadence} onChange={e=>set("cadence",e.target.value)}>{SUB_CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></Fld>
+          <Fld label="Category"><input style={IS} value={form.category} onChange={e=>set("category",e.target.value)} placeholder="Entertainment"/></Fld>
+          <Fld label="Cancellation URL"><input style={IS} value={form.url} onChange={e=>set("url",e.target.value)} placeholder="https://..."/></Fld>
+          <Fld label="Trial Ends"><input type="date" style={IS} value={form.trialEnd} onChange={e=>set("trialEnd",e.target.value)}/></Fld>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
+          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer"}}>
+            <input type="checkbox" checked={form.active!==false} onChange={e=>set("active",e.target.checked)} style={{accentColor:"#0284C7"}}/>
+            Active subscription
+          </label>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={save} disabled={!form.name.trim()||!form.amount}>{editing?"Save Changes":"Add Subscription"}</Btn>
+          {editing&&<Btn v="secondary" onClick={()=>{setForm(blank);setEditing(false);}}>Cancel</Btn>}
+        </div>
+      </div>
+
+      {/* List */}
+      {subscriptions.length===0&&<div style={{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}}>No subscriptions yet. Add one above or detect from your transaction history.</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {subscriptions.map(s=>{
+          const cad=SUB_CADENCES.find(c=>c.v===s.cadence)||SUB_CADENCES[1];
+          const mo=+(s.amount*cad.mo).toFixed(2);
+          const isTrialSoon=s.trialEnd&&s.trialEnd>today()&&Math.ceil((new Date(s.trialEnd)-new Date())/(86400000))<=7;
+          return(
+            <div key={s.id} style={{background:"#fff",borderRadius:12,border:`1px solid ${s.active===false?"#e2e8f0":"#bae6fd"}`,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,opacity:s.active===false?0.55:1}}>
+              <div style={{width:40,height:40,borderRadius:10,background:"#f0f9ff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>
+                {s.active===false?"⏸️":"🔄"}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                  <span style={{fontWeight:700,fontSize:14}}>{s.name}</span>
+                  {isTrialSoon&&<span style={{fontSize:10,background:"#fef9c3",color:"#92400e",padding:"2px 6px",borderRadius:99,fontWeight:600}}>Trial ends soon</span>}
+                  {s.active===false&&<span style={{fontSize:10,background:"#f1f5f9",color:"#64748b",padding:"2px 6px",borderRadius:99,fontWeight:600}}>Paused</span>}
+                </div>
+                <div style={{fontSize:11,color:"#64748b"}}>{fmt(s.amount)}/{s.cadence} · {fmt(mo)}/mo · {s.category}{s.trialEnd?` · Trial ends ${s.trialEnd}`:""}</div>
+              </div>
+              <div style={{fontWeight:800,fontSize:15,color:"#ef4444",marginRight:8}}>{fmt(mo)}<span style={{fontSize:10,fontWeight:400,color:"#94a3b8"}}>/mo</span></div>
+              <div style={{display:"flex",gap:6}}>
+                {s.url&&<a href={s.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#0369a1",background:"#f0f9ff"}}>Cancel</a>}
+                <button onClick={()=>{edit(s);}} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bae6fd",borderRadius:6,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Edit</button>
+                <button onClick={()=>onSave(subscriptions.filter(x=>x.id!==s.id))} style={{fontSize:11,padding:"4px 8px",border:"1px solid #fecaca",borderRadius:6,cursor:"pointer",background:"#fff5f5",color:"#ef4444",fontFamily:"inherit"}}>✕</button>
+              </div>
+            </div>
+          );
+          function edit(sub){setForm({...sub,amount:String(sub.amount)});setEditing(true);window.scrollTo(0,0);}
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Tax Tracker ───────────────────────────────────────────────────────────────
+const TAX_CATS=["Medical","Charitable Donation","Business Expense","Home Office","Childcare","Education","Moving","Investment","Other Deductible"];
+const RRSP_LIMIT_2026=32490; // CRA 2026 limit
+function TaxTracker({txns,taxItems,onSaveTaxItems,settings}){
+  const [year,setYear]=useState(()=>new Date().getFullYear());
+  const [rrspContrib,setRrspContrib]=useState(()=>taxItems.find(t=>t.type==="rrsp")?.amount||"");
+  const [rrspRoom,setRrspRoom]=useState(()=>taxItems.find(t=>t.type==="rrsp")?.room||"");
+  const [tfsa,setTfsa]=useState(()=>taxItems.find(t=>t.type==="tfsa")?.amount||"");
+  const [marked,setMarked]=useState(()=>taxItems.filter(t=>t.type==="deductible")||[]);
+
+  // persist on change
+  useEffect(()=>{
+    const items=[
+      {type:"rrsp",amount:+rrspContrib||0,room:+rrspRoom||0},
+      {type:"tfsa",amount:+tfsa||0},
+      ...marked,
+    ];
+    onSaveTaxItems(items);
+  },[rrspContrib,rrspRoom,tfsa,marked]);
+
+  const yearTxns=txns.filter(t=>t.date?.startsWith(String(year)));
+  const income=yearTxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+  const expenses=yearTxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+
+  const markDeductible=(txnId,taxCat)=>{
+    setMarked(prev=>{
+      const existing=prev.find(m=>m.txnId===txnId);
+      if(existing) return prev.map(m=>m.txnId===txnId?{...m,taxCat}:m);
+      return[...prev,{type:"deductible",txnId,taxCat,year}];
+    });
+  };
+  const unmark=txnId=>setMarked(prev=>prev.filter(m=>m.txnId!==txnId));
+  const isMarked=txnId=>marked.find(m=>m.txnId===txnId);
+
+  const deductByCategory={};
+  marked.filter(m=>m.year===year||!m.year).forEach(m=>{
+    const txn=txns.find(t=>t.id===m.txnId);
+    if(!txn) return;
+    deductByCategory[m.taxCat]=(deductByCategory[m.taxCat]||0)+txn.amount;
+  });
+  const totalDeductible=Object.values(deductByCategory).reduce((s,v)=>s+v,0);
+  const rrspPct=rrspRoom>0?(+rrspContrib/+rrspRoom)*100:0;
+
+  const years=[...new Set(txns.map(t=>t.date?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a);
+  if(!years.includes(String(year))) years.unshift(String(year));
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Tax Tracker</div>
+          <div style={{fontSize:13,color:"#64748b"}}>Tag deductible transactions and track RRSP/TFSA contributions.</div>
+        </div>
+        <select value={year} onChange={e=>setYear(+e.target.value)} style={{...IS,width:"auto",minWidth:100}}>
+          {years.map(y=><option key={y}>{y}</option>)}
+        </select>
+      </div>
+
+      {/* Summary row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:24}}>
+        {[
+          {label:"Total Income",val:fmt(income),color:"#059669"},
+          {label:"Total Expenses",val:fmt(expenses),color:"#ef4444"},
+          {label:"Deductible Expenses",val:fmt(totalDeductible),color:"#0284C7"},
+          {label:"RRSP Contributed",val:fmt(+rrspContrib||0),color:"#8b5cf6"},
+        ].map(c=><div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}><div style={{fontSize:10,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div><div style={{fontSize:20,fontWeight:800,color:c.color}}>{c.val}</div></div>)}
+      </div>
+
+      {/* RRSP & TFSA */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:24}}>
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>📊 RRSP ({year})</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <Fld label="Contribution Room ($)"><input type="number" style={IS} value={rrspRoom} onChange={e=>setRrspRoom(e.target.value)} placeholder={String(RRSP_LIMIT_2026)}/></Fld>
+            <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={rrspContrib} onChange={e=>setRrspContrib(e.target.value)} placeholder="0"/></Fld>
+          </div>
+          {rrspRoom>0&&(
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                <span style={{color:"#64748b"}}>Room used</span>
+                <span style={{fontWeight:700}}>{rrspPct.toFixed(1)}%</span>
+              </div>
+              <div style={{background:"#f1f5f9",borderRadius:99,height:8}}>
+                <div style={{height:8,borderRadius:99,background:rrspPct>=100?"#ef4444":"#8b5cf6",width:`${Math.min(100,rrspPct)}%`,transition:"width .4s"}}/>
+              </div>
+              <div style={{fontSize:11,color:"#64748b",marginTop:6}}>{fmt(Math.max(0,+rrspRoom-+rrspContrib))} room remaining · Deadline: Mar 1 {year+1}</div>
+            </>
+          )}
+        </div>
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:12}}>🏦 TFSA ({year})</div>
+          <Fld label="Amount Contributed ($)"><input type="number" style={IS} value={tfsa} onChange={e=>setTfsa(e.target.value)} placeholder="0"/></Fld>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:8}}>2026 TFSA annual limit: $7,000 · Lifetime limit varies by birth year.</div>
+        </div>
+      </div>
+
+      {/* Deductible categories summary */}
+      {Object.keys(deductByCategory).length>0&&(
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>Deductible by Category</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {Object.entries(deductByCategory).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+              <div key={cat} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #f1f5f9",fontSize:12}}>
+                <span style={{fontWeight:600}}>{cat}</span>
+                <span style={{fontWeight:700,color:"#0284C7"}}>{fmt(amt)}</span>
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",fontSize:13,fontWeight:700}}>
+              <span>Total Deductible</span>
+              <span style={{color:"#0284C7"}}>{fmt(totalDeductible)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction tagger */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:4}}>Tag Deductible Transactions</div>
+        <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>Mark any expense as tax-deductible and assign a CRA category.</div>
+        <div style={{maxHeight:400,overflowY:"auto"}}>
+          {yearTxns.filter(t=>t.type==="expense").sort((a,b)=>b.date?.localeCompare(a.date)).map(t=>{
+            const m=isMarked(t.id);
+            return(
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid #f1f5f9",background:m?"#f0f9ff":"transparent",borderRadius:m?8:0,paddingLeft:m?8:0,paddingRight:m?8:0,marginBottom:m?2:0}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant}</div>
+                  <div style={{fontSize:11,color:"#94a3b8"}}>{t.date} · {fmt(t.amount)}</div>
+                </div>
+                {m?(
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <select value={m.taxCat} onChange={e=>markDeductible(t.id,e.target.value)} style={{fontSize:11,border:"1px solid #bae6fd",borderRadius:6,padding:"2px 4px",fontFamily:"inherit"}}>
+                      {TAX_CATS.map(c=><option key={c}>{c}</option>)}
+                    </select>
+                    <button onClick={()=>unmark(t.id)} style={{fontSize:11,padding:"3px 7px",border:"1px solid #fecaca",borderRadius:6,cursor:"pointer",background:"#fff5f5",color:"#ef4444",fontFamily:"inherit"}}>Untag</button>
+                  </div>
+                ):(
+                  <select defaultValue="" onChange={e=>{if(e.target.value)markDeductible(t.id,e.target.value);}} style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,padding:"2px 4px",fontFamily:"inherit",color:"#94a3b8"}}>
+                    <option value="">Tag as deductible…</option>
+                    {TAX_CATS.map(c=><option key={c}>{c}</option>)}
+                  </select>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Retirement Planner ────────────────────────────────────────────────────────
+function RetirementPlanner({txns,accounts,settings}){
+  const curYear=new Date().getFullYear();
+  const [age,setAge]=useState(35);
+  const [retireAge,setRetireAge]=useState(65);
+  const [rate,setRate]=useState(6);
+  const [rrsp,setRrsp]=useState(0);
+  const [tfsa,setTfsa]=useState(0);
+  const [contrib,setContrib]=useState(500);
+  const [retireTarget,setRetireTarget]=useState(1000000);
+
+  const yearsToRetire=Math.max(0,retireAge-age);
+  const monthlyRate=rate/100/12;
+  const n=yearsToRetire*12;
+
+  // Future value: existing savings + monthly contributions compounded
+  const existing=rrsp+tfsa;
+  const fvExisting=existing*Math.pow(1+rate/100,yearsToRetire);
+  const fvContribs=contrib>0&&monthlyRate>0?contrib*(Math.pow(1+monthlyRate,n)-1)/monthlyRate*Math.pow(1+monthlyRate,1):contrib*n;
+  const projected=Math.round(fvExisting+fvContribs);
+  const gap=Math.max(0,retireTarget-projected);
+  const extraNeeded=gap>0&&n>0?Math.ceil(gap/(((Math.pow(1+monthlyRate,n)-1)/monthlyRate)*Math.pow(1+monthlyRate,1))):0;
+
+  // Projection chart — every 5 years
+  const chartData=[];
+  for(let y=0;y<=yearsToRetire;y+=Math.max(1,Math.floor(yearsToRetire/10))){
+    const nm=y*12;
+    const evEx=existing*Math.pow(1+rate/100,y);
+    const evCon=contrib>0&&monthlyRate>0?contrib*(Math.pow(1+monthlyRate,nm)-1)/monthlyRate*Math.pow(1+monthlyRate,1):contrib*nm;
+    chartData.push({age:age+y,Projected:Math.round(evEx+evCon),Target:retireTarget});
+  }
+  if(chartData[chartData.length-1]?.age!==retireAge) chartData.push({age:retireAge,Projected:projected,Target:retireTarget});
+
+  const pct=Math.min(100,(projected/retireTarget)*100);
+  const GREEN="#059669",RED="#ef4444",BLUE="#0284C7";
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Retirement Planner</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Project your RRSP/TFSA growth and see if you're on track for retirement.</div>
+
+      <div style={{display:"grid",gridTemplateColumns:"320px 1fr",gap:20,marginBottom:24}}>
+        {/* Inputs */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>Your Details</div>
+          {[
+            {label:"Current Age",val:age,set:setAge,min:18,max:80},
+            {label:"Retirement Age",val:retireAge,set:setRetireAge,min:age+1,max:90},
+            {label:"Current RRSP Balance ($)",val:rrsp,set:setRrsp,min:0,step:1000},
+            {label:"Current TFSA Balance ($)",val:tfsa,set:setTfsa,min:0,step:1000},
+            {label:"Monthly Contribution ($)",val:contrib,set:setContrib,min:0,step:50},
+            {label:"Expected Return (%/yr)",val:rate,set:setRate,min:1,max:20,step:0.5},
+            {label:"Retirement Target ($)",val:retireTarget,set:setRetireTarget,min:0,step:50000},
+          ].map(({label,val,set:s,min,max,step})=>(
+            <Fld key={label} label={label}>
+              <input type="number" style={IS} value={val} min={min} max={max} step={step||1} onChange={e=>s(+e.target.value)}/>
+            </Fld>
+          ))}
+        </div>
+
+        {/* Results */}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          {/* Score ring */}
+          <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,display:"flex",alignItems:"center",gap:20}}>
+            <div style={{position:"relative",width:88,height:88,flexShrink:0}}>
+              <svg width="88" height="88" viewBox="0 0 88 88">
+                <circle cx="44" cy="44" r="38" fill="none" stroke="#f1f5f9" strokeWidth="10"/>
+                <circle cx="44" cy="44" r="38" fill="none" stroke={pct>=100?GREEN:pct>=60?BLUE:RED} strokeWidth="10" strokeDasharray={`${pct*2.388} 238.8`} strokeLinecap="round" transform="rotate(-90 44 44)" style={{transition:"stroke-dasharray .6s"}}/>
+              </svg>
+              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:16,fontWeight:800,color:pct>=100?GREEN:pct>=60?BLUE:RED}}>{pct.toFixed(0)}%</span></div>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:16,fontWeight:800,color:"#0f172a",marginBottom:8}}>On track for retirement?</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {[
+                  {l:"Projected at "+retireAge,v:fmt(projected),c:projected>=retireTarget?GREEN:RED},
+                  {l:"Target",v:fmt(retireTarget),c:"#0f172a"},
+                  {l:"Gap",v:gap>0?fmt(gap):"None 🎉",c:gap>0?RED:GREEN},
+                  {l:"Extra needed/mo",v:extraNeeded>0?fmt(extraNeeded):"-",c:extraNeeded>0?"#f59e0b":GREEN},
+                ].map(r=><div key={r.l} style={{background:"#f8fafc",borderRadius:8,padding:10}}><div style={{fontSize:10,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em"}}>{r.l}</div><div style={{fontSize:15,fontWeight:800,color:r.c,marginTop:2}}>{r.v}</div></div>)}
+              </div>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,flex:1}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:12}}>Growth Projection</div>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={chartData} margin={{top:4,right:16,bottom:0,left:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
+                <XAxis dataKey="age" tick={{fontSize:10}} tickLine={false} label={{value:"Age",position:"insideBottom",offset:-2,fontSize:10}}/>
+                <YAxis tick={{fontSize:10}} tickLine={false} tickFormatter={v=>"$"+Math.round(v/1000)+"k"}/>
+                <Tooltip formatter={(v,n)=>[fmt(v),n]} contentStyle={{fontSize:12,borderRadius:8}}/>
+                <Area type="monotone" dataKey="Projected" stroke={BLUE} fill="#bae6fd" fillOpacity={0.4} strokeWidth={2}/>
+                <Line type="monotone" dataKey="Target" stroke={RED} strokeDasharray="4 2" strokeWidth={1.5} dot={false}/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Financial Calendar ────────────────────────────────────────────────────────
+function FinancialCalendar({bills,billPayments,expected,goals,vacations,txns}){
+  const [calMonth,setCalMonth]=useState(()=>today().slice(0,7));
+  const [selectedDay,setSelectedDay]=useState(null);
+
+  const ym=calMonth;
+  const firstDay=new Date(ym+"-01");
+  const daysInMonth=new Date(firstDay.getFullYear(),firstDay.getMonth()+1,0).getDate();
+  const startDow=firstDay.getDay(); // 0=Sun
+
+  // Build events map keyed by YYYY-MM-DD
+  const events=useMemo(()=>{
+    const map={};
+    const add=(date,ev)=>{if(!map[date])map[date]=[];map[date].push(ev);};
+
+    // Bills
+    bills.filter(b=>b.active!==false).forEach(b=>{
+      const dueDate=ym+"-"+String(b.dueDay||15).padStart(2,"0");
+      if(dueDate.startsWith(ym)){
+        const paid=billPayments.some(p=>p.billId===b.id&&p.month===ym);
+        add(dueDate,{type:"bill",label:b.name,amount:b.amount,paid,color:paid?"#059669":"#f59e0b",icon:"🧾"});
+      }
+    });
+
+    // Expected income
+    expected.filter(e=>e.date?.startsWith(ym)).forEach(e=>{
+      add(e.date,{type:"income",label:e.source,amount:e.amount,confirmed:e.confirmed,color:e.confirmed?"#059669":"#0284C7",icon:"💰"});
+    });
+
+    // Actual transactions
+    txns.filter(t=>t.date?.startsWith(ym)).forEach(t=>{
+      add(t.date,{type:"txn",label:t.merchant||t.source,amount:t.amount,txnType:t.type,color:t.type==="income"?"#059669":"#94a3b8",icon:t.type==="income"?"💚":"💸"});
+    });
+
+    // Vacations
+    vacations.forEach(v=>{
+      if(!v.startDate||!v.endDate) return;
+      const s=new Date(v.startDate),e=new Date(v.endDate);
+      for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){
+        const ds=d.toISOString().split("T")[0];
+        if(ds.startsWith(ym)) add(ds,{type:"vacation",label:v.name,color:"#8b5cf6",icon:"✈️"});
+      }
+    });
+
+    return map;
+  },[bills,billPayments,expected,vacations,txns,ym]);
+
+  const prevMonth=()=>{const d=new Date(ym+"-01");d.setMonth(d.getMonth()-1);setCalMonth(d.toISOString().slice(0,7));setSelectedDay(null);};
+  const nextMonth=()=>{const d=new Date(ym+"-01");d.setMonth(d.getMonth()+1);setCalMonth(d.toISOString().slice(0,7));setSelectedDay(null);};
+
+  const cells=[];
+  for(let i=0;i<startDow;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  while(cells.length%7!==0) cells.push(null);
+
+  const todayStr=today();
+  const monthName=firstDay.toLocaleString("default",{month:"long",year:"numeric"});
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Financial Calendar</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Bills, income, transactions, and vacations at a glance.</div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:20}}>
+        {/* Calendar grid */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",overflow:"hidden"}}>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid #f1f5f9"}}>
+            <button onClick={prevMonth} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:8,cursor:"pointer",padding:"4px 10px",fontFamily:"inherit",fontSize:16,color:"#64748b"}}>‹</button>
+            <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>{monthName}</span>
+            <button onClick={nextMonth} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:8,cursor:"pointer",padding:"4px 10px",fontFamily:"inherit",fontSize:16,color:"#64748b"}}>›</button>
+          </div>
+          {/* Day headers */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}}>
+            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=><div key={d} style={{padding:"8px 0",textAlign:"center",fontSize:11,fontWeight:700,color:"#64748b"}}>{d}</div>)}
+          </div>
+          {/* Day cells */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
+            {cells.map((d,i)=>{
+              if(!d) return <div key={"e"+i} style={{minHeight:80,borderBottom:"1px solid #f8fafc",borderRight:"1px solid #f8fafc"}}/>;
+              const ds=ym+"-"+String(d).padStart(2,"0");
+              const dayEvs=events[ds]||[];
+              const isToday=ds===todayStr;
+              const isSelected=ds===selectedDay;
+              return(
+                <div key={d} onClick={()=>setSelectedDay(isSelected?null:ds)} style={{minHeight:80,padding:"6px 6px 4px",borderBottom:"1px solid #f8fafc",borderRight:"1px solid #f8fafc",cursor:"pointer",background:isSelected?"#f0f9ff":isToday?"#fffbeb":"#fff",transition:"background .15s"}}>
+                  <div style={{fontSize:12,fontWeight:isToday?800:500,color:isToday?"#fff":"#374151",width:22,height:22,borderRadius:"50%",background:isToday?"#0284C7":undefined,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:3}}>{d}</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                    {dayEvs.slice(0,3).map((ev,ei)=>(
+                      <div key={ei} style={{fontSize:9,padding:"1px 4px",borderRadius:3,background:ev.color+"22",color:ev.color,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.icon} {ev.label}</div>
+                    ))}
+                    {dayEvs.length>3&&<div style={{fontSize:9,color:"#94a3b8"}}>+{dayEvs.length-3} more</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Side panel */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {/* Legend */}
+          <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>Legend</div>
+            {[["🧾","#f59e0b","Bill due"],["🧾","#059669","Bill paid"],["💰","#0284C7","Expected income"],["💚","#059669","Income received"],["💸","#94a3b8","Expense"],["✈️","#8b5cf6","Vacation"]].map(([icon,color,label])=>(
+              <div key={label} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:11}}>
+                <span style={{fontSize:14}}>{icon}</span>
+                <div style={{width:10,height:10,borderRadius:2,background:color}}/>
+                <span style={{color:"#64748b"}}>{label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Selected day detail */}
+          {selectedDay&&(
+            <div style={{background:"#fff",borderRadius:14,border:"1px solid #bae6fd",padding:16,flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>{new Date(selectedDay+"T12:00").toLocaleDateString("en-CA",{weekday:"long",month:"long",day:"numeric"})}</div>
+              {(events[selectedDay]||[]).length===0&&<div style={{fontSize:11,color:"#94a3b8"}}>No events this day.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {(events[selectedDay]||[]).map((ev,i)=>(
+                  <div key={i} style={{padding:"8px 10px",borderRadius:8,background:ev.color+"11",border:`1px solid ${ev.color}33`,fontSize:11}}>
+                    <div style={{fontWeight:700,color:ev.color}}>{ev.icon} {ev.label}</div>
+                    {ev.amount&&<div style={{color:"#64748b",marginTop:2}}>{ev.type==="income"||ev.txnType==="income"?"+":"-"}{fmt(ev.amount)}</div>}
+                    {ev.paid&&<div style={{color:"#059669",fontWeight:600,marginTop:2}}>✓ Paid</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Month summary */}
+          <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>Month at a glance</div>
+            {[
+              {label:"Bills due",val:bills.filter(b=>b.active!==false).length,color:"#f59e0b"},
+              {label:"Bills paid",val:billPayments.filter(p=>p.month===ym).length,color:"#059669"},
+              {label:"Income events",val:expected.filter(e=>e.date?.startsWith(ym)).length,color:"#0284C7"},
+              {label:"Transactions",val:txns.filter(t=>t.date?.startsWith(ym)).length,color:"#64748b"},
+            ].map(r=>(
+              <div key={r.label} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderBottom:"1px solid #f8fafc"}}>
+                <span style={{color:"#64748b"}}>{r.label}</span>
+                <span style={{fontWeight:700,color:r.color}}>{r.val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Wishlist ──────────────────────────────────────────────────────────────────
+function WishlistPage({wishlist,onSave,txns,goals,onSaveGoals}){
+  const blank={id:"",name:"",cost:"",priority:"nice-to-have",note:"",url:"",purchased:false};
+  const [form,setForm]=useState(blank);
+  const [editing,setEditing]=useState(false);
+  const set=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  const last3=[0,1,2].map(i=>{const d=new Date();d.setMonth(d.getMonth()-i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
+  const income3=txns.filter(t=>t.type==="income"&&last3.some(m=>t.date?.startsWith(m))).reduce((s,t)=>s+t.amount,0)/3;
+  const exp3=txns.filter(t=>t.type==="expense"&&last3.some(m=>t.date?.startsWith(m))).reduce((s,t)=>s+t.amount,0)/3;
+  const monthlySavings=Math.max(0,income3-exp3);
+
+  const affordIn=(cost)=>monthlySavings>0?Math.ceil(cost/monthlySavings):null;
+
+  const save=()=>{
+    if(!form.name.trim()||!form.cost) return;
+    const item={...form,id:form.id||uid(),cost:+form.cost};
+    onSave(form.id?wishlist.map(w=>w.id===form.id?item:w):[...wishlist,item]);
+    setForm(blank);setEditing(false);
+  };
+
+  const promoteToGoal=(item)=>{
+    const g={id:uid(),name:item.name,target:item.cost,saved:0,note:item.note||"From Wishlist",dueDate:""};
+    onSaveGoals([...goals,g]);
+    onSave(wishlist.map(w=>w.id===item.id?{...w,promotedToGoal:true}:w));
+  };
+
+  const priorities=[["essential","🔴 Essential"],["want","🟡 Want"],["nice-to-have","🟢 Nice to Have"]];
+  const sorted=[...wishlist].sort((a,b)=>{const o={essential:0,want:1,"nice-to-have":2};return(o[a.priority]||2)-(o[b.priority]||2);});
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Wishlist</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Track planned purchases and see when you can afford them based on your savings rate.</div>
+
+      {monthlySavings>0&&(
+        <div style={{background:"#f0f9ff",borderRadius:12,border:"1px solid #bae6fd",padding:"12px 16px",marginBottom:20,fontSize:12,display:"flex",alignItems:"center",gap:8}}>
+          <span>💡</span>
+          <span>You're currently saving <strong>{fmt(monthlySavings)}/month</strong> on average. Affordability estimates are based on this rate.</span>
+        </div>
+      )}
+
+      {/* Form */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>{editing?"✏️ Edit Item":"➕ Add to Wishlist"}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
+          <Fld label="Item Name *"><input style={IS} value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. MacBook Pro"/></Fld>
+          <Fld label="Estimated Cost *"><input type="number" style={IS} value={form.cost} onChange={e=>set("cost",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Priority">
+            <select style={IS} value={form.priority} onChange={e=>set("priority",e.target.value)}>
+              {priorities.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+            </select>
+          </Fld>
+          <Fld label="Link / URL"><input style={IS} value={form.url} onChange={e=>set("url",e.target.value)} placeholder="https://..."/></Fld>
+          <Fld label="Note" style={{gridColumn:"span 2"}}><input style={IS} value={form.note} onChange={e=>set("note",e.target.value)} placeholder="Optional notes"/></Fld>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={save} disabled={!form.name.trim()||!form.cost}>{editing?"Save Changes":"Add Item"}</Btn>
+          {editing&&<Btn v="secondary" onClick={()=>{setForm(blank);setEditing(false);}}>Cancel</Btn>}
+        </div>
+      </div>
+
+      {wishlist.length===0&&<div style={{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}}>Your wishlist is empty. Add items above to start tracking.</div>}
+
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {sorted.map(item=>{
+          const months=item.cost?affordIn(item.cost):null;
+          const affordDate=months?new Date(new Date().setMonth(new Date().getMonth()+months)).toLocaleDateString("en-CA",{month:"short",year:"numeric"}):null;
+          const priorityColor={essential:"#ef4444",want:"#f59e0b","nice-to-have":"#059669"}[item.priority]||"#64748b";
+          return(
+            <div key={item.id} style={{background:"#fff",borderRadius:12,border:`1px solid ${item.purchased?"#d1fae5":"#e2e8f0"}`,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,opacity:item.purchased?0.6:1}}>
+              <div style={{width:8,height:40,borderRadius:99,background:priorityColor,flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                  <span style={{fontWeight:700,fontSize:14}}>{item.purchased?"✅ ":""}{item.name}</span>
+                  {item.promotedToGoal&&<span style={{fontSize:10,background:"#f0fdf4",color:"#059669",padding:"2px 6px",borderRadius:99,fontWeight:600}}>→ Goal created</span>}
+                </div>
+                <div style={{fontSize:11,color:"#64748b"}}>{fmt(item.cost)}{item.note?` · ${item.note}`:""}{affordDate&&!item.purchased?` · Affordable in ~${months} month${months!==1?"s":""} (${affordDate})`:""}</div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,textDecoration:"none",color:"#64748b"}}>🔗</a>}
+                {!item.purchased&&!item.promotedToGoal&&<button onClick={()=>promoteToGoal(item)} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bbf7d0",borderRadius:6,cursor:"pointer",background:"#f0fdf4",color:"#059669",fontFamily:"inherit"}}>→ Goal</button>}
+                <button onClick={()=>onSave(wishlist.map(w=>w.id===item.id?{...w,purchased:!w.purchased}:w))} style={{fontSize:11,padding:"4px 8px",border:"1px solid #e2e8f0",borderRadius:6,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>{item.purchased?"Unpurchase":"✓ Bought"}</button>
+                <button onClick={()=>{setForm({...item,cost:String(item.cost)});setEditing(true);window.scrollTo(0,0);}} style={{fontSize:11,padding:"4px 8px",border:"1px solid #bae6fd",borderRadius:6,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>Edit</button>
+                <button onClick={()=>onSave(wishlist.filter(w=>w.id!==item.id))} style={{fontSize:11,padding:"4px 8px",border:"1px solid #fecaca",borderRadius:6,cursor:"pointer",background:"#fff5f5",color:"#ef4444",fontFamily:"inherit"}}>✕</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Mortgage Calculator ───────────────────────────────────────────────────────
+function MortgageCalculator({accounts,onSaveAccounts}){
+  const [price,setPrice]=useState(500000);
+  const [down,setDown]=useState(100000);
+  const [rate,setRate]=useState(5.5);
+  const [amort,setAmort]=useState(25);
+  const [freq,setFreq]=useState("monthly");
+  const [extra,setExtra]=useState(0);
+  const [showTable,setShowTable]=useState(false);
+
+  const freqMap={monthly:{n:12,l:"Monthly"},biweekly:{n:26,l:"Bi-Weekly"},weekly:{n:52,l:"Weekly"}};
+  const principal=Math.max(0,price-down);
+  const annualRate=rate/100;
+  const periodsPerYear=freqMap[freq].n;
+  const perRate=annualRate/periodsPerYear;
+  const totalPeriods=amort*periodsPerYear;
+  const payment=principal>0&&perRate>0?+(principal*perRate*Math.pow(1+perRate,totalPeriods)/(Math.pow(1+perRate,totalPeriods)-1)).toFixed(2):0;
+  const paymentWithExtra=payment+extra/periodsPerYear*12;
+
+  // Amortization table
+  const amortTable=useMemo(()=>{
+    if(!showTable||payment<=0) return[];
+    const rows=[];let bal=principal,totalInt=0;
+    for(let p=1;p<=totalPeriods;p++){
+      const interest=bal*perRate;
+      const principal_=paymentWithExtra-interest;
+      if(principal_<=0) break;
+      bal=Math.max(0,bal-principal_);
+      totalInt+=interest;
+      rows.push({period:p,payment:+paymentWithExtra.toFixed(2),interest:+interest.toFixed(2),principal:+principal_.toFixed(2),balance:+bal.toFixed(2)});
+      if(bal<0.01){rows[rows.length-1].balance=0;break;}
+    }
+    return rows;
+  },[showTable,principal,perRate,totalPeriods,paymentWithExtra]);
+
+  const totalCost=payment*totalPeriods;
+  const totalInterest=totalCost-principal;
+  const downPct=(down/price*100).toFixed(1);
+
+  // Extra payment savings
+  let stdPayoff=totalPeriods,extraPayoff=totalPeriods,stdInt=0,extraInt=0;
+  if(payment>0){
+    let b=principal;for(let p=0;p<totalPeriods*2;p++){const i=b*perRate;b=b+i-payment;stdInt+=i;if(b<=0.01){stdPayoff=p+1;break;}}
+    b=principal;for(let p=0;p<totalPeriods*2;p++){const i=b*perRate;b=b+i-paymentWithExtra;extraInt+=i;if(b<=0.01){extraPayoff=p+1;break;}}
+  }
+  const periodsSaved=stdPayoff-extraPayoff;
+  const yearsSaved=(periodsSaved/periodsPerYear).toFixed(1);
+  const intSaved=(stdInt-extraInt).toFixed(0);
+
+  return(
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Mortgage Calculator</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Amortization schedule, extra payment simulator, and payoff scenarios.</div>
+
+      <div style={{display:"grid",gridTemplateColumns:"300px 1fr",gap:20,marginBottom:24}}>
+        {/* Inputs */}
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14}}>Mortgage Details</div>
+          {[
+            {label:"Purchase Price ($)",val:price,set:setPrice,step:5000,min:0},
+            {label:"Down Payment ($)",val:down,set:setDown,step:5000,min:0,max:price},
+            {label:"Interest Rate (%/yr)",val:rate,set:setRate,step:0.05,min:0.1,max:30},
+            {label:"Amortization (years)",val:amort,set:setAmort,step:1,min:1,max:30},
+          ].map(({label,val,set:s,step,min,max})=>(
+            <Fld key={label} label={label}><input type="number" style={IS} value={val} step={step} min={min} max={max} onChange={e=>s(+e.target.value)}/></Fld>
+          ))}
+          <Fld label="Payment Frequency">
+            <select style={IS} value={freq} onChange={e=>setFreq(e.target.value)}>
+              {Object.entries(freqMap).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}
+            </select>
+          </Fld>
+          <Fld label="Extra Payment ($/month)">
+            <input type="number" style={IS} value={extra} min={0} step={50} onChange={e=>setExtra(+e.target.value)}/>
+          </Fld>
+        </div>
+
+        {/* Results */}
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12}}>
+            {[
+              {label:`${freqMap[freq].l} Payment`,val:fmt(payment),color:"#0284C7",sub:`${freqMap[freq].l} installment`},
+              {label:"Total Interest",val:fmt(Math.round(totalInterest)),color:"#ef4444",sub:"Over full amortization"},
+              {label:"Total Cost",val:fmt(Math.round(totalCost+down)),color:"#0f172a",sub:"Principal + interest + down"},
+              {label:"Down Payment",val:fmt(down),color:"#059669",sub:`${downPct}% of purchase price`},
+            ].map(c=><div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}><div style={{fontSize:10,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div><div style={{fontSize:20,fontWeight:800,color:c.color}}>{c.val}</div><div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>{c.sub}</div></div>)}
+          </div>
+
+          {extra>0&&(
+            <div style={{background:"#f0fdf4",borderRadius:14,border:"1px solid #bbf7d0",padding:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:8}}>💡 Extra Payment Impact</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,fontSize:12}}>
+                <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Years saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{yearsSaved} yrs</div></div>
+                <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>Interest saved</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{fmt(+intSaved)}</div></div>
+                <div style={{background:"#fff",borderRadius:10,padding:10}}><div style={{color:"#64748b",marginBottom:2}}>New payoff</div><div style={{fontWeight:800,fontSize:16,color:"#059669"}}>{Math.floor(extraPayoff/periodsPerYear)}y {Math.round(extraPayoff%periodsPerYear/(periodsPerYear/12))}m</div></div>
+              </div>
+            </div>
+          )}
+
+          {/* Principal vs Interest donut-ish bar */}
+          <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#0f172a",marginBottom:10}}>Principal vs Interest breakdown</div>
+            <div style={{display:"flex",borderRadius:8,overflow:"hidden",height:20,marginBottom:8}}>
+              <div style={{background:"#0284C7",flex:principal}} title={`Principal: ${fmt(principal)}`}/>
+              <div style={{background:"#ef4444",flex:totalInterest>0?totalInterest:0}} title={`Interest: ${fmt(Math.round(totalInterest))}`}/>
+            </div>
+            <div style={{display:"flex",gap:16,fontSize:11}}>
+              <span style={{color:"#0284C7"}}>■ Principal: {fmt(principal)} ({(principal/(principal+totalInterest)*100).toFixed(0)}%)</span>
+              <span style={{color:"#ef4444"}}>■ Interest: {fmt(Math.round(totalInterest))} ({(totalInterest/(principal+totalInterest)*100).toFixed(0)}%)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Amortization table toggle */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showTable?14:0}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>Full Amortization Schedule</div>
+          <button onClick={()=>setShowTable(p=>!p)} style={{fontSize:11,padding:"5px 12px",border:"1px solid #bae6fd",borderRadius:8,cursor:"pointer",background:"#f0f9ff",color:"#0369a1",fontFamily:"inherit"}}>{showTable?"Hide Table":"Show Table"}</button>
+        </div>
+        {showTable&&(
+          <div style={{overflowX:"auto",maxHeight:360,overflowY:"auto"}}>
+            <table style={{borderCollapse:"collapse",width:"100%",fontSize:11}}>
+              <thead style={{position:"sticky",top:0,background:"#f8fafc"}}>
+                <tr>{["#","Payment","Principal","Interest","Balance"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"right",color:"#64748b",fontWeight:700,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {amortTable.filter((_,i)=>i%periodsPerYear===0||i===amortTable.length-1).map(r=>(
+                  <tr key={r.period} style={{borderBottom:"1px solid #f8fafc"}}>
+                    {[r.period,fmt(r.payment),fmt(r.principal),fmt(r.interest),fmt(r.balance)].map((v,i)=><td key={i} style={{padding:"5px 10px",textAlign:"right",color:i===0?"#94a3b8":i===4?"#0284C7":"#374151"}}>{v}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{fontSize:10,color:"#94a3b8",marginTop:8}}>Showing yearly rows. {amortTable.length} total periods.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
   const [form,setForm]=useState({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
@@ -5588,6 +6498,9 @@ export default function App(){
   const [stockPrices,setStockPrices]=useState({});
   const [fxRate,setFxRate]=useState(1.38);
   const [debts,setDebts]=useState([]);
+  const [subscriptions,setSubscriptions]=useState([]);
+  const [taxItems,setTaxItems]=useState([]);
+  const [wishlist,setWishlist]=useState([]);
   const [settings,setSettings]=useState(DEFAULT_SETTINGS);
   const [schema,setSchema]=useState(DEFAULT_SCHEMA);
   const [insightWidgets,setInsightWidgets]=useState([]);
@@ -5628,6 +6541,9 @@ export default function App(){
       if(d.insightMessages) setInsightMessages(d.insightMessages);
       if(d.insightWidgets) setInsightWidgets(d.insightWidgets);
       if(d.debts) setDebts(d.debts);
+      if(d.subscriptions) setSubscriptions(d.subscriptions);
+      if(d.taxItems) setTaxItems(d.taxItems);
+      if(d.wishlist) setWishlist(d.wishlist);
       if(d.tosAccepted) setTosAccepted(true);
       setReady(true);
     });
@@ -5647,6 +6563,9 @@ export default function App(){
   const saveAccountHistory=h=>{setAccountHistory(h);saveServerData({accountHistory:h})};
   const saveHoldings=h=>{setHoldings(h);saveServerData({holdings:h})};
   const saveDebts=d=>{setDebts(d);saveServerData({debts:d})};
+  const saveSubscriptions=s=>{setSubscriptions(s);saveServerData({subscriptions:s})};
+  const saveTaxItems=t=>{setTaxItems(t);saveServerData({taxItems:t})};
+  const saveWishlist=w=>{setWishlist(w);saveServerData({wishlist:w})};
   const saveSettings=s=>{setSettings(s);saveServerData({settings:s})};
   const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
   // Auto-persist insight chat & widgets whenever they change (skip initial empty load)
@@ -5722,7 +6641,7 @@ export default function App(){
       {/* Main content */}
       <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
+        {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><HealthScore txns={visibleTxns} accounts={accounts} holdings={holdings} catBudgets={catBudgets} goals={goals} bills={bills} billPayments={billPayments} month={month} fxRate={fxRate} stockPrices={stockPrices}/></div><div style={{marginTop:8}}><SpendingAnomalies txns={visibleTxns} cats={cats} month={month}/></div><div style={{marginTop:8}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
         {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
@@ -5740,6 +6659,12 @@ export default function App(){
         {view==="reports"&&<Reports txns={txns} bills={bills} billPayments={billPayments} cats={cats} catBudgets={catBudgets} goals={goals} vacations={vacations} vacationTxns={vacationTxns} settings={settings}/>}
         {view==="cashflow"&&<CashFlowForecast txns={txns} bills={bills} billPayments={billPayments} expected={expected} accounts={accounts} settings={settings}/>}
         {view==="debt"&&<DebtTracker debts={debts} onSaveDebts={saveDebts}/>}
+        {view==="subscriptions"&&<SubscriptionManager subscriptions={subscriptions} onSave={saveSubscriptions} txns={txns}/>}
+        {view==="tax"&&<TaxTracker txns={txns} taxItems={taxItems} onSaveTaxItems={saveTaxItems} settings={settings}/>}
+        {view==="retirement"&&<RetirementPlanner txns={txns} accounts={accounts} settings={settings}/>}
+        {view==="calendar"&&<FinancialCalendar bills={bills} billPayments={billPayments} expected={expected} goals={goals} vacations={vacations} txns={txns}/>}
+        {view==="wishlist"&&<WishlistPage wishlist={wishlist} onSave={saveWishlist} txns={txns} goals={goals} onSaveGoals={saveGoals}/>}
+        {view==="mortgage"&&<MortgageCalculator accounts={accounts} onSaveAccounts={saveAccounts}/>}
         {view==="settings"&&<Settings settings={settings} onSave={saveSettings}/>}
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
         {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
