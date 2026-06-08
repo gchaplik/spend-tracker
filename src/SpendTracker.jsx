@@ -7008,7 +7008,7 @@ function DevUpdateButton(){
 }
 
 // ── Sidebar component ─────────────────────────────────────────────────────────
-function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew }) {
+function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew, onSignOut }) {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [hoveredApp, setHoveredApp] = useState(null);
   const flyoutRef = useRef(null);
@@ -7153,9 +7153,23 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
         </div>
       </div>
 
-      {/* Bottom: settings / dev */}
+      {/* Bottom: settings / dev / sign out */}
       <div style={{ padding:"8px 6px", borderTop:"1px solid #f1f5f9", display:"flex", flexDirection:"column", gap:1, flexShrink:0 }}>
         {bottomItems.map(item => <NavBtn key={item.k} item={item} />)}
+        {onSignOut&&(
+          <button onClick={onSignOut} title="Lock CashHeap"
+            style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"8px 10px",borderRadius:8,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",color:"#94a3b8",fontSize:12,fontWeight:500,textAlign:"left",transition:"background .15s,color .15s"}}
+            onMouseEnter={e=>{e.currentTarget.style.background="#fef2f2";e.currentTarget.style.color="#dc2626";}}
+            onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#94a3b8";}}
+          >
+            <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            Sign Out
+          </button>
+        )}
       </div>
     </div>
   );
@@ -7902,6 +7916,7 @@ export default function App(){
         unpaidBillCount={unpaidBillCount}
         devMode={settings.devMode}
         onShowWhatsNew={()=>setShowWhatsNew(v=>!v)}
+        onSignOut={authConfig.pinHash?()=>{setIsUnlocked(false);setIdleBlur(false);}:undefined}
       />
 
       {/* Main content */}
