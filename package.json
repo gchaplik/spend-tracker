@@ -13,6 +13,7 @@
     "electron:dev": "concurrently \"vite\" \"electron .\"",
     "electron:build": "vite build && electron-builder",
     "electron:build:win": "vite build && electron-builder --win --x64",
+    "update:local": "bash scripts/local-update.sh",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -64,11 +65,17 @@
         }
       ],
       "icon": "electron/icons/mac/icon.icns"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "gchaplik",
+      "repo": "spend-tracker"
     }
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "dotenv": "^16.4.5",
+    "electron-updater": "^6.8.9",
     "express": "^4.19.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

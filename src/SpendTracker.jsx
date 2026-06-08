@@ -147,31 +147,39 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   const txnSpending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
   // Paid bills for this month count as spending
   const paidBillsTotal=billPayments.filter(p=>p.month===month).reduce((s,p)=>s+p.amount,0);
-  const spending=txnSpending+paidBillsTotal;
+  const vacSpendMonth=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((s,t)=>s+t.amount,0);
+  const spending=txnSpending+paidBillsTotal+vacSpendMonth;
   const mExp=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(month));
   const pendingExp=mExp.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0);
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
   const projNet=(actualIncome+pendingExp)-spending;
   const actNet=actualIncome-spending;
-  const catData=cats.map(c=>({name:c,amount:mt.filter(t=>t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0),budget:catBudgets[c]||0})).filter(d=>d.amount>0||d.budget>0).sort((a,b)=>b.amount-a.amount);
+  // Category breakdown includes vacation txns (bucketed under their category)
+  const vacBycat=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((m,t)=>{const c=t.category||"Vacation";m[c]=(m[c]||0)+t.amount;return m;},{});
+  const catData=cats.map(c=>({name:c,amount:mt.filter(t=>t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0)+(vacBycat[c]||0),budget:catBudgets[c]||0})).filter(d=>d.amount>0||d.budget>0).sort((a,b)=>b.amount-a.amount);
+  // Add any vacation categories not in cats list (e.g. "Vacation")
+  Object.entries(vacBycat).forEach(([c,amt])=>{if(!cats.includes(c)&&!catData.find(d=>d.name===c))catData.push({name:c,amount:amt,budget:0});});
+  catData.sort((a,b)=>b.amount-a.amount);
   const trend=Array.from({length:6},(_,i)=>{
     const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-5+i);
     const ym=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
     const tx=txns.filter(t=>t.date&&t.date.startsWith(ym));
     const ex=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(ym));
-    return {name:d.toLocaleString("default",{month:"short"}),Income:+tx.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0).toFixed(2),Expenses:+tx.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0).toFixed(2),Expected:+ex.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0).toFixed(2)};
+    const vx=vacationTxns.filter(t=>t.date&&t.date.startsWith(ym)).reduce((s,t)=>s+t.amount,0);
+    return {name:d.toLocaleString("default",{month:"short"}),Income:+tx.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0).toFixed(2),Expenses:+(tx.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)+vx).toFixed(2),Expected:+ex.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0).toFixed(2)};
   });
   const recent=[...mt].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
   const activeVacations=vacations.filter(v=>v.startDate&&v.startDate.slice(0,7)<=month&&v.endDate&&v.endDate.slice(0,7)>=month);
-  const vacSpend=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((s,t)=>s+t.amount,0);
+  const vacSpend=vacSpendMonth;
   const budgetTotal=Object.values(catBudgets).reduce((s,v)=>s+(v||0),0);
   const budgetRemaining=budgetTotal-spending;
   const vacSpendLabel=activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null;
-  // Month-over-month
+  // Month-over-month (include vacation in prev month too)
   const prevMonth=(()=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-1);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
   const ptxns=txns.filter(t=>t.date&&t.date.startsWith(prevMonth));
   const prevIncome=ptxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const prevSpending=ptxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const prevVacSpend=vacationTxns.filter(t=>t.date&&t.date.startsWith(prevMonth)).reduce((s,t)=>s+t.amount,0);
+  const prevSpending=ptxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)+prevVacSpend;
   const prevActNet=prevIncome-prevSpending;
   const delta=(cur,prev)=>{if(prev===0&&cur===0)return null;const d=cur-prev;const pct=prev!==0?Math.round(Math.abs(d)/Math.abs(prev)*100):null;const up=d>=0;return{d,pct,up};};
   const incomeDelta=delta(actualIncome,prevIncome);
@@ -2300,10 +2308,39 @@ const DEFAULT_SCHEMA={views:{
 // ─────────────────────────────────────────────────────────────────────────────
 function Settings({settings,onSave}){
   const [f,setF]=useState({...DEFAULT_SETTINGS,...settings});
-  const [ollamaStatus,setOllamaStatus]=useState(null); // null | "ok" | "error"
+  const [ollamaStatus,setOllamaStatus]=useState(()=>settings.ollamaStatus||null); // null | "ok" | "error"
   const [testing,setTesting]=useState(false);
   const [copied,setCopied]=useState("");
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+
+  // ── Update state ──────────────────────────────────────────────────────────
+  const isElectron=!!window.electronLocalUpdate;
+  // Local update
+  const [localStatus,setLocalStatus]=useState(null); // null|'building'|'done'|'error'
+  const [localLog,setLocalLog]=useState([]);
+  const triggerLocalUpdate=()=>{
+    if(!window.electronLocalUpdate) return;
+    setLocalStatus('building'); setLocalLog([]);
+    window.electronLocalUpdate.onProgress(msg=>{ if(msg.trim()) setLocalLog(p=>[...p.slice(-30),msg.trim()]); });
+    window.electronLocalUpdate.onDone((ok,err)=>{ setLocalStatus(ok?'done':'error'); if(!ok) setLocalLog(p=>[...p,`Error: ${err}`]); });
+    window.electronLocalUpdate.trigger();
+  };
+  // GitHub update
+  const [ghStatus,setGhStatus]=useState(null); // null|'checking'|'available'|'downloading'|'ready'|'up-to-date'|'error'
+  const [ghVersion,setGhVersion]=useState('');
+  const [ghError,setGhError]=useState('');
+  useEffect(()=>{
+    if(!window.electronUpdater) return;
+    window.electronUpdater.onUpdateAvailable(info=>{ setGhStatus('downloading'); setGhVersion(info.version); });
+    window.electronUpdater.onUpdateNotAvailable(()=>setGhStatus('up-to-date'));
+    window.electronUpdater.onUpdateDownloaded(info=>{ setGhStatus('ready'); setGhVersion(info.version); });
+    window.electronUpdater.onUpdateError(err=>{ setGhStatus('error'); setGhError(err); });
+  },[]);
+  const checkGithub=()=>{
+    if(!window.electronUpdater) return;
+    setGhStatus('checking'); setGhError('');
+    window.electronUpdater.checkForUpdates();
+  };
 
   // Gemini key state
   const [geminiKeyInput,setGeminiKeyInput]=useState("");
@@ -2311,11 +2348,14 @@ function Settings({settings,onSave}){
   const [geminiKeySource,setGeminiKeySource]=useState("none");
   const [geminiSaving,setGeminiSaving]=useState(false);
   const [geminiMsg,setGeminiMsg]=useState(null); // {type:"ok"|"err", text}
+  const [geminiExpanded,setGeminiExpanded]=useState(()=>settings.geminiExpanded!==false);
+  const [ollamaExpanded,setOllamaExpanded]=useState(()=>settings.ollamaExpanded!==false);
 
   useEffect(()=>{
     fetch("/api/config/gemini-key").then(r=>r.json()).then(d=>{
       setGeminiKeySet(d.set);
       setGeminiKeySource(d.source||"none");
+      if(d.set) setGeminiExpanded(false);
     }).catch(()=>setGeminiKeySet(false));
   },[]);
 
@@ -2324,7 +2364,7 @@ function Settings({settings,onSave}){
     setGeminiSaving(true);setGeminiMsg(null);
     try{
       const r=await fetch("/api/config/gemini-key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:geminiKeyInput.trim()})});
-      if(r.ok){setGeminiKeySet(true);setGeminiKeySource("db");setGeminiKeyInput("");setGeminiMsg({type:"ok",text:"Key saved — Gemini AI is now active."});}
+      if(r.ok){setGeminiKeySet(true);setGeminiKeySource("db");setGeminiKeyInput("");setGeminiMsg({type:"ok",text:"Key saved — Gemini AI is now active."});setTimeout(()=>{setGeminiExpanded(false);onSave({...f,geminiExpanded:false});},1200);}
       else{const d=await r.json();setGeminiMsg({type:"err",text:d.error||"Failed to save key."});}
     }catch(e){setGeminiMsg({type:"err",text:e.message});}
     setGeminiSaving(false);
@@ -2348,7 +2388,7 @@ function Settings({settings,onSave}){
     setTesting(true);setOllamaStatus(null);
     try{
       const r=await fetch("/api/llm/models");
-      if(r.ok){setOllamaStatus("ok");}
+      if(r.ok){setOllamaStatus("ok");setTimeout(()=>{setOllamaExpanded(false);onSave({...f,ollamaStatus:'ok',ollamaExpanded:false});},1200);}
       else{setOllamaStatus("error");}
     }catch{setOllamaStatus("error");}
     setTesting(false);
@@ -2382,6 +2422,44 @@ function Settings({settings,onSave}){
             <Btn onClick={save} full>Save Settings</Btn>
           </div>
 
+          {/* Appearance */}
+          <div style={CA}>
+            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Appearance</div>
+
+            {/* Dark Mode */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>🌙 Dark Mode</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:1}}>Switch to a dark colour scheme</div>
+              </div>
+              <button onClick={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.darkMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
+                <span style={{position:"absolute",top:3,left:f.darkMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+              </button>
+            </div>
+
+            {/* Color Blind Mode */}
+            <div>
+              <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:6}}>👁 Colour Blind Mode</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {[
+                  {v:"none",       l:"None",         d:"Default colours"},
+                  {v:"deuteranopia",l:"Deuteranopia", d:"Red-green (most common)"},
+                  {v:"protanopia",  l:"Protanopia",   d:"Red-green (red weak)"},
+                  {v:"tritanopia",  l:"Tritanopia",   d:"Blue-yellow"},
+                  {v:"achromatopsia",l:"Greyscale",   d:"Full colour blindness"},
+                ].map(({v,l,d})=>(
+                  <label key={v} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"7px 10px",borderRadius:8,background:f.colorBlindMode===v?"#eff6ff":"transparent",border:f.colorBlindMode===v?"1px solid #bae6fd":"1px solid transparent",transition:"all .15s"}}>
+                    <input type="radio" name="colorBlind" value={v} checked={f.colorBlindMode===v} onChange={()=>{set("colorBlindMode",v);setTimeout(()=>onSave({...f,colorBlindMode:v}),50);}} style={{accentColor:"#0284C7"}}/>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{l}</div>
+                      <div style={{fontSize:10,color:"#94a3b8"}}>{d}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Developer Access */}
           <div style={{...CA,background:f.devMode?"linear-gradient(135deg,#fefce8,#fef9c3)":"#fff",border:f.devMode?"1px solid #fde047":"1px solid #e2e8f0"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -2403,12 +2481,16 @@ function Settings({settings,onSave}){
 
           {/* Gemini API Key */}
           <div style={{...CA,border:geminiKeySet?"1px solid #bbf7d0":"1px solid #e2e8f0",background:geminiKeySet?"linear-gradient(135deg,#f0fdf4,#f7fffe)":"#fff"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+            <div onClick={()=>setGeminiExpanded(p=>{onSave({...f,geminiExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:geminiExpanded?4:0}}>
               <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Gemini API Key</div>
-              {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking…</span>
-               :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Active{geminiKeySource==="env"?" (env)":""}</span>
-               :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"2px 8px"}}>Not set</span>}
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking…</span>
+                 :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Active{geminiKeySource==="env"?" (env)":""}</span>
+                 :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"2px 8px"}}>Not set</span>}
+                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:geminiExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
+              </div>
             </div>
+            {geminiExpanded&&<>
             <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.6}}>Used for receipt scanning and Jarvis AI. Keys are stored server-side and never exposed to the browser.</div>
             {!geminiKeySet&&<>
               <Fld label="Paste your key">
@@ -2440,11 +2522,19 @@ function Settings({settings,onSave}){
               {geminiMsg.type==="ok"?"✓ ":"✗ "}{geminiMsg.text}
             </div>}
             <div style={{marginTop:10,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
+            </>}
           </div>
 
           <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Local AI (Ollama)</div>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
+            <div onClick={()=>setOllamaExpanded(p=>{onSave({...f,ollamaExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:ollamaExpanded?4:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Local AI (Ollama)</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {ollamaStatus==="ok"&&<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Connected</span>}
+                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:ollamaExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
+              </div>
+            </div>
+            {ollamaExpanded&&<>
+            <div style={{fontSize:11,color:"#64748b",marginTop:4,marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
 
             <Fld label="Ollama URL">
               <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
@@ -2461,10 +2551,11 @@ function Settings({settings,onSave}){
             </div>
             {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontWeight:500}}>✓ Ollama is running and reachable</div>}
             {ollamaStatus==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px"}}>✗ Could not reach Ollama — see install steps below</div>}
+            </>}
           </div>
 
-          {/* Install instructions */}
-          <div style={CA}>
+          {/* Install instructions — hidden once Ollama connects */}
+          {!ollamaStatus&&<div style={CA}>
             <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:12}}>Install Ollama</div>
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
 
@@ -2492,10 +2583,67 @@ function Settings({settings,onSave}){
               </div>
 
             </div>
-          </div>
+          </div>}
         </div>
 
       </div>
+
+      {/* ── App Update ─────────────────────────────────────────────────── */}
+      {isElectron&&(
+        <div style={{background:"#fff",borderRadius:12,padding:"20px 24px",boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginTop:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:2}}>App Update</div>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>Choose how to update the app.</div>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+
+            {/* ── Local ── */}
+            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>💻 Local</div>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Rebuild from your local source code changes. App quits, updates, and relaunches.</div>
+              <button
+                onClick={triggerLocalUpdate}
+                disabled={localStatus==='building'}
+                style={{width:"100%",padding:"8px 0",borderRadius:7,background:localStatus==='building'?"#94a3b8":localStatus==='error'?"#dc2626":"#0f172a",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:localStatus==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
+              >
+                {localStatus==='building'
+                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
+                  :localStatus==='error'?'↺ Retry':'🔄 Build & Install'}
+              </button>
+              {localLog.length>0&&(
+                <div style={{marginTop:10,background:"#0f172a",borderRadius:7,padding:"8px 12px",maxHeight:130,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6}}>
+                  {localLog.map((l,i)=><div key={i} style={{color:l.startsWith('Error')?'#f87171':l.includes('✓')||l.includes('built')||l.includes('✅')?"#4ade80":"#94a3b8"}}>{l}</div>)}
+                </div>
+              )}
+            </div>
+
+            {/* ── GitHub ── */}
+            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>🐙 GitHub</div>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Check GitHub Releases for a new published version and download it in the background.</div>
+              <button
+                onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub}
+                disabled={ghStatus==='checking'||ghStatus==='downloading'}
+                style={{width:"100%",padding:"8px 0",borderRadius:7,background:ghStatus==='checking'||ghStatus==='downloading'?"#94a3b8":ghStatus==='ready'?"#16a34a":ghStatus==='error'?"#dc2626":"#0284C7",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:(ghStatus==='checking'||ghStatus==='downloading')?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
+              >
+                {ghStatus==='checking'
+                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Checking…</>
+                  :ghStatus==='downloading'
+                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Downloading…</>
+                  :ghStatus==='ready'?`✅ Restart to install v${ghVersion}`
+                  :ghStatus==='up-to-date'?'✓ Up to date'
+                  :ghStatus==='error'?'↺ Retry'
+                  :'Check for Updates'}
+              </button>
+              {ghStatus==='up-to-date'&&<div style={{marginTop:8,fontSize:11,color:"#16a34a"}}>You're on the latest version.</div>}
+              {ghStatus==='downloading'&&<div style={{marginTop:8,fontSize:11,color:"#0284C7"}}>Downloading v{ghVersion} in background…</div>}
+              {ghStatus==='error'&&<div style={{marginTop:8,fontSize:11,color:"#dc2626",wordBreak:"break-word"}}>{ghError||"Update check failed."}</div>}
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -3879,6 +4027,454 @@ Current month: ${curMonth}`;
 
 // NAV_ITEMS imported from ./constants/index.js
 
+// ── SelectableWrapper ─────────────────────────────────────────────────────────
+function SelectableWrapper({item,inDepthMode,onSelectItem,children}){
+  if(!inDepthMode) return children;
+  return (
+    <div
+      onClick={e=>{e.stopPropagation();onSelectItem(item);}}
+      style={{position:"relative",cursor:"crosshair",outline:"2px dashed #93c5fd",borderRadius:8,transition:"outline-color .15s"}}
+      onMouseEnter={e=>e.currentTarget.style.outlineColor="#0284C7"}
+      onMouseLeave={e=>e.currentTarget.style.outlineColor="#93c5fd"}
+    >
+      {children}
+      <div style={{position:"absolute",top:6,right:6,width:20,height:20,borderRadius:"50%",background:"#0284C7",color:"#fff",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,pointerEvents:"none",zIndex:10,boxShadow:"0 2px 6px rgba(2,132,199,0.45)"}}>+</div>
+    </div>
+  );
+}
+
+// ── Global Chat FAB + slide-up panel ─────────────────────────────────────────
+function GlobalChat({view,onNavigate,settings,inDepthMode,onSetInDepthMode,selectedItems,onSetSelectedItems,open,onSetOpen}){
+  const [input,setInput]=useState("");
+  const [messages,setMessages]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [listening,setListening]=useState(false);
+  const [speaking,setSpeaking]=useState(false);
+  const msgsEndRef=useRef(null);
+  const inputRef=useRef(null);
+
+  useEffect(()=>{msgsEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
+  useEffect(()=>{if(open) setTimeout(()=>inputRef.current?.focus(),100);},[open]);
+
+  const TODAY=new Date().toISOString().slice(0,10);
+  const sysPrompt=`You are Jarvis, a sharp financial AI. Speak like Jarvis from Iron Man: concise, precise, no pleasantries.
+RULES: Call one tool before answering any data question. NEVER invent numbers. Reply in ONE short sentence using only the returned values. No preamble, no sign-off.
+TODAY: ${TODAY}
+Tool call format: <tool>{"name":"expenses","args":{"month":"2026-06"}}</tool>
+DATE ARGS: month="YYYY-MM" or from/to="YYYY-MM"
+TOOLS: expenses, income, net, categories, top_category, monthly, merchants, transactions, txns_by_category(category), txns_by_merchant(merchant), largest_expenses, budgets, budget_vs_actual, budget_remaining(category), over_budget, pending_income, confirmed_income, all_expected_income, bills, bills_due, bills_paid, portfolio, holdings_detail, portfolio_gain, holding(ticker), vacations, vacation_spending(name), account_balance, balance_history, compare_expenses(month1,month2), compare_income, compare_net, savings_rate, expense_share(category), navigate(tab)
+TABS: dashboard, history, bills, stocks, networth, settings, expected, categories, vacations, goals`;
+
+  const callLLM=async(msgs)=>{
+    const model=settings?.globalChatModel||"gemini";
+    if(model==="gemini"){
+      const r=await fetch("/api/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:sysPrompt}]},contents:msgs.map(m=>({role:m.role==="assistant"?"model":m.role,parts:[{text:m.content}]})),generationConfig:{maxOutputTokens:512}})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error?.message||"Gemini error");
+      return d.candidates?.[0]?.content?.parts?.[0]?.text||"No response.";
+    } else {
+      const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:[{role:"system",content:sysPrompt},...msgs],stream:false})});
+      const d=await r.json();
+      return d.message?.content||"No response.";
+    }
+  };
+
+  const execTool=async(name,args={})=>{
+    const fn=TOOL_LIBRARY[name];
+    if(!fn) return null;
+    try{
+      const marker=fn(args);
+      const{sql,params}=JSON.parse(marker.slice(8));
+      const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
+      const d=await r.json();
+      if(d.error) return null;
+      if(d.rows.length===1&&d.columns.length===1) return d.rows[0][d.columns[0]];
+      return d.rows;
+    }catch(e){return null;}
+  };
+
+  const fmtCurrency=v=>"$"+Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  const renderWidget=(w)=>{
+    if(!w) return null;
+    if(w.type==="metric") return (
+      <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"10px 14px",marginTop:6}}>
+        <div style={{fontSize:10,color:"#64748b",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>{w.title}</div>
+        <div style={{fontSize:20,fontWeight:800,color:"#0284C7",marginTop:2}}>{w.format==="currency"?fmtCurrency(w.value):w.value}</div>
+      </div>
+    );
+    const rows=w.rows||(w.data?.map(d=>[d.name,d.value]))||[];
+    const cols=w.columns||["Name","Value"];
+    if(!rows.length) return null;
+    return (
+      <div style={{marginTop:6,overflowX:"auto",borderRadius:8,border:"1px solid #e2e8f0"}}>
+        <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
+          <thead><tr>{cols.map(c=><th key={c} style={{textAlign:"left",padding:"6px 10px",color:"#64748b",borderBottom:"1px solid #e2e8f0",fontWeight:600,fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",background:"#f8fafc"}}>{c}</th>)}</tr></thead>
+          <tbody>{rows.slice(0,8).map((row,i)=><tr key={i} style={{borderBottom:i<rows.length-1?"1px solid #f1f5f9":""}}>{(Array.isArray(row)?row:[row]).map((cell,j)=><td key={j} style={{padding:"5px 10px",color:"#1e293b"}}>{typeof cell==="number"?fmtCurrency(cell):cell}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const buildToolSummary=(name,args,result)=>{
+    const fmt=v=>typeof v==='number'?'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):String(v??'');
+    const period=args.month?` for ${args.month}`:args.from?` from ${args.from} to ${args.to||'now'}`:'';
+    if(result===null||result===undefined) return 'No data found.';
+    if(typeof result==='number') return `${name==='expenses'?'Total spending':name==='income'?'Total income':name==='net'?'Net position':name==='bills'?'Bills total':'Result'}${period}: ${fmt(result)}.`;
+    if(name==='savings_rate') return `Savings rate${period}: ${result.rate??'N/A'}% — saved ${fmt(result.saved)} of ${fmt(result.income)} income.`;
+    if(name==='compare_expenses'||name==='compare_income'||name==='compare_net') return `${result.month1}: ${fmt(result.value1)} → ${result.month2}: ${fmt(result.value2)} (${result.change>=0?'+':''}${fmt(result.change)}, ${result.changePercent!=null?result.changePercent+'%':'N/A'}).`;
+    if(name==='expense_share') return `${result.category} is ${result.percent??'N/A'}% of total spending${period} (${fmt(result.amount)} of ${fmt(result.total)}).`;
+    if(name==='budget_remaining') return `${result.category}: spent ${fmt(result.spent)} of ${fmt(result.budget)} budget, ${fmt(result.remaining)} remaining (${result.percentUsed??0}% used).`;
+    if(name==='account_balance') return result?`Account balance as of ${result.date}: ${fmt(result.balance)}.`:'No balance data found.';
+    if(name==='portfolio_gain') return `Portfolio: ${fmt(result.marketValue)} market value, ${result.gain>=0?'+':''}${fmt(result.gain)} gain (${result.gainPercent!=null?result.gainPercent+'%':'N/A'}).`;
+    if(name==='holding') return result?`${result.ticker}: ${result.shares} shares, market value ${fmt(result.marketValue)}, gain ${result.gain>=0?'+':''}${fmt(result.gain)}.`:'Ticker not found.';
+    if(name==='top_category') return result?`Top spending category${period}: ${result.name} at ${fmt(result.value)}.`:'No spending data found.';
+    if((name==='pending_income'||name==='confirmed_income'||name==='all_expected_income')&&typeof result?.total==='number'){
+      const label=name==='pending_income'?'Pending':name==='confirmed_income'?'Confirmed':'Total expected';
+      return `${label} income${period}: ${fmt(result.total)} across ${result.items?.length??0} item(s).`;
+    }
+    if(Array.isArray(result)){
+      if(!result.length) return `No results found${period}.`;
+      const top=result[0];
+      if(name==='categories') return `Top spending categories${period}: ${result.slice(0,3).map(r=>`${r.name} (${fmt(r.value)})`).join(', ')}.`;
+      if(name==='over_budget') return `${result.length} categor${result.length===1?'y':'ies'} over budget: ${result.map(r=>r.name).join(', ')}.`;
+      if(name==='largest_expenses'||name==='txns_by_category'||name==='txns_by_merchant') return `Top result: ${top.name} — ${fmt(top.value)}.`;
+      if(name==='merchants') return `Top merchant${period}: ${top.name} (${fmt(top.value)}).`;
+      if(name==='bills') return `${result.length} active bill(s) totalling ${fmt(result.reduce((s,b)=>s+b.value,0))}.`;
+      if(name==='bills_due') return result.length?`${result.length} bill(s) due: ${result.map(b=>b.name).join(', ')}.`:'All bills paid this month.';
+      if(name==='bills_paid') return result.length?`${result.length} bill(s) paid: ${result.map(b=>b.name).join(', ')}.`:'No bills paid yet this month.';
+      if(name==='holdings_detail') return `${result.length} holding(s). Top: ${top.name} worth ${fmt(top.marketValue)}.`;
+      if(name==='transactions') return `${result.length} transaction(s). Latest: ${top.name} — ${fmt(top.value)}.`;
+      if(name==='budget_vs_actual') return `${result.length} budget categor${result.length===1?'y':'ies'}. Highest spend: ${top.name} — ${fmt(top.spent)} of ${fmt(top.budget)} budget.`;
+      if(name==='monthly') return `${result.length} month(s) of data. Latest: ${result[result.length-1]?.name} — income ${fmt(result[result.length-1]?.Income)}, expenses ${fmt(result[result.length-1]?.Expenses)}.`;
+      return `${result.length} result(s) found.`;
+    }
+    return 'Here is the data.';
+  };
+
+  const parseToolCall=(text)=>{
+    const xmlM=text.match(/<tool>([\s\S]*?)<\/tool>/);
+    if(xmlM){try{const d=JSON.parse(xmlM[1]);if(d?.name)return d;}catch{}}
+    const blockMs=[...text.matchAll(/```[a-z]*\s*(\{[\s\S]*?\})\s*```/g)];
+    for(const bm of blockMs){
+      try{
+        const d=JSON.parse(bm[1]);
+        if(d?.name) return {name:d.name,args:d.args||d.arguments||d.parameters||{}};
+        if(d?.tool?.name) return {name:d.tool.name,args:d.tool.args||d.tool.arguments||d.tool.parameters||{}};
+      }catch{}
+    }
+    const allJson=[...text.matchAll(/(\{[^{}]*"name"\s*:[^{}]*\})/g)];
+    for(const jm of allJson){
+      try{const d=JSON.parse(jm[1]);if(d?.name&&TOOL_LIBRARY[d.name])return{name:d.name,args:d.args||d.arguments||{}};}catch{}
+    }
+    const nestedM=text.match(/"tool"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/);
+    if(nestedM){const name=nestedM[1];if(TOOL_LIBRARY[name])return{name,args:{}};}
+    return null;
+  };
+
+  const curMonth=new Date().toISOString().slice(0,7);
+
+  const QUICK=[
+    {test:/main contributors?|top categor|spending categor|categor.*breakdown|breakdown.*categor|where.*spending|what.*spending on|spending by categor/i,
+     name:'categories',args:()=>({month:curMonth}),
+     reply:r=>r?.length?`Your top spending categories this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No spending data yet this month."},
+    {test:/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i,
+     name:'txns_by_category',
+     args:(t)=>{const m=(t||"").match(/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i);const cat=(m?.[1]||m?.[2]||m?.[3]||"").replace(/[?.!]/g,"").trim();return {category:cat,month:curMonth};},
+     reply:r=>{if(!r?.length)return "No transactions found for that category this month.";const top=r.sort((a,b)=>b.value-a.value)[0];return `The most expensive transaction in that category is ${top.name} at $${top.value.toFixed(2)}.`;}},
+    {test:/top merchant|largest expense|biggest expense|biggest spend|top expense/i,
+     name:'largest_expenses',args:()=>({month:curMonth,limit:8}),
+     reply:r=>r?.length?`Your largest expenses this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No expenses found."},
+    {test:/pending income|unconfirmed income|income.*pending|income.*not confirmed/i,
+     name:'pending_income',args:()=>({month:curMonth}),
+     reply:r=>`You have $${Number(r?.total||0).toLocaleString('en-US',{minimumFractionDigits:2})} in pending income this month across ${r?.items?.length||0} item(s).`},
+    {test:/net position|what.*my net|net this month/i,
+     name:'net',args:()=>({month:curMonth}),
+     reply:r=>`Your net position this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
+    {test:/how much.*spent|total.*spent|how much.*spending|spent this month|spending this month/i,
+     name:'expenses',args:()=>({month:curMonth}),
+     reply:r=>`You've spent $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})} this month.`},
+    {test:/income this month|how much.*income|total.*income/i,
+     name:'income',args:()=>({month:curMonth}),
+     reply:r=>`Your income this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
+    {test:/\bbills?\b.*due|due.*\bbills?\b|monthly bills?|show.*bills?/i,
+     name:'bills',args:()=>({}),
+     reply:r=>r?.length?`Your active bills total $${r.reduce((s,b)=>s+b.value,0).toFixed(2)} across ${r.length} bills.`:"No bills found."},
+    {test:/portfolio.*worth|stock.*value|holdings? value|portfolio total/i,
+     name:'portfolio',args:()=>({type:'total'}),
+     reply:r=>`Your portfolio is currently worth $${Number(r||0).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
+  ];
+
+  const NAV_TABS={
+    dashboard:'dashboard',home:'dashboard',
+    bills:'bills',bill:'bills',
+    history:'history',transactions:'history',transaction:'history','spending history':'history',
+    stocks:'stocks',stock:'stocks',portfolio:'stocks',holdings:'stocks',holding:'stocks',
+    'net worth':'networth',networth:'networth',
+    settings:'settings',setting:'settings',preferences:'settings',
+    expected:'expected','expected income':'expected',
+    categories:'categories',category:'categories',budget:'categories',budgets:'categories',
+    vacations:'vacations',vacation:'vacations','vacation tab':'vacations',trips:'vacations',
+    goals:'goals',goal:'goals','savings goals':'goals',
+    insights:'insights',insight:'insights','ai chat':'insights','data model':'datamodel',datamodel:'datamodel',
+  };
+
+  const voiceModeRef=useRef(false);
+
+  const speakAndResume=useCallback((text)=>{
+    if(!settings?.jarvisVoice||!text){
+      if(voiceModeRef.current) setTimeout(startVoice,300);
+      return;
+    }
+    const synth=window.speechSynthesis;
+    synth.cancel();
+    const utter=new SpeechSynthesisUtterance(text);
+    const loadVoice=()=>{
+      const voices=synth.getVoices();
+      const pick=voices.find(v=>v.name==='Zarvox')
+        ||voices.find(v=>v.name==='Daniel')
+        ||voices.find(v=>v.name.includes('Google UK English Male'))
+        ||voices.find(v=>v.lang==='en-GB'&&!v.name.toLowerCase().includes('female'))
+        ||voices.find(v=>v.lang==='en-GB')
+        ||voices.find(v=>v.lang.startsWith('en')&&!v.name.toLowerCase().includes('female'));
+      if(pick) utter.voice=pick;
+      utter.pitch=0.6;
+      utter.rate=0.95;
+      utter.volume=1;
+      utter.onstart=()=>setSpeaking(true);
+      utter.onend=()=>{ setSpeaking(false); if(voiceModeRef.current) setTimeout(startVoice,400); };
+      utter.onerror=()=>{ setSpeaking(false); if(voiceModeRef.current) setTimeout(startVoice,400); };
+      synth.speak(utter);
+    };
+    if(synth.getVoices().length) loadVoice();
+    else synth.addEventListener('voiceschanged',loadVoice,{once:true});
+  },[settings?.jarvisVoice]);
+
+  const sendText=async(text,isVoice=false)=>{
+    if(!text&&selectedItems.length===0) return;
+    if(isVoice) voiceModeRef.current=true;
+    let userContent=text;
+    if(selectedItems.length>0) userContent="[ATTACHED]\n"+selectedItems.map(i=>i.llmContext).join("\n")+"\n\n"+text;
+    const history=messages.map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.fullText||m.text}));
+    const userMsg={role:"user",text,items:[...selectedItems]};
+    setMessages(p=>[...p,userMsg]);
+    setInput("");
+    onSetSelectedItems([]);
+    setLoading(true);
+
+    const reply_=(replyTxt)=>{ speakAndResume(replyTxt); };
+
+    try{
+      const navMatch=text.match(/\bnavigate\s+to\s+([a-z\s]+)/i)||text.match(/\bgo\s+to\s+([a-z\s]+)/i)||text.match(/\bopen\s+([a-z\s]+)/i);
+      if(navMatch){
+        const dest=navMatch[1].trim().toLowerCase();
+        const tab=NAV_TABS[dest]||Object.entries(NAV_TABS).find(([k])=>dest.includes(k))?.[1];
+        if(tab){onNavigate(tab);const navTxt=`Navigating to ${dest}.`;setMessages(p=>[...p,{role:"assistant",text:navTxt}]);reply_(navTxt);setLoading(false);return;}
+      }
+
+      const quick=QUICK.find(q=>q.test.test(text)&&selectedItems.length===0);
+      if(quick){
+        const result=await execTool(quick.name,quick.args(text));
+        const widget=autoWidget(uid(),quick.name,result,null);
+        const quickTxt=quick.reply(result);
+        setMessages(p=>[...p,{role:"assistant",text:quickTxt,widget}]);
+        reply_(quickTxt);
+        setLoading(false);setTimeout(()=>inputRef.current?.focus(),50);return;
+      }
+
+      const callMsgs=[...history,{role:"user",content:userContent}];
+      let llmReply=await callLLM(callMsgs);
+      const toolData=parseToolCall(llmReply);
+
+      if(toolData){
+        if(toolData.name==="navigate"){
+          const tab=toolData.args?.tab||"dashboard";
+          onNavigate(tab);
+          const cleanText=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||`Navigating to ${tab}…`;
+          setMessages(p=>[...p,{role:"assistant",text:cleanText,fullText:llmReply}]);
+          reply_(cleanText);
+        } else if(TOOL_LIBRARY[toolData.name]){
+          const result=await execTool(toolData.name,toolData.args||{});
+          const widget=autoWidget(uid(),toolData.name,result,null);
+          const summary=buildToolSummary(toolData.name,toolData.args||{},result);
+          setMessages(p=>[...p,{role:"assistant",text:summary,widget}]);
+          reply_(summary);
+        } else {
+          const fallbackTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim();
+          setMessages(p=>[...p,{role:"assistant",text:fallbackTxt,fullText:llmReply}]);
+          reply_(fallbackTxt);
+        }
+      } else {
+        const plainTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||llmReply;
+        setMessages(p=>[...p,{role:"assistant",text:plainTxt,fullText:llmReply}]);
+        reply_(plainTxt);
+      }
+    }catch(e){
+      setMessages(p=>[...p,{role:"assistant",text:"Error: "+e.message}]);
+      if(voiceModeRef.current) setTimeout(startVoice,400);
+    }
+    setLoading(false);
+    if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
+  };
+
+  const send=()=>sendText(input.trim(),false);
+
+  const recRef=useRef(null);
+  const stopVoice=()=>{
+    voiceModeRef.current=false;
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+    if(recRef.current){recRef.current.abort();recRef.current=null;}
+    setListening(false);
+  };
+  const startVoice=()=>{
+    if(speaking){stopVoice();return;}
+    if(listening){stopVoice();return;}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){alert("Voice input not supported in this browser.");return;}
+    window.speechSynthesis?.cancel();
+    const rec=new SR();
+    recRef.current=rec;
+    rec.interimResults=false;
+    rec.lang="en-US";
+    rec.onstart=()=>setListening(true);
+    rec.onerror=e=>{
+      if(e.error!=="aborted") setListening(false);
+      recRef.current=null;
+    };
+    rec.onresult=e=>{
+      const transcript=e.results[0][0].transcript.trim();
+      if(!transcript) return;
+      setInput(transcript);
+      sendText(transcript,true);
+    };
+    rec.onend=()=>{setListening(false);recRef.current=null;};
+    rec.start();
+  };
+
+  if(view==="insights") return null;
+
+  return(
+    <>
+      <style>{`@keyframes gcSlideUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes gcDot{0%,80%,100%{transform:scale(0.7);opacity:0.4}40%{transform:scale(1.1);opacity:1}}`}</style>
+
+      {/* FAB */}
+      <button
+        onClick={()=>onSetOpen(!open)}
+        title={open?"Close Jarvis":"Open Jarvis"}
+        style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:open?"#475569":"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:open?18:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 18px rgba(2,132,199,0.5)",zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
+        onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
+        onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+      >{open?"✕":"💬"}</button>
+
+      {/* Panel */}
+      {open&&(
+        <div style={{position:"fixed",bottom:92,right:24,width:390,maxHeight:550,borderRadius:18,background:"#fff",boxShadow:"0 10px 48px rgba(0,0,0,0.2)",zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
+
+          {/* Header */}
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"13px 16px 11px",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(135deg,#f8fafc,#eff6ff)",flexShrink:0}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>💬</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
+              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}{settings?.jarvisVoice?" · 🔊":""}</div>
+            </div>
+            <button
+              onClick={()=>onSetInDepthMode(!inDepthMode)}
+              title="Toggle In-Depth Mode: click any card to attach as context"
+              style={{padding:"5px 11px",borderRadius:8,border:"1.5px solid",borderColor:inDepthMode?"#0284C7":"#e2e8f0",background:inDepthMode?"#eff6ff":"#fff",color:inDepthMode?"#0284C7":"#94a3b8",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4,transition:"all .15s",flexShrink:0}}
+            >⊕{inDepthMode?" Active":" In-Depth"}</button>
+            {messages.length>0&&<button onClick={()=>setMessages([])} title="Clear chat" style={{padding:"5px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#fff",color:"#94a3b8",fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all .15s",flexShrink:0}} onMouseEnter={e=>{e.currentTarget.style.borderColor="#dc2626";e.currentTarget.style.color="#dc2626";}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#e2e8f0";e.currentTarget.style.color="#94a3b8";}}>✕ Clear</button>}
+          </div>
+
+          {/* Messages */}
+          <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:8,minHeight:0}}>
+            {messages.length===0&&(
+              <div style={{textAlign:"center",color:"#94a3b8",fontSize:12,marginTop:32,lineHeight:1.8}}>
+                At your service.<br/>Ask me anything, or say <em>"navigate to bills"</em>.
+                {inDepthMode&&<div style={{marginTop:8,color:"#0284C7",fontWeight:600,fontSize:11}}>⊕ Click any card on the page to attach it.</div>}
+              </div>
+            )}
+            {messages.map((m,i)=>(
+              <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",gap:4}}>
+                {m.items?.length>0&&(
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                    {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
+                  </div>
+                )}
+                <div style={{maxWidth:"88%",background:m.role==="user"?"#0284C7":"#f1f5f9",color:m.role==="user"?"#fff":"#1e293b",padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
+                  {m.text}
+                </div>
+                {m.widget&&<div style={{maxWidth:"100%",width:"88%",alignSelf:m.role==="user"?"flex-end":"flex-start"}}>{renderWidget(m.widget)}</div>}
+              </div>
+            ))}
+            {loading&&(
+              <div style={{alignSelf:"flex-start",background:"#f1f5f9",padding:"10px 14px",borderRadius:"14px 14px 14px 2px",display:"flex",gap:5,alignItems:"center"}}>
+                {[0,1,2].map(i=><span key={i} style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8",display:"inline-block",animation:`gcDot 1.2s ${i*0.18}s infinite ease-in-out`}}/>)}
+              </div>
+            )}
+            <div ref={msgsEndRef}/>
+          </div>
+
+          {/* Attached items chips */}
+          {selectedItems.length>0&&(
+            <div style={{padding:"7px 14px",borderTop:"1px solid #f1f5f9",display:"flex",flexWrap:"wrap",gap:5,alignItems:"center",background:"#f8fafc",flexShrink:0}}>
+              <span style={{fontSize:10,color:"#94a3b8",fontWeight:700,letterSpacing:"0.05em",marginRight:2}}>ATTACHED:</span>
+              {selectedItems.map(it=>(
+                <span key={it.id} style={{display:"inline-flex",alignItems:"center",gap:4,background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:11,padding:"3px 8px 3px 9px",borderRadius:12}}>
+                  {it.label}
+                  <button onClick={()=>onSetSelectedItems(p=>p.filter(x=>x.id!==it.id))} style={{background:"none",border:"none",cursor:"pointer",color:"#64748b",fontSize:14,lineHeight:1,padding:"0 0 1px",fontFamily:"inherit",display:"flex",alignItems:"center"}}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div style={{padding:"10px 12px 13px",borderTop:"1px solid #f1f5f9",display:"flex",gap:7,alignItems:"flex-end",flexShrink:0}}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e=>setInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+              placeholder="Ask about your finances…"
+              rows={2}
+              style={{flex:1,resize:"none",border:"1.5px solid #e2e8f0",borderRadius:10,padding:"8px 11px",fontSize:12,fontFamily:"inherit",outline:"none",lineHeight:1.45,color:"#1e293b",background:"#fff",transition:"border-color .15s"}}
+              onFocus={e=>e.target.style.borderColor="#0284C7"}
+              onBlur={e=>e.target.style.borderColor="#e2e8f0"}
+            />
+            <button onClick={startVoice} title={speaking?"Jarvis is speaking (tap to stop)":listening?"Listening… (tap to stop)":"Start voice conversation"} style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid",borderColor:speaking?"#f59e0b":listening?"#dc2626":"#e2e8f0",background:speaking?"#fffbeb":listening?"#fef2f2":"#f8fafc",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:speaking?0.6:1,transition:"all .15s"}}>{speaking?"🔊":"🎤"}</button>
+            <button onClick={send} disabled={loading||(!input.trim()&&selectedItems.length===0)} style={{width:34,height:34,borderRadius:"50%",background:"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,opacity:loading||(!input.trim()&&selectedItems.length===0)?0.4:1,transition:"opacity .15s"}}>↑</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Dev Update Button ─────────────────────────────────────────────────────────
+function DevUpdateButton(){
+  const [status,setStatus]=useState(null); // null|'building'|'done'|'error'
+  const trigger=()=>{
+    if(status==='building') return;
+    setStatus('building');
+    window.electronLocalUpdate.onProgress(()=>{});
+    window.electronLocalUpdate.onDone((ok)=>setStatus(ok?'done':'error'));
+    window.electronLocalUpdate.trigger();
+  };
+  return(
+    <button
+      onClick={trigger}
+      disabled={status==='building'}
+      title="Build & reinstall app from local source"
+      style={{width:"100%",padding:"7px 8px",borderRadius:8,border:"1.5px solid",borderColor:status==='error'?"#fecaca":status==='building'?"#bae6fd":"#fde047",background:status==='error'?"#fef2f2":status==='building'?"#f0f9ff":"#fefce8",color:status==='error'?"#dc2626":status==='building'?"#0284C7":"#854d0e",fontSize:11,fontWeight:700,cursor:status==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6,transition:"all .15s"}}
+    >
+      {status==='building'
+        ?<><span style={{display:"inline-block",width:10,height:10,border:"2px solid currentColor",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
+        :status==='error'?'✗ Build failed'
+        :'🔄 Update App'}
+    </button>
+  );
+}
+
 // ── Sidebar component ─────────────────────────────────────────────────────────
 function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew }) {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
@@ -4030,6 +4626,124 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   );
 }
 
+// ── Terms of Service Modal ────────────────────────────────────────────────────
+function TermsOfServiceModal({onAccept,onDecline}){
+  const [scrolled,setScrolled]=useState(false);
+  const [checked,setChecked]=useState(false);
+  const bodyRef=useRef(null);
+  const onScroll=()=>{
+    const el=bodyRef.current;
+    if(!el) return;
+    if(el.scrollTop+el.clientHeight>=el.scrollHeight-20) setScrolled(true);
+  };
+  const canAccept=scrolled&&checked;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.75)",zIndex:99999,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:20,boxShadow:"0 32px 80px rgba(15,23,42,0.35)",width:"min(680px,95vw)",maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+        {/* Header */}
+        <div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",padding:"28px 32px 24px",flexShrink:0}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#93c5fd",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:8}}>Before You Continue</div>
+          <div style={{fontSize:22,fontWeight:800,color:"#fff",letterSpacing:"-0.4px",marginBottom:4}}>Terms of Service & Privacy Policy</div>
+          <div style={{fontSize:12,color:"#94a3b8"}}>Spend Tracker · Effective {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})}</div>
+        </div>
+
+        {/* Scrollable body */}
+        <div ref={bodyRef} onScroll={onScroll} style={{flex:1,overflowY:"auto",padding:"28px 32px",fontSize:12.5,color:"#334155",lineHeight:1.75}}>
+
+          {[
+            {h:"1. Acceptance of Terms",
+             b:`By accessing or using Spend Tracker ("the Application"), you agree to be bound by these Terms of Service. If you do not agree to these terms, do not use the Application. These terms apply to all users of the Application, including users who are contributors of content or other services.`},
+
+            {h:"2. Description of Service",
+             b:`Spend Tracker is a personal financial management application designed to help individuals track income, expenses, bills, investments, and net worth. The Application runs locally on your device and may communicate with third-party AI services (such as Google Gemini or Ollama) when those features are enabled by the user.`},
+
+            {h:"3. User Data & Privacy",
+             b:`All financial data you enter is stored locally on your device in a SQLite database. Spend Tracker does not transmit your financial data to any remote server operated by the Application's developers. When AI features are used, transaction summaries or queries may be sent to third-party AI providers (Google Gemini or a local Ollama instance) solely to generate responses. You are solely responsible for the accuracy, legality, and appropriateness of all data you enter. You acknowledge that you have the right to enter any financial information you input into the Application.`},
+
+            {h:"4. No Financial Advice",
+             b:`The Application and its AI features (including the Jarvis assistant) provide informational summaries and calculations only. Nothing in the Application constitutes financial, investment, legal, or tax advice. You should consult a qualified professional before making any financial decisions. The developers of Spend Tracker are not liable for any financial decisions made based on information provided by the Application.`},
+
+            {h:"5. AI-Generated Content",
+             b:`Responses generated by integrated AI models (Google Gemini, Ollama, or any other configured model) are automated and may contain errors, inaccuracies, or omissions. AI-generated content is provided "as-is" without any warranty of accuracy. You agree not to rely solely on AI-generated responses for financial planning or decision-making.`},
+
+            {h:"6. Acceptable Use",
+             b:`You agree to use the Application only for lawful personal financial management purposes. You agree not to: (a) use the Application to track, conceal, or facilitate unlawful financial activity; (b) reverse-engineer, decompile, or modify the Application for malicious purposes; (c) use the Application to infringe any intellectual property rights; (d) attempt to gain unauthorised access to any systems or networks connected to the Application.`},
+
+            {h:"7. Intellectual Property",
+             b:`The Application, including its source code, design, and documentation, is the intellectual property of the developer. All rights are reserved. You are granted a limited, non-exclusive, non-transferable licence to use the Application for personal, non-commercial purposes only. You may not distribute, sell, or sublicense the Application without express written permission.`},
+
+            {h:"8. Third-Party Services",
+             b:`The Application integrates with optional third-party services including Google Gemini AI and Ollama. Your use of these services is governed by their respective terms of service and privacy policies. The developers of Spend Tracker are not responsible for the practices, availability, or content of third-party services. API keys you provide are stored locally on your device and are not accessible to the Application's developers.`},
+
+            {h:"9. Disclaimer of Warranties",
+             b:`The Application is provided "as is" and "as available" without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement. The developers do not warrant that the Application will be uninterrupted, error-free, or free of viruses or other harmful components. You assume full responsibility for all risks associated with your use of the Application.`},
+
+            {h:"10. Limitation of Liability",
+             b:`To the fullest extent permitted by applicable law, the developers of Spend Tracker shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to loss of data, loss of profits, or financial losses, arising out of or related to your use of the Application, even if advised of the possibility of such damages. In no event shall the developers' total liability exceed the amount you paid for the Application.`},
+
+            {h:"11. Data Loss & Backups",
+             b:`You are solely responsible for backing up your data. The Application stores data in a local database file. The developers are not liable for any data loss resulting from software bugs, hardware failure, accidental deletion, or any other cause. You are strongly encouraged to maintain regular backups of your database file.`},
+
+            {h:"12. Updates & Modifications",
+             b:`The developers reserve the right to modify, update, or discontinue the Application at any time without notice. These Terms of Service may be updated periodically. Continued use of the Application after any changes constitutes acceptance of the new terms. Material changes will be communicated through the Application's update notifications where possible.`},
+
+            {h:"13. Governing Law",
+             b:`These Terms of Service shall be governed by and construed in accordance with the laws of the jurisdiction in which the developer is located, without regard to its conflict of law provisions. Any disputes arising under these terms shall be subject to the exclusive jurisdiction of the courts of that jurisdiction.`},
+
+            {h:"14. Severability",
+             b:`If any provision of these Terms of Service is found to be unenforceable or invalid under applicable law, that provision shall be modified to the minimum extent necessary to make it enforceable, and the remaining provisions shall continue in full force and effect.`},
+
+            {h:"15. Entire Agreement",
+             b:`These Terms of Service constitute the entire agreement between you and the developers regarding your use of the Application and supersede all prior agreements, understandings, and representations relating to the Application.`},
+
+            {h:"16. Contact",
+             b:`If you have any questions about these Terms of Service or the Application, you may reach out through the project's GitHub repository at github.com/gchaplik/spend-tracker.`},
+          ].map(({h,b})=>(
+            <div key={h} style={{marginBottom:20}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:6}}>{h}</div>
+              <div style={{color:"#475569"}}>{b}</div>
+            </div>
+          ))}
+
+          <div style={{borderTop:"1px solid #e2e8f0",paddingTop:16,marginTop:8,color:"#64748b",fontSize:11,fontStyle:"italic"}}>
+            Last updated: {new Date().toLocaleDateString("en-CA",{year:"numeric",month:"long",day:"numeric"})} · Spend Tracker is a personal project. Use at your own discretion.
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"16px 32px 24px",borderTop:"1px solid #f1f5f9",flexShrink:0,background:"#f8fafc"}}>
+          {!scrolled&&(
+            <div style={{fontSize:11,color:"#94a3b8",textAlign:"center",marginBottom:12}}>
+              ↓ Scroll to the bottom to enable acceptance
+            </div>
+          )}
+          <label style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:16,cursor:"pointer",opacity:scrolled?1:0.4,pointerEvents:scrolled?"auto":"none"}}>
+            <input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)} style={{marginTop:2,width:15,height:15,accentColor:"#0284C7",flexShrink:0}}/>
+            <span style={{fontSize:12,color:"#334155",lineHeight:1.5}}>I have read and agree to the Terms of Service and Privacy Policy. I understand that this application provides no financial advice and I am solely responsible for my financial decisions.</span>
+          </label>
+          <button
+            onClick={canAccept?onAccept:undefined}
+            disabled={!canAccept}
+            style={{width:"100%",padding:"13px",borderRadius:10,background:canAccept?"linear-gradient(135deg,#0284C7,#0369a1)":"#e2e8f0",color:canAccept?"#fff":"#94a3b8",border:"none",fontSize:14,fontWeight:800,cursor:canAccept?"pointer":"not-allowed",transition:"all .2s",letterSpacing:"0.01em",fontFamily:"inherit"}}
+          >
+            {canAccept?"Accept & Continue →":"Read the full terms above to continue"}
+          </button>
+          <button
+            onClick={onDecline}
+            style={{width:"100%",padding:"10px",marginTop:8,borderRadius:10,background:"transparent",color:"#94a3b8",border:"1px solid #e2e8f0",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",transition:"all .2s"}}
+            onMouseOver={e=>{e.currentTarget.style.background="#fef2f2";e.currentTarget.style.color="#ef4444";e.currentTarget.style.borderColor="#fecaca";}}
+            onMouseOut={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#94a3b8";e.currentTarget.style.borderColor="#e2e8f0";}}
+          >
+            Decline &amp; Close App
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 function WhatsNewModal({onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
@@ -4057,6 +4771,23 @@ function WhatsNewModal({onClose}){
   );
 }
 
+function UpdateBanner() {
+  const [status, setStatus] = useState(null); // 'available' | 'ready'
+  const [version, setVersion] = useState('');
+  useEffect(() => {
+    if (!window.electronUpdater) return;
+    window.electronUpdater.onUpdateAvailable(info => { setStatus('available'); setVersion(info.version); });
+    window.electronUpdater.onUpdateDownloaded(info => { setStatus('ready'); setVersion(info.version); });
+  }, []);
+  if (!status) return null;
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,zIndex:99999,background:status==='ready'?'#0284C7':'#0f172a',color:'#fff',fontSize:12,fontWeight:600,padding:'8px 20px',display:'flex',alignItems:'center',justifyContent:'center',gap:12,fontFamily:'system-ui,sans-serif'}}>
+      {status==='available' ? `⬇️ Downloading update v${version}…` : `✅ Update v${version} ready — `}
+      {status==='ready' && <button onClick={()=>window.electronUpdater.restartAndInstall()} style={{background:'#fff',color:'#0284C7',border:'none',borderRadius:6,padding:'3px 12px',fontWeight:700,cursor:'pointer',fontSize:12}}>Restart now</button>}
+    </div>
+  );
+}
+
 export default function App(){
   const [view,setView]=useState("dashboard");
   const [txns,setTxns]=useState([]);
@@ -4079,11 +4810,15 @@ export default function App(){
   const [insightWidgets,setInsightWidgets]=useState([]);
   const [insightMessages,setInsightMessages]=useState([]);
   const [favourites,setFavourites]=useState(["bills","history","stocks"]);
-  const toggleFavourite=k=>setFavourites(prev=>prev.includes(k)?prev.filter(x=>x!==k):[...prev,k]);
+  const toggleFavourite=k=>setFavourites(prev=>{const next=prev.includes(k)?prev.filter(x=>x!==k):[...prev,k];saveServerData({favourites:next});return next;});
+  const [inDepthMode,setInDepthMode]=useState(false);
+  const [selectedItems,setSelectedItems]=useState([]);
+  const [globalChatOpen,setGlobalChatOpen]=useState(false);
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
   const [showWhatsNew,setShowWhatsNew]=useState(false);
+  const [tosAccepted,setTosAccepted]=useState(false);
   const [toast,setToast]=useState(null);
   const toastTimer=useRef(null);
   const showToast=(msg,undoFn)=>{if(toastTimer.current)clearTimeout(toastTimer.current);setToast({msg,undoFn});toastTimer.current=setTimeout(()=>setToast(null),5000);};
@@ -4104,10 +4839,12 @@ export default function App(){
       if(d.accounts) setAccounts(d.accounts);
       if(d.accountHistory) setAccountHistory(d.accountHistory);
       if(d.holdings) setHoldings(d.holdings);
+      if(d.favourites) setFavourites(d.favourites);
       if(d.settings) setSettings({...DEFAULT_SETTINGS,...d.settings});
       if(d.schema) setSchema(d.schema);
       if(d.insightMessages) setInsightMessages(d.insightMessages);
       if(d.insightWidgets) setInsightWidgets(d.insightWidgets);
+      if(d.tosAccepted) setTosAccepted(true);
       setReady(true);
     });
   },[]);
@@ -4155,8 +4892,33 @@ export default function App(){
   const pendingCount=expected.filter(e=>!e.confirmed).length;
   const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
 
+  // Build CSS filter string from settings
+  const cbFilters={
+    none:         "",
+    deuteranopia: "url(#cb-deuteranopia)",
+    protanopia:   "url(#cb-protanopia)",
+    tritanopia:   "url(#cb-tritanopia)",
+    achromatopsia:"url(#cb-achromatopsia)",
+  };
+  const rootFilter=[
+    settings.darkMode?"invert(1) hue-rotate(180deg)":"",
+    cbFilters[settings.colorBlindMode]||"",
+  ].filter(Boolean).join(" ")||undefined;
+
   return (
-    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff"}}>
+    <>
+    {/* SVG colorblind filter definitions (hidden) */}
+    <svg style={{position:"absolute",width:0,height:0,overflow:"hidden"}} aria-hidden="true">
+      <defs>
+        <filter id="cb-deuteranopia"><feColorMatrix type="matrix" values="0.367 0.861 -0.228 0 0  0.280 0.673  0.047 0 0  -0.012 0.043  0.969 0 0  0 0 0 1 0"/></filter>
+        <filter id="cb-protanopia">  <feColorMatrix type="matrix" values="0.152 1.053 -0.205 0 0  0.115 0.786  0.099 0 0  -0.004 -0.048 1.052 0 0  0 0 0 1 0"/></filter>
+        <filter id="cb-tritanopia">  <feColorMatrix type="matrix" values="1.256 -0.077 -0.180 0 0  -0.078 0.931  0.148 0 0  0.005  0.691  0.304 0 0  0 0 0 1 0"/></filter>
+        <filter id="cb-achromatopsia"><feColorMatrix type="saturate" values="0"/></filter>
+      </defs>
+    </svg>
+    <UpdateBanner/>
+    {!tosAccepted&&<TermsOfServiceModal onAccept={()=>{setTosAccepted(true);saveServerData({tosAccepted:true});}} onDecline={()=>{ if(window.electronApp?.quit) window.electronApp.quit(); else window.close(); }}/>}
+    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff",filter:rootFilter}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
 
@@ -4193,6 +4955,8 @@ export default function App(){
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
         {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
       </div>
+      <GlobalChat view={view} onNavigate={setView} settings={settings} inDepthMode={inDepthMode} onSetInDepthMode={setInDepthMode} selectedItems={selectedItems} onSetSelectedItems={setSelectedItems} open={globalChatOpen} onSetOpen={setGlobalChatOpen}/>
     </div>
+    </>
   );
 }

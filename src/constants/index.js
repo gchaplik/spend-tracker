@@ -30,5 +30,6 @@ export const TODAY = () => new Date().toISOString().split("T")[0];
 
 export const DEFAULT_SETTINGS = {
   name:"", ollamaUrl:"http://localhost:11434", ollamaModel:"phi3:mini",
-  devMode:false, globalChatModel:"ollama", jarvisVoice:true
+  devMode:false, globalChatModel:"ollama", jarvisVoice:true,
+  darkMode:false, colorBlindMode:"none"
 };
