@@ -3596,6 +3596,8 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
   const monthOpts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const [viewMonth,setViewMonth]=useState(today().slice(0,7));
+  const [editId,setEditId]=useState(null);
+  const [editBill,setEditBill]=useState({});
   const active=bills.filter(b=>b.active!==false);
   const isPaid=(id,mo=viewMonth)=>billPayments.some(p=>p.billId===id&&p.month===mo);
   const togglePaid=id=>{
@@ -3608,6 +3610,12 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
     setForm({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
   };
   const remove=id=>onSaveBills(bills.filter(b=>b.id!==id));
+  const startEdit=b=>{setEditId(b.id);setEditBill({name:b.name,amount:String(b.amount),category:b.category||cats[0]||"Other",dueDay:String(b.dueDay||15),note:b.note||""});};
+  const saveEdit=()=>{
+    if(!editBill.name.trim()||!editBill.amount)return;
+    onSaveBills(bills.map(b=>b.id===editId?{...b,name:editBill.name.trim(),amount:parseFloat(editBill.amount)||0,category:editBill.category,dueDay:parseInt(editBill.dueDay)||15,note:editBill.note}:b));
+    setEditId(null);
+  };
   const paidAmt=active.filter(b=>isPaid(b.id)).reduce((s,b)=>s+b.amount,0);
   const totalAmt=active.reduce((s,b)=>s+b.amount,0);
   const sorted=[...active].sort((a,b)=>a.dueDay-b.dueDay);
@@ -3643,6 +3651,21 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
         <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Bills for {ml(viewMonth)}</div>
         {sorted.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No bills yet. Add recurring bills above.</div>:sorted.map(b=>{
           const paid=isPaid(b.id);
+          if(editId===b.id) return(
+            <div key={b.id} style={{padding:"14px 0",borderBottom:"1px solid #f1f5f9"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <Fld label="Bill Name"><input style={IS} value={editBill.name} onChange={e=>setEditBill(p=>({...p,name:e.target.value}))} autoFocus/></Fld>
+                <Fld label="Amount ($)"><input style={IS} type="number" value={editBill.amount} onChange={e=>setEditBill(p=>({...p,amount:e.target.value}))}/></Fld>
+                <Fld label="Category"><select style={{...IS,background:"#fff"}} value={editBill.category} onChange={e=>setEditBill(p=>({...p,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>
+                <Fld label="Due Day of Month"><input style={IS} type="number" min="1" max="28" value={editBill.dueDay} onChange={e=>setEditBill(p=>({...p,dueDay:e.target.value}))}/></Fld>
+                <Fld label="Note" style={{gridColumn:"1/-1"}}><input style={IS} value={editBill.note} onChange={e=>setEditBill(p=>({...p,note:e.target.value}))} placeholder="Optional"/></Fld>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn sm onClick={saveEdit} disabled={!editBill.name.trim()||!editBill.amount}>Save</Btn>
+                <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+              </div>
+            </div>
+          );
           return(
             <div key={b.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #f8fafc"}}>
               <button onClick={()=>togglePaid(b.id)} style={{width:26,height:26,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?"#059669":"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all 0.15s",fontFamily:"inherit"}}>
@@ -3653,6 +3676,7 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>Due {ordinal(b.dueDay)} · {b.category}{b.note?" · "+b.note:""}</div>
               </div>
               <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{fmt(b.amount)}</div>
+              <button onClick={()=>startEdit(b)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit",flexShrink:0}}>Edit</button>
               <button onClick={()=>remove(b.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0}}>Remove</button>
             </div>
           );
