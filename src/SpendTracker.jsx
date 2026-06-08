@@ -523,6 +523,41 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
     setFxRate(null);setFxOverride("");
   };
   const del=id=>onUpdate(expected.filter(e=>e.id!==id));
+
+  // ── Inline edit state ──────────────────────────────────────────────────────
+  const [editId,setEditId]=useState(null);
+  const [ed,setEd]=useState({});
+  const [edFxRate,setEdFxRate]=useState(null);
+  const [edFxLoading,setEdFxLoading]=useState(false);
+  const [edFxError,setEdFxError]=useState(null);
+  const [edFxOverride,setEdFxOverride]=useState("");
+
+  useEffect(()=>{
+    if(!editId||ed.currency!=="USD") return;
+    setEdFxLoading(true);setEdFxError(null);
+    fetch(`https://api.frankfurter.app/${ed.expectedDate}?from=USD&to=CAD`)
+      .then(r=>r.json())
+      .then(d=>{const rate=d?.rates?.CAD;if(rate){setEdFxRate(rate);setEdFxOverride(String(rate.toFixed(4)));}else{setEdFxError("Rate unavailable");setEdFxRate(null);}})
+      .catch(()=>setEdFxError("Could not fetch rate"))
+      .finally(()=>setEdFxLoading(false));
+  },[editId,ed.expectedDate,ed.currency]);
+
+  const startEdit=e=>{
+    setEditId(e.id);
+    setEdFxRate(e.fxRate||null);
+    setEdFxOverride(e.fxRate?String(Number(e.fxRate).toFixed(4)):"");
+    setEd({source:e.source,amount:String(e.originalAmountUSD||e.amount),currency:e.originalAmountUSD?"USD":"CAD",expectedDate:e.expectedDate,note:e.note||""});
+  };
+  const saveEdit=()=>{
+    const amtNum=parseFloat(ed.amount)||0;
+    const edIsUSD=ed.currency==="USD";
+    const edRate=parseFloat(edFxOverride)||edFxRate||1;
+    const cadAmt=edIsUSD?+(amtNum*edRate).toFixed(2):amtNum;
+    const fxMeta=edIsUSD?{originalAmountUSD:amtNum,fxRate:edRate,fxDate:ed.expectedDate}:{originalAmountUSD:undefined,fxRate:undefined,fxDate:undefined};
+    onUpdate(expected.map(e=>e.id===editId?{...e,...fxMeta,source:ed.source.trim()||e.source,amount:cadAmt,expectedDate:ed.expectedDate,note:ed.note}:e));
+    setEditId(null);
+  };
+
   const pending=expected.filter(e=>!e.confirmed);
   const confirmed=expected.filter(e=>e.confirmed);
   const shown=filter==="pending"?pending:filter==="confirmed"?confirmed:expected;
@@ -636,20 +671,65 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
         )}
         {sorted.length===0?<div style={{color:"#9ca3af",fontSize:13}}>No items</div>:sorted.map(e=>{
           const isPast=!e.confirmed&&e.expectedDate<today();
+          const edIsUSD=ed.currency==="USD";
+          const edRate=parseFloat(edFxOverride)||edFxRate||1;
+          const edAmtNum=parseFloat(ed.amount)||0;
+          const edCadAmt=edIsUSD?+(edAmtNum*edRate).toFixed(2):edAmtNum;
+
+          if(editId===e.id) return(
+            <div key={e.id} style={{padding:"14px 0",borderBottom:"1px solid #e0f2fe",background:"#f8fbff",borderRadius:8,marginBottom:2,paddingLeft:10,paddingRight:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <Fld label="Source" style={{gridColumn:"1/-1"}}><input style={IS} value={ed.source} onChange={e2=>setEd(p=>({...p,source:e2.target.value}))} autoFocus/></Fld>
+                <Fld label="Currency" style={{gridColumn:"1/-1"}}>
+                  <div style={{display:"flex",gap:8}}>
+                    {["CAD","USD"].map(cur=>(
+                      <button key={cur} onClick={()=>setEd(p=>({...p,currency:cur}))} style={{flex:1,padding:"6px 0",borderRadius:8,border:`2px solid ${ed.currency===cur?"#0284C7":"#e2e8f0"}`,background:ed.currency===cur?"#f0f9ff":"#fff",color:ed.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                        {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                      </button>
+                    ))}
+                  </div>
+                </Fld>
+                <Fld label={`Amount (${ed.currency})`}><input style={IS} type="number" value={ed.amount} onChange={e2=>setEd(p=>({...p,amount:e2.target.value}))}/></Fld>
+                <Fld label="Expected Date"><input style={IS} type="date" value={ed.expectedDate} onChange={e2=>setEd(p=>({...p,expectedDate:e2.target.value}))}/></Fld>
+                <Fld label="Note" style={{gridColumn:"1/-1"}}><input style={IS} value={ed.note} onChange={e2=>setEd(p=>({...p,note:e2.target.value}))} placeholder="Optional"/></Fld>
+              </div>
+              {edIsUSD&&edAmtNum>0&&(
+                <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+                    <input style={{...IS,width:90,padding:"4px 8px",fontSize:13}} type="number" step="0.0001" value={edFxOverride} onChange={e2=>setEdFxOverride(e2.target.value)} placeholder={edFxLoading?"…":"rate"}/>
+                    <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+                    {edFxLoading&&<span style={{fontSize:11,color:"#0284C7",marginLeft:"auto"}}>Fetching…</span>}
+                    {edFxError&&<span style={{fontSize:11,color:"#dc2626",marginLeft:"auto"}}>{edFxError}</span>}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{fontSize:12,color:"#0369a1"}}>${edAmtNum.toFixed(2)} USD × {edRate.toFixed(4)}</span>
+                    <span style={{fontSize:15,fontWeight:800,color:"#0284C7"}}>{fmt(edCadAmt)} CAD</span>
+                  </div>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8}}>
+                <Btn sm onClick={saveEdit} disabled={!ed.source.trim()||!ed.amount}>Save</Btn>
+                <Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn>
+              </div>
+            </div>
+          );
+
           return (
-            <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid #f3f4f6",flexWrap:"wrap",background:selectMode&&selected.has(e.id)?"#eff6ff":"transparent",borderRadius:4}}>
+            <div key={e.id} onClick={()=>!selectMode&&!e.confirmed&&startEdit(e)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid #f3f4f6",flexWrap:"wrap",background:selectMode&&selected.has(e.id)?"#eff6ff":"transparent",borderRadius:4,cursor:!selectMode&&!e.confirmed?"pointer":"default"}}>
               {selectMode&&<input type="checkbox" checked={selected.has(e.id)} onChange={()=>toggleSel(e.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
               <div style={{flex:1,minWidth:160}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <span style={{fontSize:13,fontWeight:500}}>{e.source}</span>
                   {isPast&&<span style={{fontSize:10,background:"#fee2e2",color:"#b91c1c",padding:"1px 7px",borderRadius:20,fontWeight:500}}>Overdue</span>}
+                  {!e.confirmed&&!selectMode&&<span style={{fontSize:10,color:"#cbd5e1"}}>click to edit</span>}
                 </div>
                 <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}{e.originalAmountUSD?" · 🇺🇸 $"+e.originalAmountUSD.toFixed(2)+" USD @ "+Number(e.fxRate).toFixed(4):""}</div>
                 {e.confirmed&&<div style={{fontSize:11,color:"#059669",marginTop:1}}>Confirmed {e.confirmedDate}</div>}
               </div>
               <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#0284C7",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
-              {!selectMode&&<div style={{display:"flex",gap:6,flexShrink:0}}>
-                {!e.confirmed&&<Btn v="success" sm onClick={()=>onConfirm(e.id)}>Confirm Payment</Btn>}
+              {!selectMode&&<div style={{display:"flex",gap:6,flexShrink:0}} onClick={ev=>ev.stopPropagation()}>
+                {!e.confirmed&&<Btn v="success" sm onClick={()=>onConfirm(e.id)}>Confirm</Btn>}
                 <button onClick={()=>del(e.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>Remove</button>
               </div>}
             </div>
