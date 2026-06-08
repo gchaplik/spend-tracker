@@ -1012,7 +1012,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
 
   // Fetch historical USD→CAD rate whenever date or currency changes
   useEffect(()=>{
-    if(type!=="income"||f.currency!=="USD") return;
+    if(f.currency!=="USD") return;
     setFxLoading(true);setFxError(null);
     fetch(`https://api.frankfurter.app/${f.date}?from=USD&to=CAD`)
       .then(r=>r.json())
@@ -1028,18 +1028,16 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
   const recurring=f.recurrence!=="once";
   const count=recurring?Math.max(1,parseInt(f.occurrences)||1):1;
   const amtNum=parseFloat(f.amount)||0;
-  const isUSD=type==="income"&&f.currency==="USD";
+  const isUSD=f.currency==="USD";
   const effectiveRate=parseFloat(fxOverride)||fxRate||1;
   const cadAmt=isUSD?+(amtNum*effectiveRate).toFixed(2):amtNum;
 
   const submit=()=>{
     if(!f.merchant.trim()||!f.amount) return;
+    const fxMeta=isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.date}:{};
     const base=type==="expense"
-      ?{type:"expense",merchant:f.merchant.trim(),amount:amtNum,category:f.category,note:f.note,hasReceipt:false}
-      :{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),
-        amount:cadAmt,
-        ...(isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.date}:{}),
-        note:f.note};
+      ?{type:"expense",merchant:f.merchant.trim(),amount:cadAmt,category:f.category,note:f.note,hasReceipt:false,...fxMeta}
+      :{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),amount:cadAmt,...fxMeta,note:f.note};
     const dates=recurring?buildDates(f.date,f.recurrence,count):[f.date];
     const gid=recurring?uid():undefined;
     onSaveMultiple(dates.map(date=>({...base,id:uid(),date,...(gid?{groupId:gid,cadence:f.recurrence}:{})})));
@@ -1052,18 +1050,16 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>{title}</h2>
       <div style={CA}>
         <Fld label={type==="income"?"Source":"Merchant / Description"}><input style={IS} value={f.merchant} onChange={e=>set("merchant",e.target.value)} placeholder={type==="income"?"e.g. Salary, Freelance":"e.g. Walmart, Netflix, Rent"}/></Fld>
-        {/* Currency selector — income only */}
-        {type==="income"&&(
-          <Fld label="Currency">
-            <div style={{display:"flex",gap:8}}>
-              {["CAD","USD"].map(cur=>(
-                <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"8px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
-                  {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
-                </button>
-              ))}
-            </div>
-          </Fld>
-        )}
+        {/* Currency selector */}
+        <Fld label="Currency">
+          <div style={{display:"flex",gap:8}}>
+            {["CAD","USD"].map(cur=>(
+              <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"8px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+              </button>
+            ))}
+          </div>
+        </Fld>
         <Fld label={`Amount per payment (${f.currency})`}><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
         <Fld label={recurring?"Start Date":"Date"}><input style={IS} type="date" value={f.date} onChange={e=>set("date",e.target.value)}/></Fld>
         {type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={f.category} onChange={e=>set("category",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}
@@ -1248,7 +1244,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
                 ?<div style={{padding:"12px 0"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}><Fld label="Merchant / Source"><input style={IS} value={ed.merchant||ed.source||""} onChange={e=>setEd(d=>({...d,merchant:e.target.value,source:e.target.value}))}/></Fld><Fld label="Amount ($)"><input style={IS} type="number" value={ed.amount||""} onChange={e=>setEd(d=>({...d,amount:e.target.value}))}/></Fld><Fld label="Date"><input style={IS} type="date" value={ed.date||""} onChange={e=>setEd(d=>({...d,date:e.target.value}))}/></Fld>{ed.type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={ed.category||cats[0]} onChange={e=>setEd(d=>({...d,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}<Fld label="Note"><input style={IS} value={ed.note||""} onChange={e=>setEd(d=>({...d,note:e.target.value}))}/></Fld></div><div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div></div>
                 :<div style={{display:"flex",alignItems:"center",padding:"9px 0",gap:10,background:selectMode&&selected.has(t.id)?"#eff6ff":"transparent",borderRadius:4}}>
                   {selectMode&&<input type="checkbox" checked={selected.has(t.id)} onChange={()=>toggleSelect(t.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · 🇺🇸 $"+t.originalAmountUSD.toFixed(2)+" USD @ "+t.fxRate?.toFixed(4):""}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · 🇺🇸 $"+t.originalAmountUSD.toFixed(2)+" USD @ "+Number(t.fxRate).toFixed(4):""}</div></div>
                   <div style={{fontWeight:600,fontSize:13,color:t.type==="income"?"#059669":"#111827",whiteSpace:"nowrap"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
                   {!selectMode&&<div style={{display:"flex",gap:5,flexShrink:0}}>{rBtn(()=>startEdit(t),"#e5e7eb","#6b7280","Edit")}{rBtn(()=>del(t.id),"#fecaca","#dc2626","Delete")}</div>}
                 </div>}
