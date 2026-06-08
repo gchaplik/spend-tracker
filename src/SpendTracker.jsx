@@ -1327,12 +1327,13 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
 
   const addVacation=()=>{
     if(!form.name.trim()) return;
-    const v={id:uid(),name:form.name.trim(),startDate:form.startDate,endDate:form.endDate,budget:parseFloat(form.budget)||0};
+    const v={id:uid(),name:form.name.trim(),startDate:form.startDate,endDate:form.endDate,budget:parseFloat(form.budget)||0,completed:false};
     onSaveVacations([...vacations,v]);
     setForm({name:"",startDate:today(),endDate:today(),budget:""});
     setActiveId(v.id);setView("detail");
   };
   const delVacation=id=>{onSaveVacations(vacations.filter(v=>v.id!==id));onSaveTxns(vacationTxns.filter(t=>t.vacationId!==id));};
+  const toggleComplete=id=>onSaveVacations(vacations.map(v=>v.id===id?{...v,completed:!v.completed,completedAt:v.completed?null:today()}:v));
   const logExpense=()=>{
     if(!expForm.merchant.trim()||!expForm.amount) return;
     const t={id:uid(),vacationId:activeId,merchant:expForm.merchant.trim(),amount:parseFloat(expForm.amount)||0,date:expForm.date||today(),note:expForm.note};
@@ -1375,6 +1376,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
           <button onClick={()=>{setView("list");setEditingMeta(false);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
           <h2 style={{margin:0,fontSize:19,fontWeight:600,flex:1}}>{vac.name}</h2>
           {!editingMeta&&<button onClick={()=>startEditMeta(vac)} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>}
+          {!editingMeta&&<button onClick={()=>toggleComplete(vac.id)} style={{background:vac.completed?"#f0fdf4":"none",border:`1px solid ${vac.completed?"#86efac":"#e5e7eb"}`,borderRadius:6,padding:"4px 11px",cursor:"pointer",fontSize:12,color:vac.completed?"#15803d":"#6b7280",fontFamily:"inherit",fontWeight:vac.completed?600:400}}>{vac.completed?"✓ Completed":"Mark Complete"}</button>}
         </div>
         {editingMeta&&(
           <div style={{...CA,marginBottom:16}}>
@@ -1455,23 +1457,31 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
       </div>
       {vacations.length===0?<div style={{...CA,color:"#9ca3af",fontSize:13}}>No vacations yet. Add one to start tracking trip expenses separately from your regular budget.</div>:
       <div style={{display:"grid",gap:12}}>
-        {[...vacations].sort((a,b)=>(b.startDate||"").localeCompare(a.startDate||""  )).map(v=>{
-          const txns=vacationTxns.filter(t=>t.vacationId===v.id);
-          const total=txns.reduce((s,t)=>s+t.amount,0);
+        {[...vacations].sort((a,b)=>{if(!!a.completed!==!!b.completed)return a.completed?1:-1;return(b.startDate||"").localeCompare(a.startDate||"");}).map(v=>{
+          const vTxns=vacationTxns.filter(t=>t.vacationId===v.id);
+          const total=vTxns.reduce((s,t)=>s+t.amount,0);
           const pct=v.budget>0?Math.min(total/v.budget,1):0;
           const over=v.budget>0&&total>v.budget;
           return (
-            <div key={v.id} style={{...CA,cursor:"pointer"}} onClick={()=>{setActiveId(v.id);setView("detail");setSelectMode(false);setSelected(new Set());}}>
+            <div key={v.id} style={{...CA,cursor:"pointer",opacity:v.completed?0.75:1,borderColor:v.completed?"#86efac":"#f1f5f9"}} onClick={()=>{setActiveId(v.id);setView("detail");setSelectMode(false);setSelected(new Set());}}>
               <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:15,fontWeight:600,marginBottom:2}}>{v.name}</div>
-                  <div style={{fontSize:11,color:"#9ca3af"}}>{v.startDate} – {v.endDate}</div>
-                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#e0f2fe",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:over?"#dc2626":"#f59e0b"}}/></div>}
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                    <div style={{fontSize:15,fontWeight:600}}>{v.name}</div>
+                    {v.completed&&<span style={{fontSize:10,fontWeight:700,color:"#15803d",background:"#dcfce7",border:"1px solid #86efac",borderRadius:99,padding:"1px 7px",letterSpacing:"0.03em"}}>COMPLETED</span>}
+                  </div>
+                  <div style={{fontSize:11,color:"#9ca3af"}}>{v.startDate} – {v.endDate}{v.completedAt?" · done "+v.completedAt:""}</div>
+                  {v.budget>0&&<div style={{marginTop:8,height:6,borderRadius:3,background:"#e0f2fe",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:pct*100+"%",background:v.completed?"#059669":over?"#dc2626":"#f59e0b"}}/></div>}
                 </div>
-                <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontSize:15,fontWeight:700,color:"#dc2626"}}>{fmt(total)}</div>
-                  {v.budget>0&&<div style={{fontSize:11,color:over?"#dc2626":"#9ca3af"}}>{over?"over ":"of "}{fmt(v.budget)}</div>}
-                  <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{txns.length} expense{txns.length!==1?"s":""}</div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:15,fontWeight:700,color:v.completed?"#059669":"#dc2626"}}>{fmt(total)}</div>
+                    {v.budget>0&&<div style={{fontSize:11,color:over&&!v.completed?"#dc2626":"#9ca3af"}}>{over&&!v.completed?"over ":"of "}{fmt(v.budget)}</div>}
+                    <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{vTxns.length} expense{vTxns.length!==1?"s":""}</div>
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();toggleComplete(v.id);}} style={{fontSize:11,padding:"3px 9px",borderRadius:6,border:`1px solid ${v.completed?"#86efac":"#e2e8f0"}`,background:v.completed?"#f0fdf4":"#fff",color:v.completed?"#15803d":"#6b7280",cursor:"pointer",fontFamily:"inherit",fontWeight:v.completed?600:400,whiteSpace:"nowrap"}}>
+                    {v.completed?"✓ Done":"Mark Complete"}
+                  </button>
                 </div>
               </div>
             </div>
