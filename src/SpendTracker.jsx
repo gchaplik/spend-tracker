@@ -6227,18 +6227,10 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #e2e8f0", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none" }}>
       {/* Logo */}
       <div style={{ padding:"0 14px", height:56, display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid #f1f5f9", flexShrink:0 }}>
-        <div style={{ width:28, height:28, borderRadius:8, background:"#0F172A", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+        <div style={{ width:28, height:28, borderRadius:8, background:"#000000", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
           <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* back-left peak */}
-            <polygon points="2,26 11,8 20,26" fill="#1E3A5F"/>
-            {/* back-right peak */}
-            <polygon points="13,26 22,12 30,26" fill="#1E3A5F"/>
-            {/* front centre peak */}
-            <polygon points="6,26 16,10 26,26" fill="#38BDF8"/>
-            {/* snow cap */}
-            <polygon points="16,10 13,15 19,15" fill="#FFFFFF"/>
-            {/* baseline */}
-            <rect x="4" y="26" width="24" height="2" rx="1" fill="#38BDF8"/>
+            <polygon points="2,27 16,5 30,27" fill="#FFFFFF"/>
+            <rect x="2" y="27" width="28" height="2.5" rx="1" fill="#FFFFFF"/>
           </svg>
         </div>
         <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>CashHeap</span>
