@@ -7158,16 +7158,18 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
         {bottomItems.map(item => <NavBtn key={item.k} item={item} />)}
         {onSignOut&&(
           <button onClick={onSignOut} title="Lock CashHeap"
-            style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"8px 10px",borderRadius:8,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",color:"#94a3b8",fontSize:12,fontWeight:500,textAlign:"left",transition:"background .15s,color .15s"}}
-            onMouseEnter={e=>{e.currentTarget.style.background="#fef2f2";e.currentTarget.style.color="#dc2626";}}
+            style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"7px 14px",borderRadius:8,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",color:"#94a3b8",fontSize:13,fontWeight:500,textAlign:"left",transition:"background 0.12s,color 0.12s"}}
+            onMouseEnter={e=>{e.currentTarget.style.background="rgba(220,38,38,0.07)";e.currentTarget.style.color="#dc2626";}}
             onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#94a3b8";}}
           >
-            <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-            Sign Out
+            <span style={{fontSize:14,width:18,textAlign:"center",flexShrink:0,opacity:0.7,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+            </span>
+            <span style={{flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Sign Out</span>
           </button>
         )}
       </div>
