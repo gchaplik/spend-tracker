@@ -1663,6 +1663,11 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
 }
 
 const WHATS_NEW = [
+  { icon: "🔒", title: "Account Security", desc: "Protect your financial data with a PIN, biometric unlock (Touch ID / Windows Hello), and optional two-factor authentication. Set up on first launch or in Settings." },
+  { icon: "🏠", title: "Household Members", desc: "Add people to your household, split shared transactions equally or by income, and track balances with a built-in settlement log. Try Household." },
+  { icon: "🇺🇸", title: "USD Income & Expenses", desc: "Record income or expenses in USD and CashHeap automatically converts to CAD using the real FX rate for that day. Works in Add Expense, Add Income, and Expected Income." },
+  { icon: "✅", title: "Mark Vacation Complete", desc: "Once a trip is done, mark it complete — it gets a green badge and moves to the bottom of the list so active trips stay front and centre." },
+  { icon: "✏️", title: "Edit Bills Inline", desc: "Click Edit on any bill row in the Bills tab to update the name, amount, due date, or category without leaving the page." },
   { icon: "✦", title: "AI Receipt Scanning", desc: "Upload photos or PDFs of receipts — AI extracts merchant, date, amount, and category automatically. Try Upload Receipts." },
   { icon: "✦", title: "Folder Sync", desc: "Point the app at a local folder of receipts and scan them all at once. Already-imported files are skipped automatically. Try Folder Sync." },
   { icon: "✦", title: "Recurring Transactions", desc: "Log expenses or income on weekly, bi-weekly, monthly, quarterly, and more cadences — all entries created in one shot. Try Add Expense or Add Income." },
@@ -4997,213 +5002,151 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
   );
 }
 
-// ── Security Settings Section ─────────────────────────────────────────────────
+// ── Security Settings Section (manage existing account) ───────────────────────
 function SecuritySettingsSection({authConfig,onSave}){
-  const AC=(authConfig&&typeof authConfig==="object")?authConfig:{enabled:false};
-  const [enabled,setEnabled]=useState(!!AC.enabled);
-  const [phase,setPhase]=useState("idle"); // idle | setpin | bioEnroll | totpSetup | changePIN
-  // PIN setup
+  const AC=(authConfig&&typeof authConfig==="object"&&authConfig.pinHash)?authConfig:null;
+  const [phase,setPhase]=useState("idle"); // idle | changePIN | totpSetup
   const [pinA,setPinA]=useState("");
   const [pinB,setPinB]=useState("");
   const [pinErr,setPinErr]=useState("");
-  const [pinSaving,setPinSaving]=useState(false);
-  // Biometric
-  const [bioStatus,setBioStatus]=useState(AC.webauthnCredId?"enrolled":"none"); // none|enrolling|enrolled|error
+  const [pinBusy,setPinBusy]=useState(false);
+  const [bioStatus,setBioStatus]=useState(AC?.webauthnCredId?"enrolled":"idle"); // idle|enrolling|enrolled|error
   const [bioErr,setBioErr]=useState("");
-  // TOTP
-  const [totpSecret,setTotpSecret]=useState(AC.totpSecret||"");
+  const [totpSecret]=useState(()=>genTOTPSecret());
   const [totpInput,setTotpInput]=useState("");
-  const [totpVerified,setTotpVerified]=useState(false);
   const [totpErr,setTotpErr]=useState("");
-  // Auto-lock
-  const [autoLock,setAutoLock]=useState(AC.autoLockMinutes||0);
+  const [autoLock,setAutoLock]=useState(AC?.autoLockMinutes||0);
 
-  const cfg=(patch)=>{const n={...AC,...patch};onSave(n);return n;};
+  const cfg=patch=>{const n={...AC,...patch};onSave(n);return n;};
 
-  const toggleEnabled=async(val)=>{
-    if(val&&!AC.pinHash){setPhase("setpin");return;}
-    setEnabled(val);cfg({enabled:val});
-  };
-
-  // ─ PIN setup ─
   const savePIN=async()=>{
-    if(pinA.length<4){setPinErr("PIN must be at least 4 digits");return;}
+    if(pinA.length<4){setPinErr("At least 4 digits");return;}
     if(pinA!==pinB){setPinErr("PINs don't match");return;}
-    setPinSaving(true);setPinErr("");
+    setPinBusy(true);setPinErr("");
     const salt=genSalt();
-    const hash=await hashPin(pinA,salt);
-    const n=cfg({pinHash:hash,pinSalt:salt,enabled:true});
-    setEnabled(true);setPinA("");setPinB("");setPhase("idle");setPinSaving(false);
-    onSave(n);
+    cfg({pinHash:await hashPin(pinA,salt),pinSalt:salt});
+    setPinA("");setPinB("");setPhase("idle");setPinBusy(false);
   };
 
-  // ─ Biometric / WebAuthn ─
   const enrollBio=async()=>{
     setBioStatus("enrolling");setBioErr("");
     try{
-      const challenge=crypto.getRandomValues(new Uint8Array(32));
       const cred=await navigator.credentials.create({publicKey:{
-        challenge,
+        challenge:crypto.getRandomValues(new Uint8Array(32)),
         rp:{name:"CashHeap",id:"localhost"},
         user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
         pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
         authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
         timeout:60000,
       }});
-      const credId=_b64ue(cred.rawId);
-      cfg({webauthnCredId:credId,webauthnEnabled:true});
-      setBioStatus("enrolled");setPhase("idle");
+      cfg({webauthnCredId:_b64ue(cred.rawId),webauthnEnabled:true});
+      setBioStatus("enrolled");
     }catch(e){
-      setBioErr(e.name==="NotAllowedError"?"Cancelled.":`Error: ${e.message}`);
-      setBioStatus(AC.webauthnCredId?"enrolled":"none");
+      setBioErr(e.name==="NotAllowedError"?"Cancelled.":`${e.message}`);
+      setBioStatus(AC?.webauthnCredId?"enrolled":"idle");
     }
   };
 
-  const removeBio=()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("none");};
-
-  // ─ TOTP ─
-  const startTOTP=()=>{setTotpSecret(genTOTPSecret());setTotpInput("");setTotpVerified(false);setTotpErr("");setPhase("totpSetup");};
   const verifyAndSaveTOTP=async()=>{
     const now=await calcTOTP(totpSecret);
     const prev=await calcTOTP(totpSecret,Date.now()-30000);
-    if(totpInput===now||totpInput===prev){
-      cfg({totpSecret,totpEnabled:true});
-      setTotpVerified(true);setPhase("idle");
-    } else{setTotpErr("Incorrect code — try again");}
+    if(totpInput===now||totpInput===prev){cfg({totpSecret,totpEnabled:true});setPhase("idle");}
+    else{setTotpErr("Incorrect code — try again");}
   };
-  const disableTOTP=()=>{cfg({totpSecret:null,totpEnabled:false});setTotpSecret("");};
 
-  const saveAutoLock=(v)=>{setAutoLock(v);cfg({autoLockMinutes:v});};
+  const IS2={width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
+  const Row=({icon,label,sub,subColor,action})=>(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9,marginBottom:8}}>
+      <div>
+        <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{icon} {label}</div>
+        {sub&&<div style={{fontSize:11,marginTop:1,color:subColor||"#64748b"}}>{sub}</div>}
+      </div>
+      {action}
+    </div>
+  );
+  const Btn=({onClick,label,color="#0284C7",textColor="#fff",disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"6px 14px",background:disabled?"#94a3b8":color,color:textColor,border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0}}>{label}</button>
+  );
 
-  const CA2={background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"};
-  const IS2={width:"100%",padding:"8px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
+  if(!AC) return(
+    <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:6}}>🔒 Account Security</div>
+      <div style={{fontSize:12,color:"#64748b"}}>No account set up yet. You'll be prompted on next launch.</div>
+    </div>
+  );
 
   return(
-    <div style={{marginTop:20}}>
-      <div style={{...CA2}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-          <div>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>🔒 Security &amp; App Lock</div>
-            <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Protect CashHeap with a PIN, biometrics, or two-factor authentication.</div>
-          </div>
-          <button onClick={()=>toggleEnabled(!enabled)}
-            style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:enabled?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-            <span style={{position:"absolute",top:3,left:enabled?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-          </button>
-        </div>
+    <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>🔒 Account Security</div>
+      <div style={{fontSize:11,color:"#64748b",marginBottom:16}}>Manage your PIN, biometrics, and two-factor authentication.</div>
 
-        {/* Set PIN prompt */}
-        {phase==="setpin"&&(
-          <div style={{background:"#f8fafc",borderRadius:10,padding:16,marginBottom:12}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:10}}>Create a PIN</div>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              <input type="password" inputMode="numeric" placeholder="PIN (4–6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
-              <input type="password" inputMode="numeric" placeholder="Confirm PIN" maxLength={6} value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))} style={IS2}/>
-              {pinErr&&<div style={{color:"#dc2626",fontSize:11}}>{pinErr}</div>}
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={savePIN} disabled={pinSaving} style={{flex:1,padding:"8px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinSaving?"Saving…":"Save PIN"}</button>
-                <button onClick={()=>setPhase("idle")} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Change PIN */}
-        {phase==="changePIN"&&(
-          <div style={{background:"#f8fafc",borderRadius:10,padding:16,marginBottom:12}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:10}}>Change PIN</div>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              <input type="password" inputMode="numeric" placeholder="New PIN (4–6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
-              <input type="password" inputMode="numeric" placeholder="Confirm new PIN" maxLength={6} value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))} style={IS2}/>
-              {pinErr&&<div style={{color:"#dc2626",fontSize:11}}>{pinErr}</div>}
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={savePIN} disabled={pinSaving} style={{flex:1,padding:"8px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinSaving?"Saving…":"Update PIN"}</button>
-                <button onClick={()=>setPhase("idle")} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TOTP setup */}
-        {phase==="totpSetup"&&(
-          <div style={{background:"#f8fafc",borderRadius:10,padding:16,marginBottom:12}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:6}}>Set up Authenticator App</div>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>Scan the QR code with Google Authenticator, Authy, or any TOTP app.</div>
-            <div style={{textAlign:"center",marginBottom:12}}>
-              <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR Code" style={{borderRadius:8,border:"3px solid #fff",boxShadow:"0 2px 8px rgba(0,0,0,0.1)"}}/>
-              <div style={{marginTop:8,fontSize:10,color:"#64748b"}}>Or enter manually:</div>
-              <div style={{marginTop:4,background:"#0f172a",borderRadius:6,padding:"8px 12px",fontFamily:"monospace",fontSize:12,color:"#a5f3fc",letterSpacing:1,wordBreak:"break-all"}}>{totpSecret}</div>
-            </div>
-            <input placeholder="Enter 6-digit code to verify" maxLength={6} value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,""))} style={{...IS2,textAlign:"center",fontSize:20,letterSpacing:6,fontFamily:"monospace",marginBottom:8}}/>
-            {totpErr&&<div style={{color:"#dc2626",fontSize:11,marginBottom:6}}>{totpErr}</div>}
+      {/* Change PIN */}
+      {phase==="changePIN"?(
+        <div style={{background:"#f8fafc",borderRadius:10,padding:14,marginBottom:10}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:10}}>Change PIN</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <input type="password" inputMode="numeric" placeholder="New PIN (4–6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
+            <input type="password" inputMode="numeric" placeholder="Confirm new PIN" maxLength={6} value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))} style={IS2} onKeyDown={e=>e.key==="Enter"&&savePIN()}/>
+            {pinErr&&<div style={{color:"#dc2626",fontSize:11}}>{pinErr}</div>}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={verifyAndSaveTOTP} disabled={totpInput.length!==6} style={{flex:1,padding:"8px 0",background:totpInput.length===6?"#0284C7":"#94a3b8",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit"}}>Verify &amp; Enable</button>
-              <button onClick={()=>setPhase("idle")} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={savePIN} disabled={pinBusy} style={{flex:1,padding:"8px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinBusy?"Saving…":"Update PIN"}</button>
+              <button onClick={()=>{setPhase("idle");setPinA("");setPinB("");setPinErr("");}} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>
           </div>
-        )}
+        </div>
+      ):(
+        <Row icon="🔑" label="PIN" sub="Your unlock PIN (PBKDF2 secured)"
+          action={<Btn onClick={()=>setPhase("changePIN")} label="Change PIN"/>}/>
+      )}
 
-        {/* Main controls (when enabled) */}
-        {enabled&&phase==="idle"&&(
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      {/* Biometric */}
+      {phase!=="changePIN"&&(
+        <Row icon="👆" label="Biometrics" sub={bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"} subColor={bioStatus==="enrolled"?"#16a34a":undefined}
+          action={bioStatus==="enrolled"
+            ?<Btn onClick={()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("idle");}} label="Remove" color="#fee2e2" textColor="#dc2626"/>
+            :<Btn onClick={enrollBio} label={bioStatus==="enrolling"?"…":"Enroll"} disabled={bioStatus==="enrolling"}/>
+          }
+        />
+      )}
+      {bioErr&&<div style={{fontSize:11,color:"#dc2626",marginTop:-6,marginBottom:8,paddingLeft:4}}>{bioErr}</div>}
 
-            {/* PIN row */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#f8fafc",borderRadius:8}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>🔑 PIN</div>
-                <div style={{fontSize:11,color:"#64748b"}}>{AC.pinHash?"PIN is set":"No PIN configured"}</div>
-              </div>
-              <button onClick={()=>setPhase("changePIN")} style={{padding:"6px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                {AC.pinHash?"Change":"Set PIN"}
-              </button>
-            </div>
-
-            {/* Biometric row */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#f8fafc",borderRadius:8}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>👆 Biometrics</div>
-                <div style={{fontSize:11,color:bioStatus==="enrolled"?"#16a34a":"#64748b"}}>
-                  {bioStatus==="enrolled"?"Touch ID / Windows Hello enrolled":bioStatus==="enrolling"?"Enrolling…":"Not enrolled"}
-                </div>
-                {bioErr&&<div style={{fontSize:11,color:"#dc2626"}}>{bioErr}</div>}
-              </div>
-              {bioStatus==="enrolled"
-                ?<button onClick={removeBio} style={{padding:"6px 14px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>
-                :<button onClick={enrollBio} disabled={bioStatus==="enrolling"} style={{padding:"6px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{bioStatus==="enrolling"?"…":"Enroll"}</button>
-              }
-            </div>
-
-            {/* TOTP row */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#f8fafc",borderRadius:8}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>📱 Two-Factor (TOTP)</div>
-                <div style={{fontSize:11,color:AC.totpEnabled?"#16a34a":"#64748b"}}>{AC.totpEnabled?"Authenticator app enabled":"Not enabled"}</div>
-              </div>
-              {AC.totpEnabled
-                ?<button onClick={disableTOTP} style={{padding:"6px 14px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Disable</button>
-                :<button onClick={startTOTP} style={{padding:"6px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Set Up</button>
-              }
-            </div>
-
-            {/* Auto-lock */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#f8fafc",borderRadius:8}}>
-              <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>⏱ Auto-lock</div>
-              <select value={autoLock} onChange={e=>saveAutoLock(Number(e.target.value))} style={{padding:"6px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
-                <option value={0}>On launch only</option>
-                <option value={1}>After 1 minute</option>
-                <option value={5}>After 5 minutes</option>
-                <option value={15}>After 15 minutes</option>
-                <option value={30}>After 30 minutes</option>
-              </select>
-            </div>
-
+      {/* TOTP */}
+      {phase==="totpSetup"?(
+        <div style={{background:"#f8fafc",borderRadius:10,padding:14,marginBottom:10}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:6}}>Set Up 2-Factor Authentication</div>
+          <div style={{textAlign:"center",marginBottom:10}}>
+            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:8,border:"2px solid #e2e8f0"}}/>
+            <div style={{marginTop:6,background:"#0f172a",borderRadius:6,padding:"6px 10px",fontFamily:"monospace",fontSize:11,color:"#a5f3fc",wordBreak:"break-all"}}>{totpSecret}</div>
           </div>
-        )}
+          <input placeholder="Enter 6-digit code to verify" maxLength={6} value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))} style={{...IS2,textAlign:"center",fontSize:18,letterSpacing:6,fontFamily:"monospace",marginBottom:8}} onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyAndSaveTOTP()}/>
+          {totpErr&&<div style={{color:"#dc2626",fontSize:11,marginBottom:6}}>{totpErr}</div>}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={verifyAndSaveTOTP} disabled={totpInput.length!==6} style={{flex:1,padding:"8px 0",background:totpInput.length===6?"#0284C7":"#94a3b8",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit"}}>Verify &amp; Enable</button>
+            <button onClick={()=>{setPhase("idle");setTotpInput("");setTotpErr("");}} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          </div>
+        </div>
+      ):(
+        phase!=="changePIN"&&<Row icon="📱" label="Two-Factor Auth" sub={AC.totpEnabled?"Authenticator app active":"Not enabled"} subColor={AC.totpEnabled?"#16a34a":undefined}
+          action={AC.totpEnabled
+            ?<Btn onClick={()=>cfg({totpSecret:null,totpEnabled:false})} label="Disable" color="#fee2e2" textColor="#dc2626"/>
+            :<Btn onClick={()=>{setTotpInput("");setTotpErr("");setPhase("totpSetup");}} label="Set Up"/>
+          }
+        />
+      )}
 
-        {!enabled&&phase==="idle"&&(
-          <div style={{fontSize:11,color:"#94a3b8",textAlign:"center",padding:"8px 0"}}>Enable app lock to protect your financial data.</div>
-        )}
-      </div>
+      {/* Auto-lock */}
+      {phase==="idle"&&(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>⏱ Auto-lock</div>
+          <select value={autoLock} onChange={e=>{const v=Number(e.target.value);setAutoLock(v);cfg({autoLockMinutes:v});}} style={{padding:"6px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
+            <option value={0}>On launch only</option>
+            <option value={1}>After 1 minute</option>
+            <option value={5}>After 5 minutes</option>
+            <option value={15}>After 15 minutes</option>
+            <option value={30}>After 30 minutes</option>
+          </select>
+        </div>
+      )}
     </div>
   );
 }
@@ -7189,6 +7132,211 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   );
 }
 
+// ── Shared: mountain logo used on auth screens ────────────────────────────────
+function MountainLogo({size=56}){
+  return(
+    <svg viewBox="0 0 80 80" width={size} height={size} style={{display:"block"}}>
+      <rect width={80} height={80} rx={16} fill="#111"/>
+      <polygon points="6,62 18,44 22,48 28,36 34,44 40,16 46,44 52,36 58,48 62,44 74,62" fill="#fff"/>
+      <rect x={6} y={62} width={68} height={4} fill="#fff"/>
+    </svg>
+  );
+}
+
+// ── Account Setup Wizard (first launch) ──────────────────────────────────────
+function AccountSetup({onComplete}){
+  const [step,setStep]=useState(1); // 1=PIN, 2=Biometric, 3=TOTP
+  const [pinA,setPinA]=useState("");
+  const [pinB,setPinB]=useState("");
+  const [pinErr,setPinErr]=useState("");
+  const [bioStatus,setBioStatus]=useState("idle"); // idle|enrolling|done|skipped|error
+  const [bioErr,setBioErr]=useState("");
+  const [totpSecret]=useState(()=>genTOTPSecret());
+  const [totpInput,setTotpInput]=useState("");
+  const [totpErr,setTotpErr]=useState("");
+  const [savedHash,setSavedHash]=useState(null);
+  const [savedSalt,setSavedSalt]=useState(null);
+  const [credId,setCredId]=useState(null);
+
+  const IS={width:"100%",padding:"12px 14px",borderRadius:10,border:"2px solid #e2e8f0",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",textAlign:"center",letterSpacing:6,transition:"border-color .2s"};
+
+  // Step 1: create PIN
+  const submitPin=async()=>{
+    if(pinA.length<4){setPinErr("PIN must be at least 4 digits");return;}
+    if(pinA!==pinB){setPinErr("PINs don't match — try again");return;}
+    const salt=genSalt();
+    const hash=await hashPin(pinA,salt);
+    setSavedHash(hash);setSavedSalt(salt);
+    setPinA("");setPinB("");setPinErr("");
+    setStep(2);
+  };
+
+  // Step 2: biometric
+  const enrollBio=async()=>{
+    setBioStatus("enrolling");setBioErr("");
+    try{
+      const challenge=crypto.getRandomValues(new Uint8Array(32));
+      const cred=await navigator.credentials.create({publicKey:{
+        challenge,
+        rp:{name:"CashHeap",id:"localhost"},
+        user:{id:new TextEncoder().encode("cashheap-user"),name:"cashheap",displayName:"CashHeap"},
+        pubKeyCredParams:[{alg:-7,type:"public-key"},{alg:-257,type:"public-key"}],
+        authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
+        timeout:60000,
+      }});
+      setCredId(_b64ue(cred.rawId));
+      setBioStatus("done");
+    }catch(e){
+      setBioErr(e.name==="NotAllowedError"?"Cancelled — you can set this up later in Settings.":`Could not enroll: ${e.message}`);
+      setBioStatus("error");
+    }
+  };
+  const skipBio=()=>{setBioStatus("skipped");setStep(3);};
+  const nextAfterBio=()=>setStep(3);
+
+  // Step 3: TOTP
+  const verifyTOTP=async()=>{
+    const now=await calcTOTP(totpSecret);
+    const prev=await calcTOTP(totpSecret,Date.now()-30000);
+    if(totpInput===now||totpInput===prev){
+      finish(true);
+    }else{setTotpErr("Incorrect code — try again");}
+  };
+  const skipTOTP=()=>finish(false);
+
+  const finish=(totpEnabled)=>{
+    const cfg={
+      enabled:true,
+      pinHash:savedHash,
+      pinSalt:savedSalt,
+      webauthnCredId:credId||null,
+      webauthnEnabled:!!credId,
+      totpEnabled,
+      totpSecret:totpEnabled?totpSecret:null,
+      autoLockMinutes:0,
+    };
+    onComplete(cfg);
+  };
+
+  const steps=[{n:1,l:"Create PIN"},{n:2,l:"Biometrics"},{n:3,l:"2-Factor"}];
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:"#0a0a0f",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",padding:24}}>
+      {/* Logo */}
+      <div style={{marginBottom:12}}><MountainLogo size={56}/></div>
+      <div style={{color:"#fff",fontSize:20,fontWeight:800,letterSpacing:"-0.4px",marginBottom:4}}>Welcome to CashHeap</div>
+      <div style={{color:"#6b7280",fontSize:13,marginBottom:32,textAlign:"center"}}>Set up your account to keep your financial data secure.</div>
+
+      {/* Step progress */}
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:32}}>
+        {steps.map((s,i)=>(
+          <div key={s.n} style={{display:"flex",alignItems:"center"}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,
+                background:step>s.n?"#3b82f6":step===s.n?"#3b82f6":"rgba(255,255,255,0.1)",
+                color:step>=s.n?"#fff":"#6b7280",
+                border:step===s.n?"2px solid #60a5fa":"2px solid transparent",
+                transition:"all .3s"
+              }}>{step>s.n?"✓":s.n}</div>
+              <div style={{fontSize:10,color:step>=s.n?"#93c5fd":"#4b5563",fontWeight:600,whiteSpace:"nowrap"}}>{s.l}</div>
+            </div>
+            {i<steps.length-1&&<div style={{width:48,height:2,background:step>s.n?"#3b82f6":"rgba(255,255,255,0.1)",margin:"0 6px",marginBottom:20,transition:"background .3s"}}/>}
+          </div>
+        ))}
+      </div>
+
+      {/* Card */}
+      <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:"28px 32px",width:"100%",maxWidth:380,backdropFilter:"blur(10px)"}}>
+
+        {/* Step 1 — PIN */}
+        {step===1&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{color:"#fff",fontSize:16,fontWeight:700,marginBottom:4}}>Create your PIN</div>
+            <div style={{color:"#9ca3af",fontSize:12,marginBottom:8,lineHeight:1.5}}>Your PIN is used to unlock CashHeap. It's stored securely using PBKDF2 — we never see it.</div>
+            <input type="password" inputMode="numeric" placeholder="Enter PIN (4–6 digits)" maxLength={6}
+              value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))}
+              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff"}}
+              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+            />
+            <input type="password" inputMode="numeric" placeholder="Confirm PIN" maxLength={6}
+              value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))}
+              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff"}}
+              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+              onKeyDown={e=>e.key==="Enter"&&pinA.length>=4&&pinA===pinB&&submitPin()}
+            />
+            {pinErr&&<div style={{color:"#f87171",fontSize:12,fontWeight:500}}>{pinErr}</div>}
+            <button onClick={submitPin} disabled={pinA.length<4||pinB.length<4}
+              style={{marginTop:4,padding:"13px 0",borderRadius:10,border:"none",background:pinA.length>=4&&pinB.length>=4?"#3b82f6":"rgba(255,255,255,0.1)",color:"#fff",fontSize:15,fontWeight:700,cursor:pinA.length>=4&&pinB.length>=4?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Continue →</button>
+          </div>
+        )}
+
+        {/* Step 2 — Biometric */}
+        {step===2&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:4}}>{bioStatus==="done"?"✅":"👆"}</div>
+            <div style={{color:"#fff",fontSize:16,fontWeight:700}}>Enable Biometrics</div>
+            <div style={{color:"#9ca3af",fontSize:12,lineHeight:1.6,marginBottom:4}}>
+              Use Touch ID, Face ID, Windows Hello, or your device's fingerprint sensor to unlock CashHeap instantly.
+            </div>
+            {bioStatus==="idle"&&(
+              <button onClick={enrollBio} style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:"#3b82f6",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Set Up Biometrics
+              </button>
+            )}
+            {bioStatus==="enrolling"&&(
+              <div style={{color:"#93c5fd",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:14,height:14,border:"2px solid rgba(147,197,253,0.3)",borderTopColor:"#93c5fd",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>
+                Follow the prompt on your device…
+              </div>
+            )}
+            {bioStatus==="done"&&(
+              <>
+                <div style={{color:"#4ade80",fontSize:13,fontWeight:600}}>Biometrics enrolled successfully!</div>
+                <button onClick={nextAfterBio} style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:"#3b82f6",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Continue →</button>
+              </>
+            )}
+            {(bioStatus==="error"||bioStatus==="idle")&&bioErr&&<div style={{color:"#f87171",fontSize:12}}>{bioErr}</div>}
+            {bioStatus!=="done"&&bioStatus!=="enrolling"&&(
+              <button onClick={skipBio} style={{background:"none",border:"none",color:"#6b7280",fontSize:13,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",marginTop:4}}>
+                Skip for now
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Step 3 — TOTP */}
+        {step===3&&(
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{color:"#fff",fontSize:16,fontWeight:700,textAlign:"center",marginBottom:2}}>Two-Factor Authentication</div>
+            <div style={{color:"#9ca3af",fontSize:12,lineHeight:1.5,textAlign:"center",marginBottom:4}}>
+              Scan this QR code with Google Authenticator, Authy, or any TOTP app. Optional but recommended.
+            </div>
+            <div style={{textAlign:"center",margin:"4px 0 8px"}}>
+              <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&color=ffffff&bgcolor=111111&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:10,border:"2px solid rgba(255,255,255,0.15)"}}/>
+              <div style={{marginTop:6,fontSize:10,color:"#6b7280"}}>Manual key:</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:"#93c5fd",letterSpacing:1,wordBreak:"break-all",marginTop:2}}>{totpSecret}</div>
+            </div>
+            <input placeholder="Enter 6-digit code to verify" maxLength={6}
+              value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))}
+              onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyTOTP()}
+              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff",fontSize:20,letterSpacing:10,fontFamily:"monospace"}}
+              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+            />
+            {totpErr&&<div style={{color:"#f87171",fontSize:12}}>{totpErr}</div>}
+            <button onClick={verifyTOTP} disabled={totpInput.length!==6}
+              style={{padding:"13px 0",borderRadius:10,border:"none",background:totpInput.length===6?"#3b82f6":"rgba(255,255,255,0.1)",color:"#fff",fontSize:15,fontWeight:700,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Enable 2FA &amp; Finish</button>
+            <button onClick={skipTOTP} style={{background:"none",border:"none",color:"#6b7280",fontSize:13,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",textAlign:"center"}}>
+              Skip — finish without 2FA
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Lock Screen ───────────────────────────────────────────────────────────────
 function LockScreen({authConfig,onUnlock}){
   const [pin,setPin]=useState("");
@@ -7635,6 +7783,9 @@ export default function App(){
   };
 
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
+  // First launch: no account exists yet → show setup wizard
+  if(!authConfig.pinHash) return <AccountSetup onComplete={cfg=>{saveAuthConfig(cfg);setIsUnlocked(true);}}/>;
+  // Locked → show lock screen
   if(!isUnlocked) return <LockScreen authConfig={authConfig} onUnlock={()=>{setIsUnlocked(true);lastActivityRef.current=Date.now();}}/>;
 
   const pendingCount=expected.filter(e=>!e.confirmed).length;
