@@ -7511,8 +7511,8 @@ function LockScreen({authConfig,onUnlock}){
               onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.5)";e.currentTarget.style.color="#fff";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.2)";e.currentTarget.style.color="rgba(255,255,255,0.7)";}}
             >
-              {bioBusy?<span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>:"Touch ID"}
-              {bioBusy?"Verifying…":"Use Touch ID / Biometrics"}
+              {bioBusy?<span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>:null}
+              {bioBusy?"Verifying...":"Biometrics"}
             </button>
           )}
         </>
