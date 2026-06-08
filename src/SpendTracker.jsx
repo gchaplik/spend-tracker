@@ -454,8 +454,21 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
 }
 
 function ExpectedIncome({expected,onUpdate,onConfirm}){
-  const [f,setF]=useState({source:"",amount:"",expectedDate:today(),recurrence:"once",note:""});
+  const [f,setF]=useState({source:"",amount:"",expectedDate:today(),recurrence:"once",note:"",currency:"CAD"});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [fxRate,setFxRate]=useState(null);
+  const [fxLoading,setFxLoading]=useState(false);
+  const [fxError,setFxError]=useState(null);
+  const [fxOverride,setFxOverride]=useState("");
+  useEffect(()=>{
+    if(f.currency!=="USD") return;
+    setFxLoading(true);setFxError(null);
+    fetch(`https://api.frankfurter.app/${f.expectedDate}?from=USD&to=CAD`)
+      .then(r=>r.json())
+      .then(d=>{const rate=d?.rates?.CAD;if(rate){setFxRate(rate);setFxOverride(String(rate.toFixed(4)));}else{setFxError("Rate unavailable");setFxRate(null);}})
+      .catch(()=>setFxError("Could not fetch rate"))
+      .finally(()=>setFxLoading(false));
+  },[f.expectedDate,f.currency]);
   const [filter,setFilter]=useState("all");
   const [selectMode,setSelectMode]=useState(false);
   const [selected,setSelected]=useState(new Set());
@@ -486,13 +499,17 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   };
 
   const amtNum=parseFloat(f.amount)||0;
+  const isUSD=f.currency==="USD";
+  const effectiveRate=parseFloat(fxOverride)||fxRate||1;
+  const cadAmt=isUSD?+(amtNum*effectiveRate).toFixed(2):amtNum;
   const recurring=f.recurrence!=="once";
   const yearCount=recurring?countForYear(f.expectedDate,f.recurrence):1;
   const recurrenceLabel=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
 
   const add=()=>{
     if(!f.source.trim()||!f.amount) return;
-    const base={source:f.source.trim(),amount:amtNum,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null};
+    const fxMeta=isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.expectedDate}:{};
+    const base={source:f.source.trim(),amount:cadAmt,expectedDate:f.expectedDate,note:f.note,confirmed:false,confirmedDate:null,...fxMeta};
     let items;
     if(recurring){
       const gid=uid();
@@ -502,7 +519,8 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
       items=[{...base,id:uid()}];
     }
     onUpdate([...expected,...items]);
-    setF({source:"",amount:"",expectedDate:today(),recurrence:"once",note:""});
+    setF({source:"",amount:"",expectedDate:today(),recurrence:"once",note:"",currency:"CAD"});
+    setFxRate(null);setFxOverride("");
   };
   const del=id=>onUpdate(expected.filter(e=>e.id!==id));
   const pending=expected.filter(e=>!e.confirmed);
@@ -540,20 +558,53 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
         <div style={CA}>
           <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Expected Income</div>
           <Fld label="Source"><input style={IS} value={f.source} onChange={e=>set("source",e.target.value)} placeholder="e.g. Salary, Client payment"/></Fld>
-          <Fld label="Amount ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+          <Fld label="Currency">
+            <div style={{display:"flex",gap:8}}>
+              {["CAD","USD"].map(cur=>(
+                <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                  {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                </button>
+              ))}
+            </div>
+          </Fld>
+          <Fld label={`Amount (${f.currency})`}><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
           <Fld label="Expected Date"><input style={IS} type="date" value={f.expectedDate} onChange={e=>set("expectedDate",e.target.value)}/></Fld>
           <Fld label="Recurrence">
             <select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>
               {CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}
             </select>
           </Fld>
-          {recurring&&amtNum>0&&(
+          {isUSD&&amtNum>0&&(
+            <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"11px 14px",marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
+                <span style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD</span>
+                {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate…</span>}
+                {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
+                {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.expectedDate}</span>}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}>
+                <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+                <input style={{...IS,width:90,padding:"5px 8px",fontSize:13}} type="number" step="0.0001" value={fxOverride} onChange={e=>setFxOverride(e.target.value)} placeholder={fxLoading?"…":"rate"}/>
+                <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:12,color:"#0369a1"}}>${amtNum.toFixed(2)} USD × {effectiveRate.toFixed(4)}</span>
+                <span style={{fontSize:16,fontWeight:800,color:"#0284C7"}}>{fmt(cadAmt)} CAD</span>
+              </div>
+            </div>
+          )}
+          {!isUSD&&recurring&&amtNum>0&&(
             <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
               {yearCount} {recurrenceLabel.toLowerCase()} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
             </div>
           )}
+          {isUSD&&recurring&&cadAmt>0&&(
+            <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
+              {yearCount} payments of {fmt(cadAmt)} CAD = <strong style={{fontWeight:800}}>{fmt(cadAmt*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+            </div>
+          )}
           <Fld label="Note (optional)" style={{marginBottom:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-          <Btn onClick={add} disabled={!f.source.trim()||!f.amount} full>{recurring?`Add ${yearCount} Entries`:"Add to Schedule"}</Btn>
+          <Btn onClick={add} disabled={!f.source.trim()||!f.amount||(isUSD&&!effectiveRate)} full>{recurring?`Add ${yearCount} Entries`:"Add to Schedule"}</Btn>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
           {sumCards.map(item=>(
@@ -593,7 +644,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
                   <span style={{fontSize:13,fontWeight:500}}>{e.source}</span>
                   {isPast&&<span style={{fontSize:10,background:"#fee2e2",color:"#b91c1c",padding:"1px 7px",borderRadius:20,fontWeight:500}}>Overdue</span>}
                 </div>
-                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}</div>
+                <div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>Expected {e.expectedDate}{e.note?" · "+e.note:""}{e.originalAmountUSD?" · 🇺🇸 $"+e.originalAmountUSD.toFixed(2)+" USD @ "+Number(e.fxRate).toFixed(4):""}</div>
                 {e.confirmed&&<div style={{fontSize:11,color:"#059669",marginTop:1}}>Confirmed {e.confirmedDate}</div>}
               </div>
               <div style={{fontWeight:600,fontSize:13,color:e.confirmed?"#059669":"#0284C7",whiteSpace:"nowrap"}}>{fmt(e.amount)}</div>
