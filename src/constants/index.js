@@ -31,6 +31,7 @@ export const NAV_ITEMS = [
   { k:"calendar",     l:"Calendar",         icon:"▦", desc:"Monthly calendar view of bills, income, goals, and vacations." },
   { k:"wishlist",     l:"Wishlist",         icon:"◈", desc:"Track planned purchases and see when you can afford them based on your savings rate." },
   { k:"mortgage",     l:"Mortgage",         icon:"◑", desc:"Amortization calculator with extra payment simulator and payoff scenarios." },
+  { k:"household",    l:"Household",        icon:"⌂", desc:"Manage household members, split expenses, and track who owes who." },
   { k:"folder",       l:"Folder Sync",      icon:"▤", desc:"Point the app at a local folder of receipts and import them all at once." },
   { k:"upload",       l:"Upload Receipts",  icon:"↑", desc:"Upload individual receipt photos or PDFs and extract the details automatically." },
   { k:"settings",     l:"Settings",         icon:"⚙", desc:"Configure your name, Ollama model, and developer options.", isBottom:true },
