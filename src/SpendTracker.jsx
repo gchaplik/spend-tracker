@@ -638,14 +638,14 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
               </div>
             </div>
           )}
-          {!isUSD&&recurring&&amtNum>0&&(
+          {recurring&&amtNum>0&&!isUSD&&(
             <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
-              {yearCount} {recurrenceLabel.toLowerCase()} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+              {yearCount} {recurrenceLabel.toLowerCase()} payments of <strong>{fmt(amtNum)} CAD</strong> = <strong style={{fontWeight:800}}>{fmt(amtNum*yearCount)} CAD</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
             </div>
           )}
-          {isUSD&&recurring&&cadAmt>0&&(
+          {recurring&&amtNum>0&&isUSD&&cadAmt>0&&(
             <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#0369a1",fontWeight:500}}>
-              {yearCount} payments of {fmt(cadAmt)} CAD = <strong style={{fontWeight:800}}>{fmt(cadAmt*yearCount)}</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
+              {yearCount} {recurrenceLabel.toLowerCase()} payments of <strong>${amtNum.toFixed(2)} USD</strong> ({fmt(cadAmt)} CAD each) = <strong style={{fontWeight:800}}>{fmt(cadAmt*yearCount)} CAD</strong> through Dec&nbsp;{new Date(f.expectedDate+"T12:00:00").getFullYear()}
             </div>
           )}
           <Fld label="Note (optional)" style={{marginBottom:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
@@ -1232,11 +1232,12 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
               </span>
             </div>
             {recurring&&<div style={{fontSize:12,color:"#0369a1",marginTop:6,fontWeight:500}}>
-              {count} payments = <strong>{fmt(cadAmt*count)} CAD</strong> total
+              {count} payments of <strong>${amtNum.toFixed(2)} USD</strong> = <strong>{fmt(cadAmt*count)} CAD</strong> total
             </div>}
           </div>
         )}
-        {!isUSD&&recurring&&amtNum>0&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        {recurring&&amtNum>0&&!isUSD&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of <strong>{fmt(amtNum)} CAD</strong> = <strong style={{fontWeight:800}}>{fmt(amtNum*count)} CAD</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        {recurring&&amtNum>0&&isUSD&&cadAmt>0&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of <strong>${amtNum.toFixed(2)} USD</strong> ({fmt(cadAmt)} CAD each) = <strong style={{fontWeight:800}}>{fmt(cadAmt*count)} CAD</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
         <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount||(isUSD&&!effectiveRate)} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
       </div>
     </div>
