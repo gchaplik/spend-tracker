@@ -47,7 +47,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spend-tracker-${{ matrix.platform }}
+          name: cashheap-${{ matrix.platform }}
           path: ${{ matrix.artifact }}
           if-no-files-found: warn
 
