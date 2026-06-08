@@ -5,6 +5,18 @@ import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/f
 import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
 import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
 
+// Fetch USD→CAD rate: use /latest for today or future dates (Frankfurter only has past data)
+const fetchUsdCad = (dateStr) => {
+  const endpoint = dateStr >= today()
+    ? "https://api.frankfurter.app/latest?from=USD&to=CAD"
+    : `https://api.frankfurter.app/${dateStr}?from=USD&to=CAD`;
+  return fetch(endpoint).then(r => r.json()).then(d => {
+    const rate = d?.rates?.CAD;
+    if (!rate) throw new Error("Rate unavailable");
+    return rate;
+  });
+};
+
 // receiptFPs is now persisted in data.json via App state; these are no-ops kept for safety
 const loadFPs = () => new Set();
 const saveFPs = () => {};
@@ -463,9 +475,8 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   useEffect(()=>{
     if(f.currency!=="USD") return;
     setFxLoading(true);setFxError(null);
-    fetch(`https://api.frankfurter.app/${f.expectedDate}?from=USD&to=CAD`)
-      .then(r=>r.json())
-      .then(d=>{const rate=d?.rates?.CAD;if(rate){setFxRate(rate);setFxOverride(String(rate.toFixed(4)));}else{setFxError("Rate unavailable");setFxRate(null);}})
+    fetchUsdCad(f.expectedDate)
+      .then(rate=>{setFxRate(rate);setFxOverride(String(rate.toFixed(4)));})
       .catch(()=>setFxError("Could not fetch rate"))
       .finally(()=>setFxLoading(false));
   },[f.expectedDate,f.currency]);
@@ -535,9 +546,8 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   useEffect(()=>{
     if(!editId||ed.currency!=="USD") return;
     setEdFxLoading(true);setEdFxError(null);
-    fetch(`https://api.frankfurter.app/${ed.expectedDate}?from=USD&to=CAD`)
-      .then(r=>r.json())
-      .then(d=>{const rate=d?.rates?.CAD;if(rate){setEdFxRate(rate);setEdFxOverride(String(rate.toFixed(4)));}else{setEdFxError("Rate unavailable");setEdFxRate(null);}})
+    fetchUsdCad(ed.expectedDate)
+      .then(rate=>{setEdFxRate(rate);setEdFxOverride(String(rate.toFixed(4)));})
       .catch(()=>setEdFxError("Could not fetch rate"))
       .finally(()=>setEdFxLoading(false));
   },[editId,ed.expectedDate,ed.currency]);
@@ -1145,13 +1155,8 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
   useEffect(()=>{
     if(f.currency!=="USD") return;
     setFxLoading(true);setFxError(null);
-    fetch(`https://api.frankfurter.app/${f.date}?from=USD&to=CAD`)
-      .then(r=>r.json())
-      .then(d=>{
-        const rate=d?.rates?.CAD;
-        if(rate){setFxRate(rate);setFxOverride(String(rate.toFixed(4)));}
-        else{setFxError("Rate unavailable");setFxRate(null);}
-      })
+    fetchUsdCad(f.date)
+      .then(rate=>{setFxRate(rate);setFxOverride(String(rate.toFixed(4)));})
       .catch(()=>setFxError("Could not fetch rate"))
       .finally(()=>setFxLoading(false));
   },[f.date,f.currency,type]);
