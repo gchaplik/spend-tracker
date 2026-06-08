@@ -1003,18 +1003,48 @@ function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
 
 function RecurringForm({title,type,cats,onSaveMultiple}){
   const initCat=cats[0]||"Other";
-  const [f,setF]=useState({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12"});
+  const [f,setF]=useState({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12",currency:"CAD"});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [fxRate,setFxRate]=useState(null);   // null = not fetched yet
+  const [fxLoading,setFxLoading]=useState(false);
+  const [fxError,setFxError]=useState(null);
+  const [fxOverride,setFxOverride]=useState("");  // manual override
+
+  // Fetch historical USD→CAD rate whenever date or currency changes
+  useEffect(()=>{
+    if(type!=="income"||f.currency!=="USD") return;
+    setFxLoading(true);setFxError(null);
+    fetch(`https://api.frankfurter.app/${f.date}?from=USD&to=CAD`)
+      .then(r=>r.json())
+      .then(d=>{
+        const rate=d?.rates?.CAD;
+        if(rate){setFxRate(rate);setFxOverride(String(rate.toFixed(4)));}
+        else{setFxError("Rate unavailable");setFxRate(null);}
+      })
+      .catch(()=>setFxError("Could not fetch rate"))
+      .finally(()=>setFxLoading(false));
+  },[f.date,f.currency,type]);
+
   const recurring=f.recurrence!=="once";
   const count=recurring?Math.max(1,parseInt(f.occurrences)||1):1;
   const amtNum=parseFloat(f.amount)||0;
+  const isUSD=type==="income"&&f.currency==="USD";
+  const effectiveRate=parseFloat(fxOverride)||fxRate||1;
+  const cadAmt=isUSD?+(amtNum*effectiveRate).toFixed(2):amtNum;
+
   const submit=()=>{
     if(!f.merchant.trim()||!f.amount) return;
-    const base=type==="expense"?{type:"expense",merchant:f.merchant.trim(),amount:amtNum,category:f.category,note:f.note,hasReceipt:false}:{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),amount:amtNum,note:f.note};
+    const base=type==="expense"
+      ?{type:"expense",merchant:f.merchant.trim(),amount:amtNum,category:f.category,note:f.note,hasReceipt:false}
+      :{type:"income",merchant:f.merchant.trim(),source:f.merchant.trim(),
+        amount:cadAmt,
+        ...(isUSD?{originalAmountUSD:amtNum,fxRate:effectiveRate,fxDate:f.date}:{}),
+        note:f.note};
     const dates=recurring?buildDates(f.date,f.recurrence,count):[f.date];
     const gid=recurring?uid():undefined;
     onSaveMultiple(dates.map(date=>({...base,id:uid(),date,...(gid?{groupId:gid,cadence:f.recurrence}:{})})));
-    setF({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12"});
+    setF({merchant:"",amount:"",date:today(),category:initCat,note:"",recurrence:"once",occurrences:"12",currency:"CAD"});
+    setFxRate(null);setFxOverride("");
   };
   const lbl=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
   return (
@@ -1022,14 +1052,60 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>{title}</h2>
       <div style={CA}>
         <Fld label={type==="income"?"Source":"Merchant / Description"}><input style={IS} value={f.merchant} onChange={e=>set("merchant",e.target.value)} placeholder={type==="income"?"e.g. Salary, Freelance":"e.g. Walmart, Netflix, Rent"}/></Fld>
-        <Fld label="Amount per payment ($)"><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
+        {/* Currency selector — income only */}
+        {type==="income"&&(
+          <Fld label="Currency">
+            <div style={{display:"flex",gap:8}}>
+              {["CAD","USD"].map(cur=>(
+                <button key={cur} onClick={()=>set("currency",cur)} style={{flex:1,padding:"8px 0",borderRadius:8,border:`2px solid ${f.currency===cur?"#0284C7":"#e2e8f0"}`,background:f.currency===cur?"#f0f9ff":"#fff",color:f.currency===cur?"#0284C7":"#64748b",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"}}>
+                  {cur==="CAD"?"🍁 CAD":"🇺🇸 USD"}
+                </button>
+              ))}
+            </div>
+          </Fld>
+        )}
+        <Fld label={`Amount per payment (${f.currency})`}><input style={IS} type="number" value={f.amount} onChange={e=>set("amount",e.target.value)} placeholder="0.00"/></Fld>
         <Fld label={recurring?"Start Date":"Date"}><input style={IS} type="date" value={f.date} onChange={e=>set("date",e.target.value)}/></Fld>
         {type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={f.category} onChange={e=>set("category",e.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}
         <Fld label="Recurrence"><select style={{...IS,background:"#fff"}} value={f.recurrence} onChange={e=>set("recurrence",e.target.value)}>{CADENCES.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></Fld>
         {recurring&&<Fld label="Number of payments"><input style={IS} type="number" min="2" max="120" value={f.occurrences} onChange={e=>set("occurrences",e.target.value)}/></Fld>}
-        <Fld label="Note (optional)" style={{marginBottom:recurring&&amtNum?12:16}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
-        {recurring&&amtNum>0&&<div style={{background:type==="expense"?"linear-gradient(135deg,#fffbeb,#fef3c7)":"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid "+(type==="expense"?"#fde68a":"#7dd3fc"),borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:type==="expense"?"#92400e":"#0369a1",fontWeight:500}}>{count} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
-        <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
+        <Fld label="Note (optional)" style={{marginBottom:12}}><input style={IS} value={f.note} onChange={e=>set("note",e.target.value)} placeholder="Optional"/></Fld>
+        {/* FX conversion panel */}
+        {isUSD&&amtNum>0&&(
+          <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.05em"}}>USD → CAD Conversion</span>
+              {fxLoading&&<span style={{fontSize:11,color:"#0284C7"}}>Fetching rate…</span>}
+              {fxError&&<span style={{fontSize:11,color:"#dc2626"}}>{fxError}</span>}
+              {!fxLoading&&!fxError&&fxRate&&<span style={{fontSize:11,color:"#0369a1"}}>Rate for {f.date}</span>}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>1 USD =</span>
+              <input
+                style={{...IS,width:90,padding:"5px 8px",fontSize:13}}
+                type="number"
+                step="0.0001"
+                value={fxOverride}
+                onChange={e=>setFxOverride(e.target.value)}
+                placeholder={fxLoading?"…":"rate"}
+              />
+              <span style={{fontSize:12,color:"#0369a1",flexShrink:0}}>CAD</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:13,color:"#0369a1"}}>
+                ${amtNum.toFixed(2)} USD × {effectiveRate.toFixed(4)}
+              </span>
+              <span style={{fontSize:18,fontWeight:800,color:"#0284C7",letterSpacing:"-0.5px"}}>
+                {fmt(cadAmt)} CAD
+              </span>
+            </div>
+            {recurring&&<div style={{fontSize:12,color:"#0369a1",marginTop:6,fontWeight:500}}>
+              {count} payments = <strong>{fmt(cadAmt*count)} CAD</strong> total
+            </div>}
+          </div>
+        )}
+        {!isUSD&&recurring&&amtNum>0&&<div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"11px 14px",marginBottom:16,fontSize:13,color:"#0369a1",fontWeight:500}}>{count} payments of {fmt(amtNum)} = <strong style={{fontWeight:800}}>{fmt(amtNum*count)}</strong> — {lbl.toLowerCase()}, starting {f.date}</div>}
+        <Btn onClick={submit} disabled={!f.merchant.trim()||!f.amount||(isUSD&&!effectiveRate)} full>{recurring?"Log "+count+" Entries":"Add "+title}</Btn>
       </div>
     </div>
   );
@@ -1172,7 +1248,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
                 ?<div style={{padding:"12px 0"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}><Fld label="Merchant / Source"><input style={IS} value={ed.merchant||ed.source||""} onChange={e=>setEd(d=>({...d,merchant:e.target.value,source:e.target.value}))}/></Fld><Fld label="Amount ($)"><input style={IS} type="number" value={ed.amount||""} onChange={e=>setEd(d=>({...d,amount:e.target.value}))}/></Fld><Fld label="Date"><input style={IS} type="date" value={ed.date||""} onChange={e=>setEd(d=>({...d,date:e.target.value}))}/></Fld>{ed.type==="expense"&&<Fld label="Category"><select style={{...IS,background:"#fff"}} value={ed.category||cats[0]} onChange={e=>setEd(d=>({...d,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></Fld>}<Fld label="Note"><input style={IS} value={ed.note||""} onChange={e=>setEd(d=>({...d,note:e.target.value}))}/></Fld></div><div style={{display:"flex",gap:8}}><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditId(null)}>Cancel</Btn></div></div>
                 :<div style={{display:"flex",alignItems:"center",padding:"9px 0",gap:10,background:selectMode&&selected.has(t.id)?"#eff6ff":"transparent",borderRadius:4}}>
                   {selectMode&&<input type="checkbox" checked={selected.has(t.id)} onChange={()=>toggleSelect(t.id)} style={{width:15,height:15,cursor:"pointer",flexShrink:0}}/>}
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.merchant||t.source}</div><div style={{fontSize:11,color:"#9ca3af"}}>{t.date} · {t.type==="income"?"Income":t.category||"Uncategorized"}{t.note?" · "+t.note:""}{t.originalAmountUSD?" · 🇺🇸 $"+t.originalAmountUSD.toFixed(2)+" USD @ "+t.fxRate?.toFixed(4):""}</div></div>
                   <div style={{fontWeight:600,fontSize:13,color:t.type==="income"?"#059669":"#111827",whiteSpace:"nowrap"}}>{t.type==="income"?"+":""}{fmt(t.amount)}</div>
                   {!selectMode&&<div style={{display:"flex",gap:5,flexShrink:0}}>{rBtn(()=>startEdit(t),"#e5e7eb","#6b7280","Edit")}{rBtn(()=>del(t.id),"#fecaca","#dc2626","Delete")}</div>}
                 </div>}
