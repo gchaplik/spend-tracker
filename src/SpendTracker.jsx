@@ -5,6 +5,20 @@ import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/f
 import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
 import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const T={
+  bg:"#f9f9f9",surface:"#ffffff",overlay:"#f2f2f2",
+  border:"#e4e4e4",
+  tx1:"#111111",tx2:"#555555",tx3:"#aaaaaa",
+  accent:"#111111",accentBg:"#f2f2f2",accentMid:"#888888",
+  green:"#059669",greenBg:"#f0fdf4",
+  red:"#dc2626",redBg:"#fef2f2",
+  amber:"#d97706",amberBg:"#fffbeb",
+  shadow:"0 1px 3px rgba(0,0,0,0.07),0 1px 2px rgba(0,0,0,0.04)",
+  shadowMd:"0 4px 16px rgba(0,0,0,0.09)",
+  r:8,rCard:12,
+};
+
 // ── Auth / crypto helpers ─────────────────────────────────────────────────────
 function _b64e(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
 function _b64d(str){return Uint8Array.from(atob(str),c=>c.charCodeAt(0));}
@@ -84,22 +98,22 @@ async function extractReceipt(b64, mtype, cats) {
   return JSON.parse(text.replace(/```[\w]*/g,"").replace(/```/g,"").trim());
 }
 
-const IS={width:"100%",padding:"10px 13px",borderRadius:10,border:"1.5px solid #bae6fd",fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:"#f0f9ff",color:"#1E293B",transition:"border-color 0.15s,box-shadow 0.15s"};
-const CA={background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",padding:22,boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"};
+const IS={width:"100%",padding:"9px 12px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:T.surface,color:T.tx1,transition:"border-color 0.15s"};
+const CA={background:T.surface,borderRadius:T.rCard,border:"none",padding:20,boxShadow:T.shadow};
 
 function Fld({label,children,style}){
-  return <div style={{marginBottom:16,...style}}>{label&&<label style={{display:"block",fontSize:11,fontWeight:600,color:"#0369a1",marginBottom:6,letterSpacing:"0.04em",textTransform:"uppercase"}}>{label}</label>}{children}</div>;
+  return <div style={{marginBottom:14,...style}}>{label&&<label style={{display:"block",fontSize:11,fontWeight:500,color:T.tx2,marginBottom:5}}>{label}</label>}{children}</div>;
 }
 function Btn({children,onClick,v,disabled,full,sm,style}){
   const vv=v||"primary";
   const variants={
-    primary:{background:"linear-gradient(135deg,#0284C7 0%,#0369a1 100%)",color:"#fff",border:"none",boxShadow:"0 2px 10px rgba(2,132,199,0.35)"},
-    secondary:{background:"#f0f9ff",color:"#0369a1",border:"1.5px solid #bae6fd",boxShadow:"none"},
-    danger:{background:"#fff1f2",color:"#e11d48",border:"1.5px solid #fecdd3",boxShadow:"none"},
-    success:{background:"#f0fdf4",color:"#059669",border:"1.5px solid #bbf7d0",boxShadow:"none"},
+    primary:{background:T.accent,color:"#fff",border:"none",boxShadow:"none"},
+    secondary:{background:T.overlay,color:T.tx1,border:"1px solid "+T.border,boxShadow:"none"},
+    danger:{background:T.redBg,color:T.red,border:"1px solid #fecaca",boxShadow:"none"},
+    success:{background:T.greenBg,color:T.green,border:"1px solid #bbf7d0",boxShadow:"none"},
   };
   const s=variants[vv]||variants.primary;
-  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 13px":"10px 20px",borderRadius:10,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:600,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",letterSpacing:"0.01em",...s,...style}}>{children}</button>;
+  return <button onClick={onClick} disabled={!!disabled} style={{padding:sm?"5px 12px":"8px 16px",borderRadius:T.r,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:13,fontWeight:500,opacity:disabled?0.45:1,width:full?"100%":"auto",fontFamily:"inherit",...s,...style}}>{children}</button>;
 }
 
 function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
@@ -107,21 +121,21 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
   const confirmed=mExp.filter(e=>e.confirmed).length;
   const overdue=mExp.filter(e=>!e.confirmed&&e.expectedDate<today()).length;
   return (
-    <div style={{gridColumn:"1/-1",background:"#fff",borderRadius:18,border:"1px solid #e0f2fe",boxShadow:"0 1px 4px rgba(2,132,199,0.05),0 8px 24px rgba(2,132,199,0.07)"}}>
-      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",borderRadius:18}}>
+    <div style={{gridColumn:"1/-1",...CA}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:0,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",marginBottom:open?10:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Expected Income — {ml(month)}</span>
-          <span style={{fontSize:11,fontWeight:600,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
-          {overdue>0&&<span style={{fontSize:10,fontWeight:600,background:"#fee2e2",color:"#b91c1c",padding:"1px 8px",borderRadius:20}}>{overdue} overdue</span>}
+          <span style={{fontSize:11,fontWeight:500,color:T.tx3}}>Expected Income — {ml(month)}</span>
+          <span style={{fontSize:11,color:confirmed===mExp.length?GREEN:YELLOW}}>{confirmed}/{mExp.length} received</span>
+          {overdue>0&&<span style={{fontSize:10,color:T.red,background:T.redBg,padding:"1px 8px",borderRadius:99}}>{overdue} overdue</span>}
         </div>
-        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,lineHeight:1}}>{open?"▲":"▼"}</span>
+        <span style={{fontSize:13,color:T.tx3,lineHeight:1}}>{open?"▲":"▼"}</span>
       </button>
-      {/* Collapsed: compact name + button chips */}
+      {/* Collapsed */}
       {!open&&(
-        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:6}}>
           {mExp.map(e=>(
-            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,padding:"6px 10px 6px 12px",borderRadius:10,background:e.confirmed?"#f0fdf4":"#fffbeb",border:`1px solid ${e.confirmed?"#bbf7d0":"#fde68a"}`}}>
-              <span style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>{e.source}</span>
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,padding:"6px 10px 6px 12px",borderRadius:T.r,background:T.overlay}}>
+              <span style={{fontSize:12,color:T.tx1}}>{e.source}</span>
               {e.confirmed
                 ?<button onClick={()=>onRevert(e.id)} title="Click to revert" style={{width:22,height:22,borderRadius:"50%",background:"#d1fae5",border:"2px solid #059669",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:GREEN}}>✓</button>
                 :<button onClick={()=>onConfirm(e.id)} title="Mark as received" style={{width:22,height:22,borderRadius:"50%",background:"#fef3c7",border:"2px solid #d97706",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:YELLOW}}>?</button>}
@@ -131,11 +145,11 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
       )}
       {/* Expanded: full view with amounts */}
       {open&&(
-        <div style={{padding:"0 18px 12px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0 16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0 16px"}}>
           {mExp.map(e=>(
-            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #f0f9ff",gap:8}}>
+            <div key={e.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid "+T.border,gap:8}}>
               <div style={{minWidth:0,flex:1}}>
-                <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
+                <span style={{fontSize:12,fontWeight:500,color:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
                 {e.note&&<span style={{fontSize:10,color:"#94a3b8"}}>{e.note}</span>}
               </div>
               <span style={{fontSize:12,fontWeight:700,color:e.confirmed?GREEN:YELLOW,flexShrink:0}}>{fmt(e.amount)}</span>
@@ -156,25 +170,25 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
     <div style={{...CA,marginBottom:14}}>
       <button onClick={()=>setOpen(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em"}}>Bills Due — {ml(month)}</span>
-          <span style={{fontSize:11,fontWeight:600,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
-          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED,fontWeight:600}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
+          <span style={{fontSize:11,fontWeight:500,color:T.tx3}}>Bills Due — {ml(month)}</span>
+          <span style={{fontSize:11,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
+          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
         </div>
-        <span style={{fontSize:13,color:"#94a3b8",fontWeight:600,flexShrink:0}}>{open?"▲":"▼"}</span>
+        <span style={{fontSize:13,color:T.tx3,flexShrink:0}}>{open?"▲":"▼"}</span>
       </button>
       {open&&(
-        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+        <div style={{marginTop:10,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:6}}>
           {[...monthBills].sort((a,b)=>a.dueDay-b.dueDay).map(b=>{
             const paid=billPaid(b.id);
             return(
-              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 12px",borderRadius:10,background:paid?"#f0fdf4":"#fafafa",border:`1px solid ${paid?"#bbf7d0":"#f1f5f9"}`,cursor:"pointer",transition:"all 0.15s"}}>
+              <div key={b.id} onClick={()=>onToggleBill&&onToggleBill(b.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"7px 12px",borderRadius:T.r,background:paid?T.greenBg:T.overlay,cursor:"pointer",transition:"background 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                  <div style={{width:20,height:20,borderRadius:"50%",background:paid?"#d1fae5":"transparent",border:`2px solid ${paid?GREEN:"#e2e8f0"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    {paid&&<span style={{fontSize:10,color:GREEN}}>✓</span>}
+                  <div style={{width:18,height:18,borderRadius:"50%",background:paid?T.greenBg:"transparent",border:`1.5px solid ${paid?GREEN:T.border}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {paid&&<span style={{fontSize:9,color:GREEN}}>✓</span>}
                   </div>
-                  <span style={{fontSize:12,fontWeight:600,color:paid?"#94a3b8":"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
+                  <span style={{fontSize:12,color:paid?T.tx3:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
                 </div>
-                <span style={{fontSize:12,fontWeight:700,color:paid?"#94a3b8":RED,flexShrink:0}}>{fmt(b.amount)}</span>
+                <span style={{fontSize:12,fontWeight:500,color:paid?T.tx3:RED,flexShrink:0}}>{fmt(b.amount)}</span>
               </div>
             );
           })}
@@ -263,56 +277,56 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
     <div>
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:10}}>
-        <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px",color:"#1E293B"}}>Dashboard</h2>
-        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:13,background:"#fff",fontFamily:"inherit",color:"#1E293B",fontWeight:500}}>
+        <h2 style={{margin:0,fontSize:18,fontWeight:600,color:T.tx1}}>Dashboard</h2>
+        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"7px 12px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:13,background:T.surface,fontFamily:"inherit",color:T.tx1,fontWeight:400}}>
           {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
         </select>
       </div>
 
       {/* Hero — Net Position */}
-      <div style={{...CA,padding:"28px 32px",marginBottom:14,borderLeft:`4px solid ${actNet>=0?GREEN:RED}`,background:actNet>=0?"linear-gradient(135deg,#f0fdf4 0%,#fff 60%)":"linear-gradient(135deg,#fff1f2 0%,#fff 60%)"}}>
-        <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:10}}>Net Position · {ml(month)}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:24,flexWrap:"wrap"}}>
-          <div style={{fontSize:48,fontWeight:800,color:actNet>=0?GREEN:RED,letterSpacing:"-2px",lineHeight:1}}>{fmt(actNet)}</div>
-          <div style={{paddingBottom:8,display:"flex",flexDirection:"column",gap:4}}>
-            {netDelta&&<div style={{fontSize:12,fontWeight:600,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
-            {pendingExp>0&&<div style={{fontSize:12,color:"#94a3b8"}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:700}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
+      <div style={{...CA,padding:"24px 28px",marginBottom:12}}>
+        <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:8}}>Net Position · {ml(month)}</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:40,fontWeight:600,color:actNet>=0?GREEN:RED,lineHeight:1}}>{fmt(actNet)}</div>
+          <div style={{paddingBottom:6,display:"flex",flexDirection:"column",gap:3}}>
+            {netDelta&&<div style={{fontSize:12,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
+            {pendingExp>0&&<div style={{fontSize:12,color:T.tx3}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:600}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
           </div>
         </div>
       </div>
 
       {/* Net worth strip */}
       {(accounts.length>0||holdings.length>0)&&(
-        <div style={{...CA,padding:"12px 20px",marginBottom:14,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",flexShrink:0}}>Net Worth</div>
-          <div style={{fontSize:18,fontWeight:800,color:netWorth>=0?GREEN:RED,letterSpacing:"-0.4px"}}>{fmt(netWorth+(portfolioValue||0))}</div>
-          <div style={{fontSize:12,color:"#94a3b8",display:"flex",gap:14,flexWrap:"wrap"}}>
-            <span>Assets <span style={{color:GREEN,fontWeight:600}}>{fmt(totalAssets)}</span></span>
-            <span>Liabilities <span style={{color:RED,fontWeight:600}}>{fmt(totalLiab)}</span></span>
-            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:"#0284C7",fontWeight:600}}>{fmt(portfolioValue)}</span></span>}
+        <div style={{...CA,padding:"12px 18px",marginBottom:12,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,flexShrink:0}}>Net Worth</div>
+          <div style={{fontSize:18,fontWeight:600,color:netWorth>=0?GREEN:RED}}>{fmt(netWorth+(portfolioValue||0))}</div>
+          <div style={{fontSize:12,color:T.tx3,display:"flex",gap:14,flexWrap:"wrap"}}>
+            <span>Assets <span style={{color:GREEN,fontWeight:500}}>{fmt(totalAssets)}</span></span>
+            <span>Liabilities <span style={{color:RED,fontWeight:500}}>{fmt(totalLiab)}</span></span>
+            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:T.accent,fontWeight:500}}>{fmt(portfolioValue)}</span></span>}
           </div>
         </div>
       )}
       {/* Three stat cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Income</div>
-          <div style={{fontSize:28,fontWeight:800,color:GREEN,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(actualIncome)}</div>
-          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:12}}>
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Income</div>
+          <div style={{fontSize:26,fontWeight:600,color:GREEN,lineHeight:1}}>{fmt(actualIncome)}</div>
+          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
         </div>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Spending</div>
-          <div style={{fontSize:28,fontWeight:800,color:RED,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(spending)}</div>
-          {budgetTotal>0&&<div style={{fontSize:11,fontWeight:500,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
-          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,fontWeight:600,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
-          {vacSpend>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Spending</div>
+          <div style={{fontSize:26,fontWeight:600,color:RED,lineHeight:1}}>{fmt(spending)}</div>
+          {budgetTotal>0&&<div style={{fontSize:11,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
+          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
+          {vacSpend>0&&<div style={{fontSize:11,color:T.tx3,marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
         </div>
-        <div style={{...CA,padding:"20px 22px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Expected Income</div>
-          <div style={{fontSize:28,fontWeight:800,color:YELLOW,letterSpacing:"-0.7px",lineHeight:1}}>{fmt(totalExp)}</div>
+        <div style={{...CA,padding:"18px 20px"}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Expected Income</div>
+          <div style={{fontSize:26,fontWeight:600,color:YELLOW,lineHeight:1}}>{fmt(totalExp)}</div>
           {pendingExp>0
-            ?<div style={{fontSize:11,color:YELLOW,fontWeight:600,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
-            :mExp.length>0&&<div style={{fontSize:11,color:GREEN,fontWeight:600,marginTop:6}}>All received ✓</div>}
+            ?<div style={{fontSize:11,color:YELLOW,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
+            :mExp.length>0&&<div style={{fontSize:11,color:GREEN,marginTop:6}}>All received ✓</div>}
         </div>
       </div>
 
@@ -325,22 +339,22 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Goals strip */}
       {goals.length>0&&(
         <div style={{...CA,marginBottom:14,padding:"16px 20px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Savings Goals</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+          <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:10}}>Savings Goals</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
             {goals.map(g=>{
               const pct=g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1):0;
               return(
-                <div key={g.id} style={{padding:"10px 14px",borderRadius:10,background:"#fafafa",border:"1px solid #f1f5f9"}}>
+                <div key={g.id} style={{padding:"10px 14px",borderRadius:T.r,background:T.overlay}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                    <span style={{fontSize:16}}>{g.emoji}</span>
-                    <span style={{fontSize:12,fontWeight:600,color:"#1E293B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
+                    <span style={{fontSize:15}}>{g.emoji}</span>
+                    <span style={{fontSize:12,fontWeight:500,color:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</span>
                   </div>
-                  <div style={{height:5,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:5}}>
-                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s"}}/>
+                  <div style={{height:4,borderRadius:99,background:T.border,overflow:"hidden",marginBottom:5}}>
+                    <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?GREEN:T.accent,transition:"width 0.4s"}}/>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:11,fontWeight:600,color:g.color||"#0284C7"}}>{fmt(g.currentAmount)}</span>
-                    <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
+                    <span style={{fontSize:11,color:T.accent}}>{fmt(g.currentAmount)}</span>
+                    <span style={{fontSize:11,color:T.tx3}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
                   </div>
                 </div>
               );
@@ -352,29 +366,29 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div style={CA}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:"#1E293B"}}>Spending by Category</div>
-          {catData.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
+          <div style={{fontSize:13,fontWeight:500,marginBottom:14,color:T.tx1}}>Spending by Category</div>
+          {catData.length===0?<div style={{color:T.tx3,fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
             const pct=d.budget>0?Math.min(d.amount/d.budget,1):0;
             const over=d.budget>0&&d.amount>d.budget;
             const warn=d.budget>0&&!over&&d.amount/d.budget>=0.8;
             return(
-              <div key={d.name} style={{marginBottom:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7}}>
-                    <span style={{width:7,height:7,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
-                    <span style={{fontSize:12,fontWeight:500,color:"#374151"}}>{d.name}</span>
-                    {over&&<span style={{fontSize:9,fontWeight:700,color:RED,background:"#fee2e2",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>OVER</span>}
-                    {warn&&<span style={{fontSize:9,fontWeight:700,color:YELLOW,background:"#fef3c7",padding:"1px 6px",borderRadius:20,letterSpacing:"0.05em"}}>NEAR</span>}
+              <div key={d.name} style={{marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{width:6,height:6,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:12,color:T.tx2}}>{d.name}</span>
+                    {over&&<span style={{fontSize:10,color:RED,background:T.redBg,padding:"1px 6px",borderRadius:99}}>over</span>}
+                    {warn&&<span style={{fontSize:10,color:YELLOW,background:T.amberBg,padding:"1px 6px",borderRadius:99}}>near</span>}
                   </div>
-                  <div style={{display:"flex",alignItems:"baseline",gap:5}}>
-                    <span style={{fontSize:12,fontWeight:700,color:over?RED:"#1E293B"}}>{fmt(d.amount)}</span>
-                    {d.budget>0&&<span style={{fontSize:11,color:"#cbd5e1"}}>/ {fmt(d.budget)}</span>}
+                  <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+                    <span style={{fontSize:12,fontWeight:500,color:over?RED:T.tx1}}>{fmt(d.amount)}</span>
+                    {d.budget>0&&<span style={{fontSize:11,color:T.tx3}}>/ {fmt(d.budget)}</span>}
                   </div>
                 </div>
-                <div style={{height:4,borderRadius:99,background:"#f1f5f9",overflow:"hidden"}}>
+                <div style={{height:3,borderRadius:99,background:T.border,overflow:"hidden"}}>
                   {d.budget>0
-                    ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?"#f59e0b":COLORS[i%COLORS.length],transition:"width 0.4s ease"}}/>
-                    :<div style={{height:"100%",borderRadius:99,width:"100%",background:COLORS[i%COLORS.length]+"55"}}/>}
+                    ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?YELLOW:T.accent,transition:"width 0.4s ease"}}/>
+                    :<div style={{height:"100%",borderRadius:99,width:"100%",background:T.accentMid+"66"}}/>}
                 </div>
               </div>
             );
@@ -382,10 +396,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
         </div>
         <div style={CA}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
-            <div style={{display:"flex",background:"#f1f5f9",borderRadius:8,padding:3,gap:1}}>
+            <div style={{fontSize:13,fontWeight:500,color:T.tx1}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
+            <div style={{display:"flex",background:T.overlay,borderRadius:T.r,padding:3,gap:1}}>
               {[{k:"6mo",l:"6 Mo"},{ k:"year",l:curYear}].map(t=>(
-                <button key={t.k} onClick={()=>setChartTab(t.k)} style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",background:chartTab===t.k?"#fff":"transparent",color:chartTab===t.k?"#1E293B":"#94a3b8",boxShadow:chartTab===t.k?"0 1px 3px rgba(0,0,0,0.08)":"none",transition:"all 0.15s"}}>{t.l}</button>
+                <button key={t.k} onClick={()=>setChartTab(t.k)} style={{padding:"4px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:500,fontFamily:"inherit",background:chartTab===t.k?T.surface:"transparent",color:chartTab===t.k?T.tx1:T.tx3,boxShadow:chartTab===t.k?T.shadow:"none",transition:"all 0.15s"}}>{t.l}</button>
               ))}
             </div>
           </div>
@@ -395,10 +409,10 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9"/>
                 <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
                 <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
-                <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
-                <Line type="monotone" dataKey="Income" stroke={GREEN} strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="Expenses" stroke={RED} strokeWidth={2.5} dot={false}/>
-                <Line type="monotone" dataKey="Expected" stroke="#0284C7" strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
+                <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:T.rCard,border:"none",boxShadow:T.shadowMd,fontSize:12}}/>
+                <Line type="monotone" dataKey="Income" stroke={GREEN} strokeWidth={2} dot={false}/>
+                <Line type="monotone" dataKey="Expenses" stroke={RED} strokeWidth={2} dot={false}/>
+                <Line type="monotone" dataKey="Expected" stroke={T.accentMid} strokeWidth={1.5} strokeDasharray="4 3" dot={false}/>
               </LineChart>
             </ResponsiveContainer>
           ):(
@@ -413,7 +427,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false}/>
                   <XAxis dataKey="name" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
                   <YAxis tick={{fontSize:10,fill:"#94a3b8"}} tickFormatter={v=>"$"+v} axisLine={false} tickLine={false}/>
-                  <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"1px solid #e0f2fe",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",fontSize:12}}/>
+                  <Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:T.rCard,border:"none",boxShadow:T.shadowMd,fontSize:12}}/>
                   <Bar dataKey="Income" fill={GREEN} radius={[3,3,0,0]}/>
                   <Bar dataKey="Expenses" fill={RED} radius={[3,3,0,0]}/>
                 </BarChart>
@@ -421,9 +435,9 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
             </>
           )}
           <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
-            {[{c:GREEN,l:"Income"},{c:RED,l:"Expenses"},...(chartTab==="6mo"?[{c:"#0284C7",l:"Expected",dashed:true}]:[])].map(item=>(
-              <span key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#94a3b8"}}>
-                {item.dashed?<span style={{width:14,borderTop:"2px dashed #0284C7",display:"inline-block"}}/>:<span style={{width:8,height:8,borderRadius:"50%",background:item.c,display:"inline-block"}}/>}{item.l}
+            {[{c:GREEN,l:"Income"},{c:RED,l:"Expenses"},...(chartTab==="6mo"?[{c:T.accentMid,l:"Expected",dashed:true}]:[])].map(item=>(
+              <span key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.tx3}}>
+                {item.dashed?<span style={{width:14,borderTop:"2px dashed "+T.accentMid,display:"inline-block"}}/>:<span style={{width:7,height:7,borderRadius:"50%",background:item.c,display:"inline-block"}}/>}{item.l}
               </span>
             ))}
           </div>
@@ -433,7 +447,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {/* Budget Health */}
       {budgetHealth.length>0&&(
         <div style={{...CA,marginBottom:16}}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Budget Health — Last 6 Months</div>
+          <div style={{fontSize:13,fontWeight:500,marginBottom:14,color:T.tx1}}>Budget Health — Last 6 Months</div>
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead>
@@ -4756,254 +4770,205 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
     </div>
   );
 
+  // shared sub-styles
+  const S={background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,padding:"0 18px",marginBottom:10};
+  const SH={fontSize:10,fontWeight:600,color:T.tx3,textTransform:"uppercase",letterSpacing:"0.08em",padding:"12px 0 8px",borderBottom:"1px solid "+T.border,marginBottom:0};
+  const SR={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+T.bg};
+  const SRL={fontSize:13,fontWeight:500,color:T.tx1};
+  const SRS={fontSize:11,color:T.tx3,marginTop:1};
+  const Toggle=({on,onToggle})=>(
+    <button onClick={onToggle} style={{width:38,height:21,borderRadius:11,border:"none",cursor:"pointer",background:on?T.tx1:T.border,position:"relative",transition:"background .2s",flexShrink:0}}>
+      <span style={{position:"absolute",top:2,left:on?18:2,width:17,height:17,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}/>
+    </button>
+  );
+  const SmBtn=({onClick,label,red,disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"5px 12px",background:red?T.redBg:T.overlay,color:red?T.red:T.tx1,border:`1px solid ${red?"#fecaca":T.border}`,borderRadius:T.r,fontSize:12,fontWeight:500,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0,opacity:disabled?0.5:1}}>{label}</button>
+  );
+
   return(
-    <div>
-      <h2 style={{margin:"0 0 22px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Settings</h2>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,alignItems:"start"}}>
+    <div style={{maxWidth:1200}}>
+      <h2 style={{margin:"0 0 16px",fontSize:18,fontWeight:600,color:T.tx1}}>Settings</h2>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
-        {/* Left column */}
-        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* ── Row 1: left col (Account + Appearance) | Security ── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12,marginBottom:12,alignItems:"stretch"}}>
 
-          {/* Personal */}
-          <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Personal</div>
-            <Fld label="Your Name">
-              <input style={IS} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Gabe"/>
-            </Fld>
-            <Btn onClick={save} full>Save Settings</Btn>
+        {/* Left column stretches to match Security height */}
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+          {/* Account */}
+          <div style={S}>
+            <div style={SH}>Account</div>
+            <div style={{...SR,borderBottom:"none"}}>
+              <div style={SRL}>Name</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input style={{...IS,width:130,padding:"6px 10px",margin:0}} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Your name"/>
+                <SmBtn onClick={save} label="Save"/>
+              </div>
+            </div>
+            {authConfig?.email&&(
+              <div style={{...SR,borderBottom:"none"}}>
+                <div><div style={SRL}>Email</div><div style={SRS}>{authConfig.email}</div></div>
+              </div>
+            )}
           </div>
 
-          {/* Appearance */}
-          <div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:14}}>Appearance</div>
-
-            {/* Dark Mode */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:"#1E293B"}}>Dark Mode</div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:1}}>Switch to a dark colour scheme</div>
-              </div>
-              <button onClick={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.darkMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-                <span style={{position:"absolute",top:3,left:f.darkMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-              </button>
+          {/* Appearance — flex:1 fills remaining height */}
+          <div style={{...S,flex:1,display:"flex",flexDirection:"column"}}>
+            <div style={SH}>Appearance</div>
+            <div style={SR}>
+              <div><div style={SRL}>Dark Mode</div><div style={SRS}>Inverts colours across the app</div></div>
+              <Toggle on={f.darkMode} onToggle={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}}/>
             </div>
+            <div style={{...SR,borderBottom:"none"}}>
+              <div style={SRL}>Colour Blind Mode</div>
+              <select value={f.colorBlindMode} onChange={e=>{set("colorBlindMode",e.target.value);setTimeout(()=>onSave({...f,colorBlindMode:e.target.value}),50);}} style={{padding:"6px 10px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:12,fontFamily:"inherit",outline:"none",background:T.surface,color:T.tx1}}>
+                <option value="none">None</option>
+                <option value="deuteranopia">Deuteranopia</option>
+                <option value="protanopia">Protanopia</option>
+                <option value="tritanopia">Tritanopia</option>
+                <option value="achromatopsia">Greyscale</option>
+              </select>
+            </div>
+          </div>
 
-            {/* Color Blind Mode */}
-            <div>
-              <div style={{fontSize:12,fontWeight:600,color:"#1E293B",marginBottom:6}}>Colour Blind Mode</div>
-              <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                {[
-                  {v:"none",       l:"None",         d:"Default colours"},
-                  {v:"deuteranopia",l:"Deuteranopia", d:"Red-green (most common)"},
-                  {v:"protanopia",  l:"Protanopia",   d:"Red-green (red weak)"},
-                  {v:"tritanopia",  l:"Tritanopia",   d:"Blue-yellow"},
-                  {v:"achromatopsia",l:"Greyscale",   d:"Full colour blindness"},
-                ].map(({v,l,d})=>(
-                  <label key={v} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"7px 10px",borderRadius:8,background:f.colorBlindMode===v?"#eff6ff":"transparent",border:f.colorBlindMode===v?"1px solid #bae6fd":"1px solid transparent",transition:"all .15s"}}>
-                    <input type="radio" name="colorBlind" value={v} checked={f.colorBlindMode===v} onChange={()=>{set("colorBlindMode",v);setTimeout(()=>onSave({...f,colorBlindMode:v}),50);}} style={{accentColor:"#0284C7"}}/>
+        </div>{/* end left column */}
+
+        {/* Security */}
+        {authConfig!==undefined
+          ? <SecuritySettingsSection authConfig={authConfig} onSave={onSaveAuthConfig} compact/>
+          : <div/>}
+
+      </div>{/* end row 1 */}
+
+      {/* ── Row 2: AI | App ── */}
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,alignItems:"stretch"}}>
+
+      {/* AI */}
+      <div style={S}>
+        <div style={SH}>AI</div>
+
+        {/* Gemini */}
+        <div style={{borderBottom:"1px solid #f1f5f9"}}>
+          <div onClick={()=>setGeminiExpanded(p=>{onSave({...f,geminiExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+            <div><div style={SRL}>Gemini API Key</div><div style={SRS}>Receipt scanning and Jarvis AI</div></div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking...</span>
+               :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Active{geminiKeySource==="env"?" (env)":""}</span>
+               :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600}}>Not set</span>}
+              <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:geminiExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+            </div>
+          </div>
+          {geminiExpanded&&(
+            <div style={{padding:"4px 0 14px"}}>
+              {!geminiKeySet?(
+                <>
+                  <input type="password" style={{...IS,letterSpacing:geminiKeyInput?"0.15em":"normal",fontFamily:geminiKeyInput?"monospace":"inherit",marginBottom:8}} value={geminiKeyInput} onChange={e=>setGeminiKeyInput(e.target.value)} placeholder="AIza..." autoComplete="off" spellCheck={false}/>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={saveGeminiKey} disabled={geminiSaving||!geminiKeyInput.trim()} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||!geminiKeyInput.trim()?0.5:1}}>{geminiSaving?"Saving...":"Save Key"}</button>
+                  </div>
+                </>
+              ):(
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{flex:1,fontSize:12,color:"#94a3b8",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 12px",letterSpacing:"0.2em",fontFamily:"monospace"}}>{"•".repeat(24)}</div>
+                  <SmBtn onClick={resetGeminiKey} label="Remove" red disabled={geminiSaving||geminiKeySource==="env"}/>
+                </div>
+              )}
+              {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px"}}>{geminiMsg.text}</div>}
+              <div style={{marginTop:8,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
+            </div>
+          )}
+        </div>
+
+        {/* Ollama */}
+        <div>
+          <div onClick={()=>setOllamaExpanded(p=>{onSave({...f,ollamaExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+            <div><div style={SRL}>Local AI (Ollama)</div><div style={SRS}>Runs entirely on your machine</div></div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {ollamaStatus==="ok"&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Connected</span>}
+              {ollamaStatus==="error"&&<span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>Unreachable</span>}
+              <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:ollamaExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+            </div>
+          </div>
+          {ollamaExpanded&&(
+            <div style={{padding:"4px 0 14px",display:"flex",flexDirection:"column",gap:10}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Server URL</div>
+                <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
+              </div>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Model</div>
+                <input style={IS} value={f.ollamaModel} onChange={e=>set("ollamaModel",e.target.value)} placeholder="phi3:mini"/>
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Recommended: <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>phi3:mini</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>llama3.2:3b</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>mistral:7b</code></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:8,border:"1px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>{testing?"Testing...":"Test Connection"}</button>
+                <SmBtn onClick={save} label="Save"/>
+              </div>
+              {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"8px 12px"}}>✓ Ollama is running and reachable</div>}
+              {ollamaStatus==="error"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  <div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px"}}>Could not reach Ollama — install it first</div>
+                  <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
                     <div>
-                      <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>{l}</div>
-                      <div style={{fontSize:10,color:"#94a3b8"}}>{d}</div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>macOS / Linux</div>
+                      <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
                     </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Developer Access */}
-          <div style={{...CA,background:f.devMode?"linear-gradient(135deg,#fefce8,#fef9c3)":"#fff",border:f.devMode?"1px solid #fde047":"1px solid #e2e8f0"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Developer Access</div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Unlocks the Data Model editor tab</div>
-              </div>
-              <button onClick={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}} style={{width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",background:f.devMode?"#0284C7":"#cbd5e1",position:"relative",transition:"background .2s",flexShrink:0}}>
-                <span style={{position:"absolute",top:3,left:f.devMode?22:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
-              </button>
-            </div>
-            {f.devMode&&<div style={{fontSize:11,color:"#854d0e",background:"#fef9c3",border:"1px solid #fde047",borderRadius:8,padding:"7px 10px"}}>Dev mode enabled — Data Model tab is now visible in the nav.</div>}
-          </div>
-
-        </div>
-
-        {/* Right column — Gemini + Ollama */}
-        <div style={{display:"flex",flexDirection:"column",gap:16}}>
-
-          {/* Gemini API Key */}
-          <div style={{...CA,border:geminiKeySet?"1px solid #bbf7d0":"1px solid #e2e8f0",background:geminiKeySet?"linear-gradient(135deg,#f0fdf4,#f7fffe)":"#fff"}}>
-            <div onClick={()=>setGeminiExpanded(p=>{onSave({...f,geminiExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:geminiExpanded?4:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Gemini API Key</div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {geminiKeySet===null?<span style={{fontSize:11,color:"#94a3b8"}}>checking…</span>
-                 :geminiKeySet?<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Active{geminiKeySource==="env"?" (env)":""}</span>
-                 :<span style={{fontSize:11,color:"#f59e0b",fontWeight:600,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"2px 8px"}}>Not set</span>}
-                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:geminiExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
-              </div>
-            </div>
-            {geminiExpanded&&<>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.6}}>Used for receipt scanning and Jarvis AI. Keys are stored server-side and never exposed to the browser.</div>
-            {!geminiKeySet&&<>
-              <Fld label="Paste your key">
-                <input
-                  type="password"
-                  style={{...IS,letterSpacing:geminiKeyInput?"0.15em":"normal",fontFamily:geminiKeyInput?"monospace":"inherit"}}
-                  value={geminiKeyInput}
-                  onChange={e=>setGeminiKeyInput(e.target.value)}
-                  placeholder="AIza…"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </Fld>
-              <div style={{display:"flex",gap:8,marginTop:4}}>
-                <button onClick={saveGeminiKey} disabled={geminiSaving||!geminiKeyInput.trim()} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:geminiSaving||!geminiKeyInput.trim()?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||!geminiKeyInput.trim()?0.5:1}}>
-                  {geminiSaving?"Saving…":"Save Key"}
-                </button>
-              </div>
-            </>}
-            {geminiKeySet&&<div style={{display:"flex",gap:8,marginTop:4}}>
-              <div style={{flex:1,fontSize:12,color:"#64748b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"8px 12px",letterSpacing:"0.2em",fontFamily:"monospace"}}>
-                {"•".repeat(32)}
-              </div>
-              <button onClick={resetGeminiKey} disabled={geminiSaving||geminiKeySource==="env"} title={geminiKeySource==="env"?"Key comes from .env file — remove GEMINI_API_KEY from .env to reset":""} style={{padding:"8px 14px",borderRadius:10,border:"1.5px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:geminiSaving||geminiKeySource==="env"?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:geminiSaving||geminiKeySource==="env"?0.5:1,whiteSpace:"nowrap",flexShrink:0}}>
-                {geminiSaving?"…":"Reset Key"}
-              </button>
-            </div>}
-            {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px",fontWeight:500}}>
-              {geminiMsg.type==="ok"?"✓ ":"✗ "}{geminiMsg.text}
-            </div>}
-            <div style={{marginTop:10,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
-            </>}
-          </div>
-
-          <div style={CA}>
-            <div onClick={()=>setOllamaExpanded(p=>{onSave({...f,ollamaExpanded:!!p?false:true});return !p;})} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:ollamaExpanded?4:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>Local AI (Ollama)</div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {ollamaStatus==="ok"&&<span style={{fontSize:11,color:"#059669",fontWeight:600,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,padding:"2px 8px"}}>✓ Connected</span>}
-                <span style={{fontSize:12,color:"#94a3b8",transition:"transform .2s",display:"inline-block",transform:ollamaExpanded?"rotate(0deg)":"rotate(-90deg)"}}>▾</span>
-              </div>
-            </div>
-            {ollamaExpanded&&<>
-            <div style={{fontSize:11,color:"#64748b",marginTop:4,marginBottom:14,lineHeight:1.6}}>All processing runs on your machine. Your financial data never leaves this device.</div>
-
-            <Fld label="Ollama URL">
-              <input style={IS} value={f.ollamaUrl} onChange={e=>set("ollamaUrl",e.target.value)} placeholder="http://localhost:11434"/>
-            </Fld>
-            <Fld label="Model">
-              <input style={IS} value={f.ollamaModel} onChange={e=>set("ollamaModel",e.target.value)} placeholder="phi3:mini"/>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:4}}>Recommended: <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>phi3:mini</code> (fast, 3.8B) · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>llama3.2:3b</code> · <code style={{background:"#f1f5f9",padding:"1px 4px",borderRadius:3}}>mistral:7b</code></div>
-            </Fld>
-            <div style={{display:"flex",gap:8,marginTop:4,marginBottom:12}}>
-              <button onClick={testOllama} disabled={testing} style={{flex:1,padding:"8px",borderRadius:10,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:testing?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:testing?0.6:1}}>
-                {testing?"Testing…":"Test Connection"}
-              </button>
-              <Btn onClick={save}>Save</Btn>
-            </div>
-            {ollamaStatus==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"7px 12px",fontWeight:500}}>✓ Ollama is running and reachable</div>}
-            {ollamaStatus==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"7px 12px"}}>✗ Could not reach Ollama — see install steps below</div>}
-            </>}
-          </div>
-
-          {/* Install instructions — hidden once Ollama connects */}
-          {!ollamaStatus&&<div style={CA}>
-            <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:12}}>Install Ollama</div>
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>macOS / Linux</div>
-                <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
-                <div style={{fontSize:11,color:"#94a3b8"}}>Or download from <a href="https://ollama.ai" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai</a></div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Windows</div>
-                <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Download the installer from <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai/download</a> and run it.</div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Pull a model (after installing)</div>
-                <CodeBlock cmd="ollama pull phi3:mini"/>
-                <CodeBlock cmd="ollama pull llama3.2:3b"/>
-                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>phi3:mini is ~2.3GB and runs well on most machines. llama3.2:3b is ~2.0GB and slightly stronger at reasoning.</div>
-              </div>
-
-              <div>
-                <div style={{fontSize:11,fontWeight:600,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Start Ollama (if not auto-started)</div>
-                <CodeBlock cmd="ollama serve"/>
-              </div>
-
-            </div>
-          </div>}
-        </div>
-
-      </div>
-
-      {/* ── App Update ─────────────────────────────────────────────────── */}
-      {isElectron&&(
-        <div style={{background:"#fff",borderRadius:12,padding:"20px 24px",boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginTop:20}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:2}}>App Update</div>
-          <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>Choose how to update the app.</div>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-
-            {/* ── Local ── */}
-            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>Local</div>
-              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Rebuild from your local source code changes. App quits, updates, and relaunches.</div>
-              <button
-                onClick={triggerLocalUpdate}
-                disabled={localStatus==='building'}
-                style={{width:"100%",padding:"8px 0",borderRadius:7,background:localStatus==='building'?"#94a3b8":localStatus==='error'?"#dc2626":"#0f172a",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:localStatus==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
-              >
-                {localStatus==='building'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Building…</>
-                  :localStatus==='error'?'↺ Retry':'Build & Install'}
-              </button>
-              {localLog.length>0&&(
-                <div style={{marginTop:10,background:"#0f172a",borderRadius:7,padding:"8px 12px",maxHeight:130,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6}}>
-                  {localLog.map((l,i)=><div key={i} style={{color:l.startsWith('Error')?'#f87171':l.includes('✓')||l.includes('built')||l.includes('✅')?"#4ade80":"#94a3b8"}}>{l}</div>)}
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Windows — <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>ollama.ai/download</a></div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Pull a model</div>
+                      <CodeBlock cmd="ollama pull phi3:mini"/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"#64748b",marginBottom:4}}>Start server</div>
+                      <CodeBlock cmd="ollama serve"/>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
-
-            {/* ── GitHub ── */}
-            <div style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"16px"}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:4}}>GitHub</div>
-              <div style={{fontSize:11,color:"#64748b",marginBottom:12,lineHeight:1.5}}>Check GitHub Releases for a new published version and download it in the background.</div>
-              <button
-                onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub}
-                disabled={ghStatus==='checking'||ghStatus==='downloading'}
-                style={{width:"100%",padding:"8px 0",borderRadius:7,background:ghStatus==='checking'||ghStatus==='downloading'?"#94a3b8":ghStatus==='ready'?"#16a34a":ghStatus==='error'?"#dc2626":"#0284C7",color:"#fff",border:"none",fontWeight:700,fontSize:12,cursor:(ghStatus==='checking'||ghStatus==='downloading')?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}
-              >
-                {ghStatus==='checking'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Checking…</>
-                  :ghStatus==='downloading'
-                  ?<><span style={{display:"inline-block",width:11,height:11,border:"2px solid rgba(255,255,255,0.35)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>Downloading…</>
-                  :ghStatus==='ready'?`Restart to install v${ghVersion}`
-                  :ghStatus==='up-to-date'?'✓ Up to date'
-                  :ghStatus==='error'?'↺ Retry'
-                  :'Check for Updates'}
-              </button>
-              {ghStatus==='up-to-date'&&<div style={{marginTop:8,fontSize:11,color:"#16a34a"}}>You're on the latest version.</div>}
-              {ghStatus==='downloading'&&<div style={{marginTop:8,fontSize:11,color:"#0284C7"}}>Downloading v{ghVersion} in background…</div>}
-              {ghStatus==='error'&&<div style={{marginTop:8,fontSize:11,color:"#dc2626",wordBreak:"break-word"}}>{ghError||"Update check failed."}</div>}
-            </div>
-
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* ── Security ── */}
-      {authConfig!==undefined&&<SecuritySettingsSection authConfig={authConfig} onSave={onSaveAuthConfig}/>}
+      {/* ── App ─────────────────────────────────────────────────────────── */}
+      <div style={S}>
+        <div style={SH}>App</div>
+        <div style={SR}>
+          <div><div style={SRL}>Developer Mode</div><div style={SRS}>Unlocks the Data Model editor</div></div>
+          <Toggle on={f.devMode} onToggle={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}}/>
+        </div>
+        {isElectron&&<>
+          <div style={SR}>
+            <div><div style={SRL}>Update from Source</div><div style={SRS}>Rebuild and reinstall from local code</div></div>
+            <button onClick={triggerLocalUpdate} disabled={localStatus==='building'} style={{padding:"5px 13px",background:localStatus==='building'?"#f1f5f9":localStatus==='error'?"#fef2f2":"#f1f5f9",color:localStatus==='error'?"#dc2626":"#374151",border:`1px solid ${localStatus==='error'?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:localStatus==='building'?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+              {localStatus==='building'?<><span style={{width:10,height:10,border:"2px solid rgba(0,0,0,0.15)",borderTopColor:"#374151",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>Building...</>:localStatus==='error'?'Retry':'Build & Install'}
+            </button>
+          </div>
+          {localLog.length>0&&(
+            <div style={{background:"#0f172a",borderRadius:8,padding:"8px 12px",maxHeight:100,overflowY:"auto",fontFamily:"monospace",fontSize:10,lineHeight:1.6,marginBottom:8}}>
+              {localLog.map((l,i)=><div key={i} style={{color:l.startsWith('Error')?'#f87171':l.includes('✓')||l.includes('built')?"#4ade80":"#94a3b8"}}>{l}</div>)}
+            </div>
+          )}
+          <div style={{...SR,borderBottom:"none"}}>
+            <div><div style={SRL}>Check for Updates</div><div style={SRS}>Download from GitHub Releases</div></div>
+            <button onClick={ghStatus==='ready'?()=>window.electronUpdater.restartAndInstall():checkGithub} disabled={ghStatus==='checking'||ghStatus==='downloading'} style={{padding:"5px 13px",background:ghStatus==='ready'?"#f0fdf4":ghStatus==='error'?"#fef2f2":"#f1f5f9",color:ghStatus==='ready'?"#059669":ghStatus==='error'?"#dc2626":"#374151",border:`1px solid ${ghStatus==='ready'?"#bbf7d0":ghStatus==='error'?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:(ghStatus==='checking'||ghStatus==='downloading')?"not-allowed":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+              {ghStatus==='checking'||ghStatus==='downloading'?<><span style={{width:10,height:10,border:"2px solid rgba(0,0,0,0.15)",borderTopColor:"#374151",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>{ghStatus==='downloading'?`Downloading v${ghVersion}...`:"Checking..."}</>:ghStatus==='ready'?`Restart to install v${ghVersion}`:ghStatus==='up-to-date'?"Up to date":ghStatus==='error'?'Retry':'Check for Updates'}
+            </button>
+          </div>
+          {ghStatus==='error'&&<div style={{fontSize:11,color:"#dc2626",marginBottom:10,paddingLeft:2}}>{ghError||"Update check failed."}</div>}
+        </>}
+      </div>
 
+      </div>{/* end row 2 */}
     </div>
   );
 }
 
 // ── Security Settings Section (manage existing account) ───────────────────────
-function SecuritySettingsSection({authConfig,onSave}){
+function SecuritySettingsSection({authConfig,onSave,compact}){
   const AC=(authConfig&&typeof authConfig==="object"&&authConfig.pinHash)?authConfig:null;
   const [phase,setPhase]=useState("idle"); // idle | changePIN | totpSetup | changeEmail
   const [pinA,setPinA]=useState("");
@@ -5079,95 +5044,117 @@ function SecuritySettingsSection({authConfig,onSave}){
     <button onClick={onClick} disabled={disabled} style={{padding:"6px 14px",background:disabled?"#94a3b8":color,color:textColor,border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0}}>{label}</button>
   );
 
+  const SH2={fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",padding:"16px 0 10px",borderBottom:"1px solid #f1f5f9",marginBottom:0};
+  const SR2={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 0",borderBottom:"1px solid #f8fafc"};
+  const SRL2={fontSize:13,fontWeight:500,color:"#1e293b"};
+  const SRS2={fontSize:11,color:"#94a3b8",marginTop:1};
+  const SmBtn2=({onClick,label,red,disabled})=>(
+    <button onClick={onClick} disabled={disabled} style={{padding:"5px 13px",background:red?"#fef2f2":"#f1f5f9",color:red?"#dc2626":"#374151",border:`1px solid ${red?"#fecaca":"#e2e8f0"}`,borderRadius:7,fontSize:12,fontWeight:600,cursor:disabled?"default":"pointer",fontFamily:"inherit",flexShrink:0,opacity:disabled?0.5:1}}>{label}</button>
+  );
+
   if(!AC) return(
-    <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
-      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:6}}>Account Security</div>
-      <div style={{fontSize:12,color:"#64748b"}}>No account set up yet. You'll be prompted on next launch.</div>
+    <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"0 20px",marginBottom:16}}>
+      <div style={SH2}>Security</div>
+      <div style={{...SR2,borderBottom:"none"}}><div style={SRL2}>No account configured — you'll be prompted on next launch.</div></div>
     </div>
   );
 
   return(
-    <div style={{marginTop:20,background:"#fff",border:"1.5px solid #e2e8f0",borderRadius:12,padding:"18px 20px"}}>
-      <div style={{fontSize:13,fontWeight:700,color:"#1E293B",marginBottom:4}}>Account Security</div>
-      <div style={{fontSize:11,color:"#64748b",marginBottom:16}}>Manage your email, PIN, biometrics, and two-factor authentication.</div>
+    <div style={{background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,padding:"0 18px",marginBottom:0}}>
+      <div style={SH2}>Security</div>
+
       {/* Email */}
       {phase!=="changePIN"&&phase!=="totpSetup"&&(
-        <div style={{padding:"11px 14px",background:"#f8fafc",borderRadius:9,marginBottom:8}}>
-          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:6}}>Account Email</div>
+        <div style={SR2}>
+          <div>
+            <div style={SRL2}>Email</div>
+            <div style={SRS2}>{AC.email||"No email set"}</div>
+          </div>
           {phase==="changeEmail"?(
-            <div style={{display:"flex",gap:8}}>
-              <input type="email" placeholder="you@example.com" value={emailInput} onChange={e=>setEmailInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&emailInput.includes("@")&&(cfg({email:emailInput.trim()}),setPhase("idle"))} style={{flex:1,padding:"7px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
-              <button onClick={()=>{if(emailInput.includes("@")){cfg({email:emailInput.trim()});setPhase("idle");}}} style={{padding:"7px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save</button>
-              <button onClick={()=>setPhase("idle")} style={{padding:"7px 10px",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <input type="email" placeholder="you@example.com" value={emailInput} onChange={e=>setEmailInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&emailInput.includes("@")&&(cfg({email:emailInput.trim()}),setPhase("idle"))} style={{padding:"6px 10px",borderRadius:7,border:"1px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",width:180}}/>
+              <SmBtn2 onClick={()=>{if(emailInput.includes("@")){cfg({email:emailInput.trim()});setPhase("idle");}}} label="Save"/>
+              <SmBtn2 onClick={()=>setPhase("idle")} label="Cancel"/>
             </div>
           ):(
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <span style={{fontSize:12,color:AC.email?"#1e293b":"#94a3b8"}}>{AC.email||"No email set"}</span>
-              <button onClick={()=>{setEmailInput(AC.email||"");setPhase("changeEmail");}} style={{padding:"6px 14px",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{AC.email?"Change":"Add"}</button>
-            </div>
+            <SmBtn2 onClick={()=>{setEmailInput(AC.email||"");setPhase("changeEmail");}} label={AC.email?"Change":"Add"}/>
           )}
         </div>
       )}
 
-      {/* Change PIN */}
+      {/* PIN */}
       {phase==="changePIN"?(
-        <div style={{background:"#f8fafc",borderRadius:10,padding:14,marginBottom:10}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:10}}>Change PIN</div>
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            <input type="password" inputMode="numeric" placeholder="New PIN (4–6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
+        <div style={{padding:"12px 0",borderBottom:"1px solid #f8fafc"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:8}}>Change PIN</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:320}}>
+            <input type="password" inputMode="numeric" placeholder="New PIN (4-6 digits)" maxLength={6} value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))} style={IS2}/>
             <input type="password" inputMode="numeric" placeholder="Confirm new PIN" maxLength={6} value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))} style={IS2} onKeyDown={e=>e.key==="Enter"&&savePIN()}/>
             {pinErr&&<div style={{color:"#dc2626",fontSize:11}}>{pinErr}</div>}
             <div style={{display:"flex",gap:8}}>
-              <button onClick={savePIN} disabled={pinBusy} style={{flex:1,padding:"8px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinBusy?"Saving…":"Update PIN"}</button>
-              <button onClick={()=>{setPhase("idle");setPinA("");setPinB("");setPinErr("");}} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={savePIN} disabled={pinBusy} style={{flex:1,padding:"7px 0",background:"#0284C7",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{pinBusy?"Saving...":"Update PIN"}</button>
+              <button onClick={()=>{setPhase("idle");setPinA("");setPinB("");setPinErr("");}} style={{flex:1,padding:"7px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>
           </div>
         </div>
       ):(
-        <Row icon="" label="PIN" sub="Your unlock PIN (PBKDF2 secured)"
-          action={<Btn onClick={()=>setPhase("changePIN")} label="Change PIN"/>}/>
+        <div style={SR2}>
+          <div><div style={SRL2}>PIN</div><div style={SRS2}>PBKDF2 secured unlock PIN</div></div>
+          <SmBtn2 onClick={()=>setPhase("changePIN")} label="Change"/>
+        </div>
       )}
 
-      {/* Biometric */}
+      {/* Biometrics */}
       {phase!=="changePIN"&&(
-        <Row icon="" label="Biometrics" sub={bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"} subColor={bioStatus==="enrolled"?"#16a34a":undefined}
-          action={bioStatus==="enrolled"
-            ?<Btn onClick={()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("idle");}} label="Remove" color="#fee2e2" textColor="#dc2626"/>
-            :<Btn onClick={enrollBio} label={bioStatus==="enrolling"?"…":"Enroll"} disabled={bioStatus==="enrolling"}/>
-          }
-        />
+        <>
+          <div style={SR2}>
+            <div>
+              <div style={SRL2}>Biometrics</div>
+              <div style={{...SRS2,color:bioStatus==="enrolled"?"#16a34a":undefined}}>{bioStatus==="enrolled"?"Touch ID / Windows Hello active":"Not enrolled"}</div>
+            </div>
+            {bioStatus==="enrolled"
+              ?<SmBtn2 onClick={()=>{cfg({webauthnCredId:null,webauthnEnabled:false});setBioStatus("idle");}} label="Remove" red/>
+              :<SmBtn2 onClick={enrollBio} label={bioStatus==="enrolling"?"...":"Enroll"} disabled={bioStatus==="enrolling"}/>
+            }
+          </div>
+          {bioErr&&<div style={{fontSize:11,color:"#dc2626",paddingBottom:8,marginTop:-6}}>{bioErr}</div>}
+        </>
       )}
-      {bioErr&&<div style={{fontSize:11,color:"#dc2626",marginTop:-6,marginBottom:8,paddingLeft:4}}>{bioErr}</div>}
 
       {/* TOTP */}
       {phase==="totpSetup"?(
-        <div style={{background:"#f8fafc",borderRadius:10,padding:14,marginBottom:10}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:6}}>Set Up 2-Factor Authentication</div>
+        <div style={{padding:"12px 0",borderBottom:"1px solid #f8fafc"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:8}}>Set Up 2-Factor Authentication</div>
           <div style={{textAlign:"center",marginBottom:10}}>
             <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:8,border:"2px solid #e2e8f0"}}/>
             <div style={{marginTop:6,background:"#0f172a",borderRadius:6,padding:"6px 10px",fontFamily:"monospace",fontSize:11,color:"#a5f3fc",wordBreak:"break-all"}}>{totpSecret}</div>
           </div>
           <input placeholder="Enter 6-digit code to verify" maxLength={6} value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))} style={{...IS2,textAlign:"center",fontSize:18,letterSpacing:6,fontFamily:"monospace",marginBottom:8}} onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyAndSaveTOTP()}/>
           {totpErr&&<div style={{color:"#dc2626",fontSize:11,marginBottom:6}}>{totpErr}</div>}
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={verifyAndSaveTOTP} disabled={totpInput.length!==6} style={{flex:1,padding:"8px 0",background:totpInput.length===6?"#0284C7":"#94a3b8",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit"}}>Verify &amp; Enable</button>
-            <button onClick={()=>{setPhase("idle");setTotpInput("");setTotpErr("");}} style={{flex:1,padding:"8px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          <div style={{display:"flex",gap:8,maxWidth:320}}>
+            <button onClick={verifyAndSaveTOTP} disabled={totpInput.length!==6} style={{flex:1,padding:"7px 0",background:totpInput.length===6?"#0284C7":"#94a3b8",color:"#fff",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit"}}>Verify &amp; Enable</button>
+            <button onClick={()=>{setPhase("idle");setTotpInput("");setTotpErr("");}} style={{flex:1,padding:"7px 0",background:"#f1f5f9",color:"#374151",border:"none",borderRadius:7,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
       ):(
-        phase!=="changePIN"&&<Row icon="" label="Two-Factor Auth" sub={AC.totpEnabled?"Authenticator app active":"Not enabled"} subColor={AC.totpEnabled?"#16a34a":undefined}
-          action={AC.totpEnabled
-            ?<Btn onClick={()=>cfg({totpSecret:null,totpEnabled:false})} label="Disable" color="#fee2e2" textColor="#dc2626"/>
-            :<Btn onClick={()=>{setTotpInput("");setTotpErr("");setPhase("totpSetup");}} label="Set Up"/>
-          }
-        />
+        phase!=="changePIN"&&(
+          <div style={SR2}>
+            <div>
+              <div style={SRL2}>Two-Factor Auth</div>
+              <div style={{...SRS2,color:AC.totpEnabled?"#16a34a":undefined}}>{AC.totpEnabled?"Authenticator app active":"Not enabled"}</div>
+            </div>
+            {AC.totpEnabled
+              ?<SmBtn2 onClick={()=>cfg({totpSecret:null,totpEnabled:false})} label="Disable" red/>
+              :<SmBtn2 onClick={()=>{setTotpInput("");setTotpErr("");setPhase("totpSetup");}} label="Set Up"/>
+            }
+          </div>
+        )
       )}
 
       {/* Auto-lock */}
       {phase==="idle"&&(
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:"#f8fafc",borderRadius:9}}>
-          <div style={{fontSize:12,fontWeight:600,color:"#1e293b"}}>Auto-lock</div>
-          <select value={autoLock} onChange={e=>{const v=Number(e.target.value);setAutoLock(v);cfg({autoLockMinutes:v});}} style={{padding:"6px 10px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
+        <div style={{...SR2,borderBottom:"none"}}>
+          <div><div style={SRL2}>Auto-lock</div><div style={SRS2}>Lock after idle period</div></div>
+          <select value={autoLock} onChange={e=>{const v=Number(e.target.value);setAutoLock(v);cfg({autoLockMinutes:v});}} style={{padding:"6px 10px",borderRadius:7,border:"1px solid #e2e8f0",fontSize:12,fontFamily:"inherit",outline:"none",background:"#fff",color:"#1e293b"}}>
             <option value={0}>On launch only</option>
             <option value={1}>After 1 minute</option>
             <option value={5}>After 5 minutes</option>
@@ -6894,18 +6881,60 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
       <button
         onClick={()=>onSetOpen(!open)}
         title={open?"Close Jarvis":"Open Jarvis"}
-        style={{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:open?"#475569":"#0284C7",border:"none",cursor:"pointer",color:"#fff",fontSize:open?18:22,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 18px rgba(2,132,199,0.5)",zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
+        style={{position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:open?T.overlay:T.accent,border:open?"1px solid "+T.border:"none",cursor:"pointer",color:open?T.tx2:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:open?T.shadow:T.shadowMd,zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
         onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
         onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-      >{open?"✕":"AI"}</button>
+      >{open
+        ?<svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1={18} y1={6} x2={6} y2={18}/><line x1={6} y1={6} x2={18} y2={18}/></svg>
+        :<svg width={26} height={26} viewBox="0 0 32 32" fill="none">
+          {/* Neural / spark logo */}
+          <circle cx={16} cy={16} r={5} fill="rgba(255,255,255,0.95)"/>
+          <circle cx={16} cy={5} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={16} cy={27} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={5} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={27} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+          <circle cx={8.1} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={23.9} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={8.1} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <circle cx={23.9} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+          <line x1={16} y1={11} x2={16} y2={7.2} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={16} y1={21} x2={16} y2={24.8} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={11} y1={16} x2={7.2} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={21} y1={16} x2={24.8} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+          <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+          <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+        </svg>
+      }</button>
 
       {/* Panel */}
       {open&&(
-        <div style={{position:"fixed",bottom:92,right:24,width:390,maxHeight:550,borderRadius:18,background:"#fff",boxShadow:"0 10px 48px rgba(0,0,0,0.2)",zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
+        <div style={{position:"fixed",bottom:84,right:24,width:390,maxHeight:550,borderRadius:T.rCard,background:T.surface,boxShadow:T.shadowMd,zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease"}}>
 
           {/* Header */}
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"13px 16px 11px",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(135deg,#f8fafc,#eff6ff)",flexShrink:0}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:"#0284C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",flexShrink:0}}>AI</div>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"12px 16px 10px",borderBottom:"1px solid "+T.border,background:T.surface,flexShrink:0}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#0284C7,#6366f1)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <svg width={18} height={18} viewBox="0 0 32 32" fill="none">
+                <circle cx={16} cy={16} r={5} fill="rgba(255,255,255,0.95)"/>
+                <circle cx={16} cy={5} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={16} cy={27} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={5} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={27} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
+                <circle cx={8.1} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={23.9} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={8.1} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <circle cx={23.9} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
+                <line x1={16} y1={11} x2={16} y2={7.2} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={16} y1={21} x2={16} y2={24.8} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={11} y1={16} x2={7.2} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={21} y1={16} x2={24.8} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
+                <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+              </svg>
+            </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
               <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}</div>
@@ -6933,7 +6962,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
                     {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
                   </div>
                 )}
-                <div style={{maxWidth:"88%",background:m.role==="user"?"#0284C7":"#f1f5f9",color:m.role==="user"?"#fff":"#1e293b",padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
+                <div style={{maxWidth:"88%",background:m.role==="user"?T.accent:T.overlay,color:m.role==="user"?"#fff":T.tx1,padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
                   {m.text}
                 </div>
                 {m.widget&&<div style={{maxWidth:"100%",width:"88%",alignSelf:m.role==="user"?"flex-end":"flex-start"}}>{renderWidget(m.widget)}</div>}
@@ -7011,6 +7040,7 @@ function DevUpdateButton(){
 function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew, onSignOut }) {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [hoveredApp, setHoveredApp] = useState(null);
+  const [tooltip, setTooltip] = useState(null); // {label, y}
   const flyoutRef = useRef(null);
   const appsButtonRef = useRef(null);
   const flyoutTimer = useRef(null);
@@ -7019,12 +7049,6 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"DM", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
   const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom), ...devItems];
   const pinnedItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom && favourites.includes(n.k));
-
-  const badge = k => {
-    if (k==="expected" && pendingCount>0) return pendingCount;
-    if (k==="bills" && unpaidBillCount>0) return unpaidBillCount;
-    return null;
-  };
 
   const [flyoutTop, setFlyoutTop] = useState(0);
   const openFlyout = () => {
@@ -7037,143 +7061,139 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   };
   const closeFlyout = () => { flyoutTimer.current = setTimeout(()=>setFlyoutOpen(false), 120); };
 
-  const NavBtn = ({ item, indent=false }) => {
-    const b = badge(item.k);
+  // Render function (not a component) — avoids remount-on-rerender killing hover state
+  const navBtn = (item) => {
     const active = view === item.k;
     return (
       <button
+        key={item.k}
         onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
-        title={item.desc}
-        style={{
-          display:"flex", alignItems:"center", gap:10, width:"100%",
-          padding: indent ? "7px 14px 7px 20px" : "7px 14px",
-          borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500,
-          background: active ? "rgba(2,132,199,0.12)" : "transparent",
-          color: active ? "#0284C7" : "#334155",
-          textAlign:"left", fontFamily:"inherit", position:"relative",
-          transition:"background 0.12s, color 0.12s",
+        onMouseEnter={e => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setTooltip({ label: item.l, y: r.top + r.height / 2 });
+          if (!active) e.currentTarget.style.background = T.overlay;
         }}
-        onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(0,0,0,0.04)"; }}
-        onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}
-      >
-        <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>{item.icon}</span>
-        <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.l}</span>
-        {b && <span style={{ minWidth:16,height:16,borderRadius:8,background:item.k==="bills"?"#dc2626":"#06B6D4",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px",flexShrink:0 }}>{b}</span>}
-      </button>
+        onMouseLeave={e => {
+          setTooltip(null);
+          if (!active) e.currentTarget.style.background = "transparent";
+        }}
+        style={{
+          width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          fontFamily:"inherit", fontSize:16,
+          background: active ? T.accentBg : "transparent",
+          color: active ? T.accent : T.tx3,
+          borderLeft: active ? "3px solid "+T.accent : "3px solid transparent",
+          transition:"background 0.12s, color 0.12s",
+          flexShrink:0,
+        }}
+      >{item.icon}</button>
     );
   };
 
   return (
-    <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #e2e8f0", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none" }}>
-      {/* Logo */}
-      <div style={{ padding:"0 14px", height:56, display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid #f1f5f9", flexShrink:0 }}>
-        <div style={{ width:28, height:28, borderRadius:8, background:"#000000", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-          <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <polygon points="2,27 16,5 30,27" fill="#FFFFFF"/>
-            <rect x="2" y="27" width="28" height="2.5" rx="1" fill="#FFFFFF"/>
-          </svg>
+    <>
+      <div style={{ width:52, flexShrink:0, background:T.surface, display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, zIndex:30, userSelect:"none", boxShadow:"1px 0 0 "+T.border }}>
+        {/* Logo */}
+        <div style={{ height:52, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <div style={{ width:26, height:26, borderRadius:6, background:"#111", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+              <polygon points="2,27 16,5 30,27" fill="#fff"/>
+              <rect x="2" y="27" width="28" height="2.5" rx="1" fill="#fff"/>
+            </svg>
+          </div>
         </div>
-        <span style={{ fontWeight:800, fontSize:14, color:"#0f172a", letterSpacing:"-0.3px" }}>CashHeap</span>
-        <button onClick={onShowWhatsNew} title="What's new" style={{ marginLeft:"auto", background:"#f0f9ff", border:"1px solid #bae6fd", cursor:"pointer", padding:"3px 7px", borderRadius:12, fontSize:10, color:"#0284C7", fontFamily:"inherit", fontWeight:600, flexShrink:0, whiteSpace:"nowrap" }}>New</button>
-      </div>
 
-      {/* Scrollable nav */}
-      <div style={{ flex:1, overflowY:"auto", padding:"8px 6px", display:"flex", flexDirection:"column", gap:1 }}>
-        {/* Always-visible: Home + Insights */}
-        {NAV_ITEMS.filter(n=>n.alwaysShow).map(item=>(
-          <NavBtn key={item.k} item={item} />
-        ))}
+        {/* Top divider */}
+        <div style={{ height:1, background:T.border, marginBottom:4, flexShrink:0 }}/>
 
-        {/* Favourites */}
-        {pinnedItems.length > 0 && (
-          <>
-            <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"10px 14px 4px" }}>Favourites</div>
-            {pinnedItems.map(item=><NavBtn key={item.k} item={item} />)}
-          </>
-        )}
+        {/* Scrollable nav */}
+        <div style={{ flex:1, overflowY:"auto", padding:"4px 6px", display:"flex", flexDirection:"column", gap:2, alignItems:"center" }}>
+          {NAV_ITEMS.filter(n=>n.alwaysShow).map(item=>navBtn(item))}
 
-        {/* Applications flyout trigger */}
-        <div
-          ref={appsButtonRef}
-          onMouseEnter={openFlyout}
-          onMouseLeave={closeFlyout}
-          style={{ position:"relative", marginTop:4 }}
-        >
+          {pinnedItems.length > 0 && <>
+            <div style={{ width:24, height:1, background:T.border, margin:"4px 0" }}/>
+            {pinnedItems.map(item=>navBtn(item))}
+          </>}
+
+          {/* Apps button */}
+          <div style={{ width:24, height:1, background:T.border, margin:"4px 0" }}/>
           <button
-            style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"7px 14px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:500, background: flyoutOpen ? "rgba(2,132,199,0.08)" : "transparent", color: flyoutOpen ? "#0284C7" : "#334155", textAlign:"left", fontFamily:"inherit", transition:"background 0.12s" }}
-            onMouseEnter={e=>{ openFlyout(); e.currentTarget.style.background="rgba(2,132,199,0.08)"; e.currentTarget.style.color="#0284C7"; }}
-            onMouseLeave={e=>{ closeFlyout(); if(!flyoutOpen){ e.currentTarget.style.background="transparent"; e.currentTarget.style.color="#334155"; } }}
-          >
-            <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0, opacity:0.7 }}>▦</span>
-            <span style={{ flex:1 }}>Applications</span>
-            <span style={{ fontSize:11, opacity:0.5 }}>›</span>
-          </button>
-
-          {/* Flyout panel */}
-          {flyoutOpen && (
-            <div
-              ref={flyoutRef}
-              onMouseEnter={openFlyout}
-              onMouseLeave={closeFlyout}
-              style={{ position:"fixed", left:220, top:flyoutTop, background:"#fff", border:"1px solid #e2e8f0", borderRadius:12, boxShadow:"0 8px 32px rgba(15,23,42,0.14)", width:260, padding:"8px 6px", zIndex:40, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
-            >
-              <div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.07em", padding:"4px 12px 8px" }}>All Applications</div>
-              {appItems.map(item => {
-                const isFav = favourites.includes(item.k);
-                return (
-                  <div
-                    key={item.k}
-                    onMouseEnter={() => setHoveredApp(item.k)}
-                    onMouseLeave={() => setHoveredApp(null)}
-                    style={{ display:"flex", alignItems:"center", gap:4, borderRadius:8, padding:"2px 4px 2px 8px", background: hoveredApp===item.k ? "#f8fafc" : "transparent", transition:"background 0.1s" }}
-                  >
-                    <button
-                      onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
-                      style={{ display:"flex", alignItems:"center", gap:9, flex:1, padding:"6px 6px 6px 0", border:"none", background:"transparent", cursor:"pointer", fontSize:13, fontWeight: view===item.k ? 600 : 500, color: view===item.k ? "#0284C7" : "#1e293b", textAlign:"left", fontFamily:"inherit" }}
-                    >
-                      <span style={{ fontSize:13, width:18, textAlign:"center", flexShrink:0, opacity:0.6 }}>{item.icon}</span>
-                      <div style={{ flex:1 }}>
-                        <div style={{ lineHeight:1.3 }}>{item.l}</div>
-                        {hoveredApp===item.k && <div style={{ fontSize:11, color:"#64748b", marginTop:2, lineHeight:1.4 }}>{item.desc}</div>}
-                      </div>
-                    </button>
-                    {/* Star / favourite toggle */}
-                    <button
-                      onClick={() => onToggleFavourite(item.k)}
-                      title={isFav ? "Remove from favourites" : "Add to favourites"}
-                      style={{ background:"none", border:"none", cursor:"pointer", fontSize:14, color: isFav ? "#f59e0b" : "#cbd5e1", padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
-                      onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#94a3b8"}
-                      onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":"#cbd5e1"}
-                    >★</button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+            ref={appsButtonRef}
+            onMouseEnter={e => { openFlyout(); const r=e.currentTarget.getBoundingClientRect(); setTooltip({label:"Applications",y:r.top+r.height/2}); if(!flyoutOpen) e.currentTarget.style.background=T.overlay; }}
+            onMouseLeave={e => { closeFlyout(); setTooltip(null); if(!flyoutOpen) e.currentTarget.style.background="transparent"; }}
+            style={{ width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"inherit", fontSize:16, background:flyoutOpen?T.accentBg:"transparent", color:flyoutOpen?T.accent:T.tx3, borderLeft:"3px solid transparent", transition:"background 0.12s, color 0.12s", flexShrink:0 }}
+          >▦</button>
         </div>
-      </div>
 
-      {/* Bottom: settings / dev / sign out */}
-      <div style={{ padding:"8px 6px", borderTop:"1px solid #f1f5f9", display:"flex", flexDirection:"column", gap:1, flexShrink:0 }}>
-        {bottomItems.map(item => <NavBtn key={item.k} item={item} />)}
-        {onSignOut&&(
-          <button onClick={onSignOut} title="Lock CashHeap"
-            style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"7px 14px",borderRadius:8,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",color:"#94a3b8",fontSize:13,fontWeight:500,textAlign:"left",transition:"background 0.12s,color 0.12s"}}
-            onMouseEnter={e=>{e.currentTarget.style.background="rgba(220,38,38,0.07)";e.currentTarget.style.color="#dc2626";}}
-            onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#94a3b8";}}
-          >
-            <span style={{fontSize:14,width:18,textAlign:"center",flexShrink:0,opacity:0.7,display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+        {/* Bottom divider */}
+        <div style={{ height:1, background:T.border, margin:"4px 0", flexShrink:0 }}/>
+
+        {/* Bottom items */}
+        <div style={{ padding:"4px 6px 8px", display:"flex", flexDirection:"column", gap:2, alignItems:"center", flexShrink:0 }}>
+          {bottomItems.map(item=>navBtn(item))}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              onMouseEnter={e => { const r=e.currentTarget.getBoundingClientRect(); setTooltip({label:"Sign Out",y:r.top+r.height/2}); e.currentTarget.style.background=T.redBg; e.currentTarget.style.color=T.red; }}
+              onMouseLeave={e => { setTooltip(null); e.currentTarget.style.background="transparent"; e.currentTarget.style.color=T.tx3; }}
+              style={{ width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", background:"transparent", color:T.tx3, borderLeft:"3px solid transparent", transition:"background 0.12s, color 0.12s", flexShrink:0 }}
+            >
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                 <polyline points="16 17 21 12 16 7"/>
                 <line x1="21" y1="12" x2="9" y2="12"/>
               </svg>
-            </span>
-            <span style={{flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Sign Out</span>
-          </button>
-        )}
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+
+      {/* Floating tooltip */}
+      {tooltip && (
+        <div style={{ position:"fixed", left:58, top:tooltip.y-14, background:T.surface, boxShadow:T.shadowMd, borderRadius:T.r, padding:"5px 10px", fontSize:12, fontWeight:500, color:T.tx1, whiteSpace:"nowrap", zIndex:200, pointerEvents:"none", transform:"translateY(0)" }}>
+          {tooltip.label}
+        </div>
+      )}
+
+      {/* Applications flyout panel */}
+      {flyoutOpen && (
+        <div
+          ref={flyoutRef}
+          onMouseEnter={openFlyout}
+          onMouseLeave={closeFlyout}
+          style={{ position:"fixed", left:58, top:flyoutTop, background:T.surface, borderRadius:T.rCard, boxShadow:T.shadowMd, width:260, padding:"8px 6px", zIndex:100, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
+        >
+          <div style={{ fontSize:11, fontWeight:500, color:T.tx3, padding:"4px 10px 8px" }}>Applications</div>
+          {appItems.map(item => {
+            const isFav = favourites.includes(item.k);
+            return (
+              <div key={item.k} onMouseEnter={()=>setHoveredApp(item.k)} onMouseLeave={()=>setHoveredApp(null)}
+                style={{ display:"flex", alignItems:"center", gap:4, borderRadius:T.r, padding:"2px 4px 2px 6px", background:hoveredApp===item.k?T.overlay:"transparent", transition:"background 0.1s" }}
+              >
+                <button
+                  onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
+                  style={{ display:"flex", alignItems:"center", gap:9, flex:1, padding:"6px 4px", border:"none", background:"transparent", cursor:"pointer", fontSize:13, fontWeight:view===item.k?600:400, color:view===item.k?T.accent:T.tx1, textAlign:"left", fontFamily:"inherit" }}
+                >
+                  <span style={{ fontSize:13, width:18, textAlign:"center", flexShrink:0, color:T.tx3 }}>{item.icon}</span>
+                  <div style={{ flex:1 }}>
+                    <div style={{ lineHeight:1.3 }}>{item.l}</div>
+                    {hoveredApp===item.k && <div style={{ fontSize:11, color:T.tx3, marginTop:2, lineHeight:1.4 }}>{item.desc}</div>}
+                  </div>
+                </button>
+                <button
+                  onClick={() => onToggleFavourite(item.k)}
+                  title={isFav ? "Remove from favourites" : "Add to favourites"}
+                  style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, color:isFav?"#f59e0b":T.border, padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
+                  onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#a8a29e"}
+                  onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":T.border}
+                >★</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -7279,52 +7299,50 @@ function AccountSetup({onComplete}){
   const steps=[{n:1,l:"Create PIN"},{n:2,l:"Biometrics"},{n:3,l:"2-Factor"}];
 
   return(
-    <div style={{position:"fixed",inset:0,zIndex:9999,background:"#0a0a0f",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",padding:24}}>
-      {/* Logo */}
-      <div style={{marginBottom:12}}><MountainLogo size={56}/></div>
-      <div style={{color:"#fff",fontSize:20,fontWeight:800,letterSpacing:"-0.4px",marginBottom:4}}>Welcome to CashHeap</div>
-      <div style={{color:"#6b7280",fontSize:13,marginBottom:32,textAlign:"center"}}>Set up your account to keep your financial data secure.</div>
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",padding:24}}>
+      <div style={{marginBottom:12}}><MountainLogo size={48}/></div>
+      <div style={{color:T.tx1,fontSize:18,fontWeight:600,marginBottom:4}}>Welcome to CashHeap</div>
+      <div style={{color:T.tx3,fontSize:13,marginBottom:28,textAlign:"center"}}>Set up your account to keep your financial data secure.</div>
 
       {/* Step progress */}
-      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:32}}>
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:28}}>
         {steps.map((s,i)=>(
           <div key={s.n} style={{display:"flex",alignItems:"center"}}>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-              <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,
-                background:step>s.n?"#3b82f6":step===s.n?"#3b82f6":"rgba(255,255,255,0.1)",
-                color:step>=s.n?"#fff":"#6b7280",
-                border:step===s.n?"2px solid #60a5fa":"2px solid transparent",
+              <div style={{width:26,height:26,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,
+                background:step>=s.n?T.accent:T.overlay,
+                color:step>=s.n?"#fff":T.tx3,
                 transition:"all .3s"
               }}>{step>s.n?"✓":s.n}</div>
-              <div style={{fontSize:10,color:step>=s.n?"#93c5fd":"#4b5563",fontWeight:600,whiteSpace:"nowrap"}}>{s.l}</div>
+              <div style={{fontSize:10,color:step>=s.n?T.accent:T.tx3,whiteSpace:"nowrap"}}>{s.l}</div>
             </div>
-            {i<steps.length-1&&<div style={{width:48,height:2,background:step>s.n?"#3b82f6":"rgba(255,255,255,0.1)",margin:"0 6px",marginBottom:20,transition:"background .3s"}}/>}
+            {i<steps.length-1&&<div style={{width:44,height:1,background:step>s.n?T.accent:T.border,margin:"0 6px",marginBottom:20,transition:"background .3s"}}/>}
           </div>
         ))}
       </div>
 
       {/* Card */}
-      <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:"28px 32px",width:"100%",maxWidth:380,backdropFilter:"blur(10px)"}}>
+      <div style={{background:T.surface,borderRadius:T.rCard,boxShadow:T.shadowMd,padding:"24px 28px",width:"100%",maxWidth:380}}>
 
         {/* Step 1 — PIN */}
         {step===1&&(
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            <div style={{color:"#fff",fontSize:16,fontWeight:700,marginBottom:4}}>Create your PIN</div>
-            <div style={{color:"#9ca3af",fontSize:12,marginBottom:8,lineHeight:1.5}}>Your PIN is used to unlock CashHeap. It's stored securely using PBKDF2 — we never see it.</div>
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600,marginBottom:2}}>Create your PIN</div>
+            <div style={{color:T.tx3,fontSize:12,marginBottom:6,lineHeight:1.5}}>Your PIN unlocks CashHeap. Stored with PBKDF2 — never visible to us.</div>
             <input type="password" inputMode="numeric" placeholder="Enter PIN (4–6 digits)" maxLength={6}
               value={pinA} onChange={e=>setPinA(e.target.value.replace(/\D/g,""))}
-              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff"}}
-              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+              style={IS}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
             />
             <input type="password" inputMode="numeric" placeholder="Confirm PIN" maxLength={6}
               value={pinB} onChange={e=>setPinB(e.target.value.replace(/\D/g,""))}
-              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff"}}
-              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+              style={IS}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
               onKeyDown={e=>e.key==="Enter"&&pinA.length>=4&&pinA===pinB&&submitPin()}
             />
-            {pinErr&&<div style={{color:"#f87171",fontSize:12,fontWeight:500}}>{pinErr}</div>}
+            {pinErr&&<div style={{color:T.red,fontSize:12}}>{pinErr}</div>}
             <button onClick={submitPin} disabled={pinA.length<4||pinB.length<4}
-              style={{marginTop:4,padding:"13px 0",borderRadius:10,border:"none",background:pinA.length>=4&&pinB.length>=4?"#3b82f6":"rgba(255,255,255,0.1)",color:"#fff",fontSize:15,fontWeight:700,cursor:pinA.length>=4&&pinB.length>=4?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+              style={{marginTop:4,padding:"10px 0",borderRadius:T.r,border:"none",background:pinA.length>=4&&pinB.length>=4?T.accent:T.overlay,color:pinA.length>=4&&pinB.length>=4?"#fff":T.tx3,fontSize:13,fontWeight:500,cursor:pinA.length>=4&&pinB.length>=4?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
             >Continue →</button>
           </div>
         )}
@@ -7332,31 +7350,30 @@ function AccountSetup({onComplete}){
         {/* Step 2 — Biometric */}
         {step===2&&(
           <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",textAlign:"center"}}>
-            <div style={{fontSize:40,marginBottom:4}}>"Biometrics"</div>
-            <div style={{color:"#fff",fontSize:16,fontWeight:700}}>Enable Biometrics</div>
-            <div style={{color:"#9ca3af",fontSize:12,lineHeight:1.6,marginBottom:4}}>
-              Use Touch ID, Face ID, Windows Hello, or your device's fingerprint sensor to unlock CashHeap instantly.
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600}}>Enable Biometrics</div>
+            <div style={{color:T.tx3,fontSize:12,lineHeight:1.6,marginBottom:4}}>
+              Use Touch ID, Face ID, Windows Hello, or your device's fingerprint sensor to unlock instantly.
             </div>
             {bioStatus==="idle"&&(
-              <button onClick={enrollBio} style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:"#3b82f6",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              <button onClick={enrollBio} style={{width:"100%",padding:"10px 0",borderRadius:T.r,border:"none",background:T.accent,color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
                 Set Up Biometrics
               </button>
             )}
             {bioStatus==="enrolling"&&(
-              <div style={{color:"#93c5fd",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
-                <span style={{width:14,height:14,border:"2px solid rgba(147,197,253,0.3)",borderTopColor:"#93c5fd",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>
+              <div style={{color:T.accent,fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:14,height:14,border:"2px solid "+T.accentBg,borderTopColor:T.accent,borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>
                 Follow the prompt on your device…
               </div>
             )}
             {bioStatus==="done"&&(
               <>
-                <div style={{color:"#4ade80",fontSize:13,fontWeight:600}}>Biometrics enrolled successfully!</div>
-                <button onClick={nextAfterBio} style={{width:"100%",padding:"13px 0",borderRadius:10,border:"none",background:"#3b82f6",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Continue →</button>
+                <div style={{color:T.green,fontSize:13}}>Biometrics enrolled successfully!</div>
+                <button onClick={nextAfterBio} style={{width:"100%",padding:"10px 0",borderRadius:T.r,border:"none",background:T.accent,color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Continue →</button>
               </>
             )}
-            {(bioStatus==="error"||bioStatus==="idle")&&bioErr&&<div style={{color:"#f87171",fontSize:12}}>{bioErr}</div>}
+            {(bioStatus==="error"||bioStatus==="idle")&&bioErr&&<div style={{color:T.red,fontSize:12}}>{bioErr}</div>}
             {bioStatus!=="done"&&bioStatus!=="enrolling"&&(
-              <button onClick={skipBio} style={{background:"none",border:"none",color:"#6b7280",fontSize:13,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",marginTop:4}}>
+              <button onClick={skipBio} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",marginTop:2}}>
                 Skip for now
               </button>
             )}
@@ -7366,26 +7383,26 @@ function AccountSetup({onComplete}){
         {/* Step 3 — TOTP */}
         {step===3&&(
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <div style={{color:"#fff",fontSize:16,fontWeight:700,textAlign:"center",marginBottom:2}}>Two-Factor Authentication</div>
-            <div style={{color:"#9ca3af",fontSize:12,lineHeight:1.5,textAlign:"center",marginBottom:4}}>
-              Scan this QR code with Google Authenticator, Authy, or any TOTP app. Optional but recommended.
+            <div style={{color:T.tx1,fontSize:15,fontWeight:600,textAlign:"center",marginBottom:2}}>Two-Factor Authentication</div>
+            <div style={{color:T.tx3,fontSize:12,lineHeight:1.5,textAlign:"center",marginBottom:4}}>
+              Scan with Google Authenticator, Authy, or any TOTP app. Optional but recommended.
             </div>
             <div style={{textAlign:"center",margin:"4px 0 8px"}}>
-              <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&color=ffffff&bgcolor=111111&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:10,border:"2px solid rgba(255,255,255,0.15)"}}/>
-              <div style={{marginTop:6,fontSize:10,color:"#6b7280"}}>Manual key:</div>
-              <div style={{fontFamily:"monospace",fontSize:11,color:"#93c5fd",letterSpacing:1,wordBreak:"break-all",marginTop:2}}>{totpSecret}</div>
+              <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`otpauth://totp/CashHeap?secret=${totpSecret}&issuer=CashHeap`)}`} alt="QR" style={{borderRadius:T.r,border:"1px solid "+T.border}}/>
+              <div style={{marginTop:6,fontSize:10,color:T.tx3}}>Manual key:</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:T.accent,letterSpacing:1,wordBreak:"break-all",marginTop:2}}>{totpSecret}</div>
             </div>
-            <input placeholder="Enter 6-digit code to verify" maxLength={6}
+            <input placeholder="6-digit code" maxLength={6}
               value={totpInput} onChange={e=>setTotpInput(e.target.value.replace(/\D/g,"").slice(0,6))}
               onKeyDown={e=>e.key==="Enter"&&totpInput.length===6&&verifyTOTP()}
-              style={{...IS,background:"rgba(255,255,255,0.07)",border:"2px solid rgba(255,255,255,0.15)",color:"#fff",fontSize:20,letterSpacing:10,fontFamily:"monospace"}}
-              onFocus={e=>e.target.style.borderColor="#3b82f6"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.15)"}
+              style={{...IS,fontSize:20,letterSpacing:10,fontFamily:"monospace",textAlign:"center"}}
+              onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}
             />
-            {totpErr&&<div style={{color:"#f87171",fontSize:12}}>{totpErr}</div>}
+            {totpErr&&<div style={{color:T.red,fontSize:12}}>{totpErr}</div>}
             <button onClick={verifyTOTP} disabled={totpInput.length!==6}
-              style={{padding:"13px 0",borderRadius:10,border:"none",background:totpInput.length===6?"#3b82f6":"rgba(255,255,255,0.1)",color:"#fff",fontSize:15,fontWeight:700,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+              style={{padding:"10px 0",borderRadius:T.r,border:"none",background:totpInput.length===6?T.accent:T.overlay,color:totpInput.length===6?"#fff":T.tx3,fontSize:13,fontWeight:500,cursor:totpInput.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
             >Enable 2FA &amp; Finish</button>
-            <button onClick={skipTOTP} style={{background:"none",border:"none",color:"#6b7280",fontSize:13,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",textAlign:"center"}}>
+            <button onClick={skipTOTP} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",textAlign:"center"}}>
               Skip — finish without 2FA
             </button>
           </div>
@@ -7421,6 +7438,21 @@ function LockScreen({authConfig,onUnlock}){
     if(totpCode===now||totpCode===prev){onUnlock();}
     else{shake();setErr("Invalid code");setTotpCode("");}
   };
+
+  useEffect(()=>{
+    if(phase!=="pin") return;
+    const onKey=e=>{
+      if(e.key>="0"&&e.key<="9") pressKey(e.key);
+      else if(e.key==="Backspace"||e.key==="Delete") pressKey("del");
+    };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[phase,pin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-trigger biometrics on mount if enrolled
+  useEffect(()=>{
+    if(authConfig.webauthnCredId) tryBiometric();
+  },[]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pressKey=async(k)=>{
     if(phase==="totp") return;
@@ -7460,84 +7492,75 @@ function LockScreen({authConfig,onUnlock}){
 
   const keys=["1","2","3","4","5","6","7","8","9","","0","del"];
 
+  // numpad is 3×72 + 2×8 = 232px; everything is pinned to that width
+  const NW=232; // numpad + bio button width
+
   return(
-    <div style={{position:"fixed",inset:0,zIndex:9999,background:"#0a0a0f",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
-      {/* Mountain icon */}
-      <div style={{marginBottom:16}}>
-        <svg viewBox="0 0 80 80" width={64} height={64}>
-          <rect width={80} height={80} rx={16} fill="#111"/>
-          <polygon points="6,62 18,44 22,48 28,36 34,44 40,16 46,44 52,36 58,48 62,44 74,62" fill="#fff"/>
-          <rect x={6} y={62} width={68} height={4} fill="#fff"/>
-        </svg>
-      </div>
-      <div style={{color:"#fff",fontSize:22,fontWeight:800,letterSpacing:"-0.5px",marginBottom:4}}>CashHeap</div>
-      <div style={{color:"#6b7280",fontSize:13,marginBottom:36}}>
-        {phase==="totp"?"Enter your authenticator code":"Enter your PIN to continue"}
-      </div>
-
-      {phase==="pin"&&(
-        <>
-          {/* PIN dots */}
-          <div style={{display:"flex",gap:14,marginBottom:32,animation:shaking?"shake 0.4s ease":"none"}}>
-            <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}`}</style>
-            {Array.from({length:MAX}).map((_,i)=>(
-              <div key={i} style={{width:16,height:16,borderRadius:"50%",background:i<pin.length?"#3b82f6":"rgba(255,255,255,0.15)",border:"2px solid",borderColor:i<pin.length?"#3b82f6":"rgba(255,255,255,0.25)",transition:"background .15s,border-color .15s"}}/>
-            ))}
-          </div>
-
-          {/* Numpad */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:12,marginBottom:20}}>
-            {keys.map((k,i)=>(
-              <button key={i} onClick={()=>k&&pressKey(k)}
-                style={{height:72,borderRadius:50,border:"none",cursor:k?"pointer":"default",
-                  background:k?"rgba(255,255,255,0.08)":"transparent",
-                  color:"#fff",fontSize:k==="del"?18:24,fontWeight:700,fontFamily:"inherit",
-                  transition:"background .1s, transform .1s",
-                  opacity:k?1:0
-                }}
-                onMouseDown={e=>{if(k)e.currentTarget.style.background="rgba(255,255,255,0.18)";}}
-                onMouseUp={e=>{if(k)e.currentTarget.style.background="rgba(255,255,255,0.08)";}}
-                onMouseLeave={e=>{if(k)e.currentTarget.style.background="rgba(255,255,255,0.08)";}}
-              >
-                {k==="del"?"⌫":k}
-              </button>
-            ))}
-          </div>
-
-          {/* Biometric */}
-          {authConfig.webauthnCredId&&(
-            <button onClick={tryBiometric} disabled={bioBusy}
-              style={{background:"none",border:"1.5px solid rgba(255,255,255,0.2)",color:"rgba(255,255,255,0.7)",borderRadius:24,padding:"10px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:8,marginBottom:12,transition:"border-color .2s,color .2s"}}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.5)";e.currentTarget.style.color="#fff";}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.2)";e.currentTarget.style.color="rgba(255,255,255,0.7)";}}
-            >
-              {bioBusy?<span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>:null}
-              {bioBusy?"Verifying...":"Biometrics"}
-            </button>
-          )}
-        </>
-      )}
-
-      {phase==="totp"&&(
-        <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
-          <div style={{animation:shaking?"shake 0.4s ease":"none"}}>
-            <input
-              autoFocus
-              value={totpCode}
-              onChange={e=>setTotpCode(e.target.value.replace(/\D/g,"").slice(0,6))}
-              placeholder="000000"
-              style={{width:160,textAlign:"center",fontSize:28,fontWeight:700,letterSpacing:8,padding:"14px 0",background:"rgba(255,255,255,0.08)",border:"2px solid rgba(255,255,255,0.15)",borderRadius:12,color:"#fff",fontFamily:"monospace",outline:"none"}}
-              onKeyDown={e=>e.key==="Enter"&&totpCode.length===6&&verifyTotp()}
-            />
-          </div>
-          <button onClick={verifyTotp} disabled={totpCode.length!==6}
-            style={{background:totpCode.length===6?"#3b82f6":"rgba(255,255,255,0.1)",color:"#fff",border:"none",borderRadius:10,padding:"12px 32px",fontSize:14,fontWeight:700,cursor:totpCode.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
-          >Verify</button>
-          <button onClick={()=>{setPhase("pin");setTotpCode("");setErr("");}} style={{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back to PIN</button>
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:T.bg,fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      {/* Single centred column — margin auto + absolute centering is the most reliable cross-browser approach */}
+      <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:NW,display:"flex",flexDirection:"column",alignItems:"center"}}>
+        <div style={{marginBottom:14}}><MountainLogo size={48}/></div>
+        <div style={{color:T.tx1,fontSize:18,fontWeight:600,marginBottom:3,textAlign:"center"}}>CashHeap</div>
+        <div style={{color:T.tx3,fontSize:13,marginBottom:32,textAlign:"center"}}>
+          {phase==="totp"?"Enter your authenticator code":"Enter your PIN to continue"}
         </div>
-      )}
 
-      {err&&<div style={{marginTop:8,color:"#f87171",fontSize:12,fontWeight:600}}>{err}</div>}
+        {phase==="pin"&&(
+          <>
+            <div style={{display:"flex",gap:14,marginBottom:32,animation:shaking?"shake 0.4s ease":"none",justifyContent:"center",width:NW}}>
+              {Array.from({length:MAX}).map((_,i)=>(
+                <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<pin.length?T.tx1:T.border,transition:"background .15s",flexShrink:0}}/>
+              ))}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:8,marginBottom:16,width:NW}}>
+              {keys.map((k,i)=>(
+                <button key={i} onClick={()=>k&&pressKey(k)}
+                  style={{height:72,borderRadius:"50%",border:"none",cursor:k?"pointer":"default",
+                    background:k?T.overlay:"transparent",
+                    color:T.tx1,fontSize:k==="del"?16:22,fontWeight:500,fontFamily:"inherit",
+                    transition:"background .1s",opacity:k?1:0
+                  }}
+                  onMouseDown={e=>{if(k)e.currentTarget.style.background=T.border;}}
+                  onMouseUp={e=>{if(k)e.currentTarget.style.background=T.overlay;}}
+                  onMouseLeave={e=>{if(k)e.currentTarget.style.background=T.overlay;}}
+                >{k==="del"?"⌫":k}</button>
+              ))}
+            </div>
+
+            {authConfig.webauthnCredId&&(
+              <button onClick={tryBiometric} disabled={bioBusy}
+                style={{width:NW,boxSizing:"border-box",height:44,borderRadius:T.r,border:bioBusy?"none":"1px solid "+T.border,background:bioBusy?"transparent":T.surface,color:bioBusy?T.tx3:T.tx1,fontSize:13,cursor:bioBusy?"default":"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:bioBusy?"center":"flex-start",paddingLeft:bioBusy?0:16,marginBottom:12,transition:"color .2s, background .15s"}}
+                onMouseEnter={e=>{if(!bioBusy)e.currentTarget.style.background=T.overlay;}}
+                onMouseLeave={e=>{if(!bioBusy)e.currentTarget.style.background=T.surface;}}
+              >
+                {bioBusy&&<span style={{width:12,height:12,border:"1.5px solid "+T.border,borderTopColor:T.tx2,borderRadius:"50%",display:"inline-block",animation:"spin 0.7s linear infinite",willChange:"transform",marginRight:7,flexShrink:0}}/>}
+                {bioBusy?"Verifying...":"Biometrics"}
+              </button>
+            )}
+          </>
+        )}
+
+        {phase==="totp"&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12,width:NW}}>
+            <div style={{animation:shaking?"shake 0.4s ease":"none",width:"100%",display:"flex",justifyContent:"center"}}>
+              <input autoFocus value={totpCode}
+                onChange={e=>setTotpCode(e.target.value.replace(/\D/g,"").slice(0,6))}
+                placeholder="000000"
+                style={{width:160,textAlign:"center",fontSize:26,fontWeight:500,letterSpacing:8,padding:"12px 0",background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,color:T.tx1,fontFamily:"monospace",outline:"none"}}
+                onKeyDown={e=>e.key==="Enter"&&totpCode.length===6&&verifyTotp()}
+              />
+            </div>
+            <button onClick={verifyTotp} disabled={totpCode.length!==6}
+              style={{background:totpCode.length===6?T.accent:T.overlay,color:totpCode.length===6?"#fff":T.tx3,border:"none",borderRadius:T.r,padding:"10px 32px",fontSize:13,fontWeight:500,cursor:totpCode.length===6?"pointer":"default",fontFamily:"inherit",transition:"background .2s"}}
+            >Verify</button>
+            <button onClick={()=>{setPhase("pin");setTotpCode("");setErr("");}} style={{background:"none",border:"none",color:T.tx3,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back to PIN</button>
+          </div>
+        )}
+
+        {err&&<div style={{marginTop:8,color:T.red,fontSize:12,textAlign:"center"}}>{err}</div>}
+      </div>
     </div>
   );
 }
@@ -7904,7 +7927,7 @@ export default function App(){
       </div>
     )}
     {!tosAccepted&&<TermsOfServiceModal onAccept={()=>{setTosAccepted(true);saveServerData({tosAccepted:true});}} onDecline={()=>{ if(window.electronApp?.quit) window.electronApp.quit(); else window.close(); }}/>}
-    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:"#1E293B",background:"#f0f9ff",filter:rootFilter}}>
+    <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:T.tx1,background:T.bg,filter:rootFilter}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
 
@@ -7922,7 +7945,7 @@ export default function App(){
       />
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"28px 32px"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
         {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><HealthScore txns={visibleTxns} accounts={accounts} holdings={holdings} catBudgets={catBudgets} goals={goals} bills={bills} billPayments={billPayments} month={month} fxRate={fxRate} stockPrices={stockPrices}/></div><div style={{marginTop:8}}><SpendingAnomalies txns={visibleTxns} cats={cats} month={month}/></div><div style={{marginTop:8}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
