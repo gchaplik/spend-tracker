@@ -35,12 +35,16 @@ export const NAV_ITEMS = [
   { k:"folder",       l:"Folder Sync",      icon:"▤", desc:"Point the app at a local folder of receipts and import them all at once." },
   { k:"upload",       l:"Upload Receipts",  icon:"↑", desc:"Upload individual receipt photos or PDFs and extract the details automatically." },
   { k:"settings",     l:"Settings",         icon:"⚙", desc:"Configure your name, Ollama model, and developer options.", isBottom:true },
+  { k:"toolcoverage", l:"Tool Coverage",    icon:"⊛", desc:"Dev: compare all data points against available Jarvis tools.", isBottom:true, devOnly:true },
 ];
 
 export const TODAY = () => new Date().toISOString().split("T")[0];
 
 export const DEFAULT_SETTINGS = {
   name:"", ollamaUrl:"http://localhost:11434", ollamaModel:"phi3:mini",
-  devMode:false, globalChatModel:"ollama", jarvisVoice:true,
-  darkMode:false, colorBlindMode:"none", largeTransactionAlert:500
+  devMode:false, globalChatModel:"deepseek", jarvisVoice:true,
+  darkMode:false, colorBlindMode:"none", largeTransactionAlert:500,
+  alertsEnabled:null,
+  discreteMode:false,
+  deepseekModel:"deepseek-r1:8b"
 };

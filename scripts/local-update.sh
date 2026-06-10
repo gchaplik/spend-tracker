@@ -2,7 +2,7 @@
 # local-update.sh — rebuild and reinstall Spend Tracker in one command
 set -e
 
-APP_NAME="Spend Tracker"
+APP_NAME="CashHeap"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RELEASE_DIR="$SCRIPT_DIR/../release"
 

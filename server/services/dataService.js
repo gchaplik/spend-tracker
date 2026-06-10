@@ -27,10 +27,12 @@ export const getFullData = () => {
     insightMessages: allSettings.insightMessages ?? [],
     insightWidgets: allSettings.insightWidgets ?? [],
     tosAccepted: allSettings.tosAccepted ?? false,
+    tutorialSeen: allSettings.tutorialSeen ?? false,
     members: allSettings.members ?? [],
     splits: allSettings.splits ?? {},
     settlements: allSettings.settlements ?? [],
     authConfig: allSettings.authConfig ?? {},
+    catIcons: allSettings.catIcons ?? {},
   };
 };
 
@@ -48,7 +50,7 @@ export const mergeData = (patch) => {
   if (patch.catBudgets !== undefined) settings.replaceCatBudgets(patch.catBudgets);
   if (patch.goals !== undefined) settings.replaceAllGoals(patch.goals);
   // JSON-blob keys stored in settings table
-  for (const key of ["cats", "settings", "schema", "favourites", "receiptFPs", "insightMessages", "insightWidgets", "tosAccepted", "members", "splits", "settlements", "authConfig"]) {
+  for (const key of ["cats", "settings", "schema", "favourites", "receiptFPs", "insightMessages", "insightWidgets", "tosAccepted", "tutorialSeen", "members", "splits", "settlements", "authConfig", "catIcons"]) {
     if (patch[key] !== undefined) settings.setSetting(key, patch[key]);
   }
 };
