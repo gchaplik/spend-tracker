@@ -70,7 +70,9 @@ export function migrate() {
       shares REAL,
       avgCost REAL,
       name TEXT,
-      costBasis REAL
+      costBasis REAL,
+      currentPrice REAL,
+      priceUpdatedAt TEXT
     );
     CREATE TABLE IF NOT EXISTS account_history (
       id TEXT PRIMARY KEY,
@@ -117,6 +119,14 @@ export function migrate() {
       balance REAL
     );
   `);
+
+  // Column migrations — ALTER TABLE IF NOT EXISTS column is not supported in SQLite,
+  // so we check the existing columns and add any that are missing.
+  const holdingCols = db.prepare("PRAGMA table_info(holdings)").all().map(r => r.name);
+  if (!holdingCols.includes("currentPrice"))
+    db.exec("ALTER TABLE holdings ADD COLUMN currentPrice REAL");
+  if (!holdingCols.includes("priceUpdatedAt"))
+    db.exec("ALTER TABLE holdings ADD COLUMN priceUpdatedAt TEXT");
 }
 
 export function seedFromJson(dataJson) {

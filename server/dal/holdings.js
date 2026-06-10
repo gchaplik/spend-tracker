@@ -5,9 +5,10 @@ export const getHistory = () => db.prepare("SELECT * FROM account_history ORDER 
 export const getAccounts = () => db.prepare("SELECT * FROM accounts").all();
 
 export const upsertHolding = (h) => {
-  db.prepare(`INSERT OR REPLACE INTO holdings (id,ticker,shares,costBasis,name)
-    VALUES (@id,@ticker,@shares,@costBasis,@name)`).run({
+  db.prepare(`INSERT OR REPLACE INTO holdings (id,ticker,shares,costBasis,name,currentPrice,priceUpdatedAt)
+    VALUES (@id,@ticker,@shares,@costBasis,@name,@currentPrice,@priceUpdatedAt)`).run({
     id:h.id, ticker:h.ticker, shares:h.shares, costBasis:h.costBasis||null, name:h.name||null,
+    currentPrice:h.currentPrice||null, priceUpdatedAt:h.priceUpdatedAt||null,
   });
 };
 
@@ -33,8 +34,8 @@ export const removeAccount = (id) => {
 export const replaceAllHoldings = (holdings) => {
   db.transaction(() => {
     db.prepare("DELETE FROM holdings").run();
-    const stmt = db.prepare(`INSERT INTO holdings (id,ticker,shares,costBasis,name) VALUES (@id,@ticker,@shares,@costBasis,@name)`);
-    for (const h of holdings) stmt.run({ id:h.id, ticker:h.ticker, shares:h.shares, costBasis:h.costBasis||null, name:h.name||null });
+    const stmt = db.prepare(`INSERT INTO holdings (id,ticker,shares,costBasis,name,currentPrice,priceUpdatedAt) VALUES (@id,@ticker,@shares,@costBasis,@name,@currentPrice,@priceUpdatedAt)`);
+    for (const h of holdings) stmt.run({ id:h.id, ticker:h.ticker, shares:h.shares, costBasis:h.costBasis||null, name:h.name||null, currentPrice:h.currentPrice||null, priceUpdatedAt:h.priceUpdatedAt||null });
   })();
 };
 

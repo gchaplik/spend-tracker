@@ -1,9 +1,33 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend, Cell, ReferenceLine, PieChart, Pie, AreaChart, Area } from "recharts";
 import { DEFAULT_CATS, COLORS, CADENCES, NAV_ITEMS, DEFAULT_SETTINGS } from "./constants/index.js";
 import { fmt, fmtUSD, today, uid, toB64, cLabel, isPdf, fpHash } from "./utils/formatters.js";
 import { buildDates, _df, _label, _sqlDf } from "./utils/dateUtils.js";
 import { fetchData as loadServerData, patchData as saveServerData } from "./api/client.js";
+
+// ── Discrete Mode ─────────────────────────────────────────────────────────────
+// When active, all financial numbers are hidden and shown as relative percentages
+const DiscreteModeCtx = React.createContext(false);
+// Module-level nfmt: works everywhere without prop drilling
+// nfmt(value)         → "●●●"  (standalone, no denominator)
+// nfmt(value, total)  → "34%"  (shown as share of total)
+const nfmt = (v, total=null) => {
+  if(!window.__discreteMode) return fmt(v);
+  if(total!=null && total>0) return ((v/total)*100).toFixed(0)+"%";
+  return "●●●";
+};
+// Hook version (for components that need reactivity without re-render)
+function useNfmt(){ return nfmt; }
+
+const DISCRETE_MODE_BLOCKED_MESSAGE = "discrete mode is protecting you data please disable to continue";
+
+function DiscreteModeBlockedCard(){
+  return (
+    <div style={{...CA,padding:"24px 20px",display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+      <div style={{maxWidth:360,fontSize:14,fontWeight:600,lineHeight:1.6,color:T.tx1}}>{DISCRETE_MODE_BLOCKED_MESSAGE}</div>
+    </div>
+  );
+}
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const T={
@@ -18,6 +42,136 @@ const T={
   shadowMd:"0 4px 16px rgba(0,0,0,0.09)",
   r:8,rCard:12,
 };
+
+// ── Icon library ─────────────────────────────────────────────────────────────
+// Each entry: { key, label, group, svg(color)=>JSX }
+// `getCatIcon(cat, type, color, catIcons)` uses catIcons override first,
+// then keyword matching, then a clock fallback.
+const _sv=(color,children)=>React.createElement('svg',{width:20,height:20,viewBox:"0 0 20 20",fill:"none",stroke:color,strokeWidth:1.5,strokeLinecap:"round",strokeLinejoin:"round"},children);
+const _p=(d,extra={})=>React.createElement('path',{d,...extra});
+const _c=(cx,cy,r,extra={})=>React.createElement('circle',{cx,cy,r,...extra});
+const _r=(x,y,width,height,extra={})=>React.createElement('rect',{x,y,width,height,...extra});
+const _pl=(points,extra={})=>React.createElement('polyline',{points,...extra});
+const _pg=(points,fill,stroke)=>React.createElement('polygon',{points,fill,stroke:"none"});
+const _ln=(x1,y1,x2,y2)=>React.createElement('line',{x1,y1,x2,y2});
+
+const ICON_SET=[
+  // ── Food & Drink ──────────────────────────────────────────────────────────
+  {key:"grocery",    label:"Groceries",    group:"Food",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h2l2.5 8h7l1.5-5H7"/><circle cx="8.5" cy="15" r="1"/><circle cx="14.5" cy="15" r="1"/></svg>},
+  {key:"dining",     label:"Dining",       group:"Food",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v5a3 3 0 01-3 3v6"/><path d="M12 3v14"/><path d="M16 3c0 3-1.5 5-1.5 5v8.5"/></svg>},
+  {key:"coffee",     label:"Coffee",       group:"Food",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M5 8h9v6a3 3 0 01-3 3H8a3 3 0 01-3-3V8z"/><path d="M14 10h2a2 2 0 010 4h-2"/><path d="M7 5c0-1 .5-2 1.5-2S10 4 11 4s2-1 2-1"/></svg>},
+  {key:"pizza",      label:"Takeout",      group:"Food",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 3L3 17h14L10 3z"/><path d="M10 3c1.5 3 3 6 0 9"/><circle cx="8" cy="13" r="1" fill={c} stroke="none"/></svg>},
+  {key:"cocktail",   label:"Bar / Drinks", group:"Food",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h12l-6 7v5"/><path d="M7 16h6"/><path d="M7 8h6"/></svg>},
+  // ── Transport ─────────────────────────────────────────────────────────────
+  {key:"car",        label:"Car / Auto",   group:"Transport",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="9" width="14" height="7" rx="2"/><path d="M6 9V7a4 4 0 018 0v2"/><circle cx="6.5" cy="15.5" r="1.5"/><circle cx="13.5" cy="15.5" r="1.5"/></svg>},
+  {key:"gas",        label:"Gas / Fuel",   group:"Transport",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M5 17V5a2 2 0 012-2h4a2 2 0 012 2v5h1a2 2 0 012 2v3a1 1 0 002 0v-5l-2-3"/><path d="M5 10h8"/></svg>},
+  {key:"transit",    label:"Transit",      group:"Transport",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="12" height="12" rx="3"/><path d="M4 9h12"/><circle cx="7" cy="18" r="1.5"/><circle cx="13" cy="18" r="1.5"/><path d="M7 15v3M13 15v3"/></svg>},
+  {key:"airplane",   label:"Flights",      group:"Transport",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M17 8l-3-5H9L6 8l-3 1 3 2v5l4-1 4 1v-5l3-2z"/><path d="M10 9v3"/></svg>},
+  {key:"bicycle",    label:"Cycling",      group:"Transport",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="14" r="3"/><circle cx="15" cy="14" r="3"/><path d="M5 14l4-7h3l3 7"/><path d="M9 7l2 7"/></svg>},
+  // ── Home ──────────────────────────────────────────────────────────────────
+  {key:"house",      label:"Housing",      group:"Home",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9.5L10 3l7 6.5"/><path d="M6 9v8h8V9"/><rect x="8" y="13" width="4" height="4"/></svg>},
+  {key:"wrench",     label:"Repairs",      group:"Home",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2.5a4 4 0 00-4 5.7L3 15.7 4.3 17l7.5-7.5A4 4 0 1014.5 2.5z"/><path d="M13 4l3 3"/></svg>},
+  {key:"lightning",  label:"Utilities",    group:"Home",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M13 3L7 11h6l-1 6 6-8h-6l1-6z"/></svg>},
+  {key:"wifi",       label:"Internet",     group:"Home",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M2 8.5a10 10 0 0116 0"/><path d="M5 11.5a6 6 0 0110 0"/><path d="M8 14.5a3 3 0 014 0"/><circle cx="10" cy="17" r="1" fill={c} stroke="none"/></svg>},
+  {key:"phone",      label:"Phone / Cell", group:"Home",     svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="2" width="8" height="16" rx="2"/><circle cx="10" cy="15" r="1" fill={c} stroke="none"/></svg>},
+  // ── Shopping ──────────────────────────────────────────────────────────────
+  {key:"bag",        label:"Shopping",     group:"Shopping", svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M6 2L4 7h12l-2-5z"/><path d="M4 7v9a2 2 0 002 2h8a2 2 0 002-2V7"/><path d="M8 7c0 2 4 2 4 0"/></svg>},
+  {key:"tag",        label:"Clothing",     group:"Shopping", svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h6l8 8-6 6-8-8V3z"/><circle cx="7" cy="7" r="1.5" fill={c} stroke="none"/></svg>},
+  {key:"gift",       label:"Gifts",        group:"Shopping", svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="8" width="14" height="10" rx="1"/><path d="M3 8h14M10 8V3"/><path d="M7 5c-1-2 2-3 3-1 1-2 4-1 3 1H7z"/></svg>},
+  {key:"cart",       label:"Online Order",  group:"Shopping",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h2l3 9h8l2-6H7"/><circle cx="9" cy="16" r="1.5"/><circle cx="15" cy="16" r="1.5"/></svg>},
+  // ── Health ────────────────────────────────────────────────────────────────
+  {key:"cross",      label:"Medical",      group:"Health",   svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 4v12M4 10h12"/><rect x="3" y="3" width="14" height="14" rx="3"/></svg>},
+  {key:"heart",      label:"Health",       group:"Health",   svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 17s-8-4.9-8-9.5A5 5 0 0110 5.1 5 5 0 0118 7.5C18 12.1 10 17 10 17z"/></svg>},
+  {key:"pill",       label:"Pharmacy",     group:"Health",   svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="9" width="12" height="6" rx="3"/><path d="M4 12h12"/></svg>},
+  {key:"dumbbell",   label:"Fitness",      group:"Health",   svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 10h14"/><rect x="1" y="8" width="3" height="4" rx="1"/><rect x="16" y="8" width="3" height="4" rx="1"/><rect x="5" y="7" width="2" height="6" rx="1"/><rect x="13" y="7" width="2" height="6" rx="1"/></svg>},
+  // ── Finance ───────────────────────────────────────────────────────────────
+  {key:"trending-up",label:"Income",       group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><polyline points="3,13 7,8 11,11 17,5"/><polyline points="13,5 17,5 17,9"/></svg>},
+  {key:"wallet",     label:"Wallet",       group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="16" height="12" rx="2"/><path d="M2 9h16"/><circle cx="15" cy="14" r="1.5" fill={c} stroke="none"/><path d="M13 5V4a2 2 0 012-2h1"/></svg>},
+  {key:"card",       label:"Credit Card",  group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="16" height="11" rx="2"/><path d="M2 9h16"/><path d="M5 13h3"/></svg>},
+  {key:"bank",       label:"Bank",         group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 17h14M3 8h14M10 3L3 8h14L10 3z"/><path d="M5 8v9M10 8v9M15 8v9"/></svg>},
+  {key:"piggy",      label:"Savings",      group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M14 8A5 5 0 104 13v2l1 1h1l1 1h4l1-1h1l1-1v-2a5 5 0 00-0.2-1.4"/><path d="M15 7a2 2 0 012 2"/><path d="M10 9v2"/></svg>},
+  {key:"shield",     label:"Insurance",    group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 2l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V5l7-3z"/><path d="M7 10l2 2 4-4"/></svg>},
+  {key:"receipt",    label:"Taxes",        group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M5 2h10v16l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5V2z"/><path d="M8 7h4M8 10h4M8 13h2"/></svg>},
+  {key:"repeat",     label:"Subscription", group:"Finance",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M4 10a6 6 0 1110.9-3.5"/><path d="M17 4l-2.5 3-2.5-3"/><path d="M16 10a6 6 0 01-10.9 3.5"/><path d="M3 16l2.5-3 2.5 3"/></svg>},
+  // ── Lifestyle ─────────────────────────────────────────────────────────────
+  {key:"play",       label:"Entertainment",group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="14" height="10" rx="2"/><polygon points="8,8 8,12 13,10" fill={c} stroke="none"/></svg>},
+  {key:"music",      label:"Music",        group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M8 17V6l9-2v11"/><circle cx="6" cy="17" r="2"/><circle cx="15" cy="15" r="2"/></svg>},
+  {key:"book",       label:"Education",    group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M4 3h10a2 2 0 012 2v11a2 2 0 01-2 2H4V3z"/><path d="M8 3v14"/><path d="M10 7h4M10 10h4M10 13h4"/></svg>},
+  {key:"scissors",   label:"Personal Care",group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="14" r="2.5"/><path d="M8 7.5L17 14"/><path d="M8 12.5L17 6"/></svg>},
+  {key:"globe",      label:"Travel",       group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3c-2 2-3 4.5-3 7s1 5 3 7"/><path d="M10 3c2 2 3 4.5 3 7s-1 5-3 7"/><path d="M3 10h14"/></svg>},
+  {key:"paw",        label:"Pets",         group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><ellipse cx="10" cy="13" rx="4" ry="3"/><circle cx="5.5" cy="9" r="1.5"/><circle cx="14.5" cy="9" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="12" cy="7" r="1.5"/></svg>},
+  {key:"baby",       label:"Kids",         group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="6" r="3"/><path d="M6 20v-4a2 2 0 012-2h4a2 2 0 012 2v4"/><path d="M7.5 9.5L5 14h10l-2.5-4.5"/></svg>},
+  {key:"sun",        label:"Hobbies",      group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="3"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.6 5.6l1.4 1.4M13 13l1.4 1.4M5.6 14.4l1.4-1.4M13 7l1.4-1.4"/></svg>},
+  {key:"leaf",       label:"Environment",  group:"Lifestyle",svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M17 3c-5 0-11 3-11 10 0 2 1 4 1 4s2-1 4-1c7 0 10-6 10-11 0 0-1.5-2-4-2z"/><path d="M3 17c2-4 5-6 8-7"/></svg>},
+  // ── General ───────────────────────────────────────────────────────────────
+  {key:"clock",      label:"Other",        group:"General",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 6v5l3 3"/></svg>},
+  {key:"star",       label:"Favourite",    group:"General",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 2l2.4 5H18l-4.5 3.3 1.7 5.3L10 12.5l-5.2 3.1 1.7-5.3L2 7h5.6z"/></svg>},
+  {key:"umbrella",   label:"Miscellaneous",group:"General",  svg:c=><svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke={c} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M10 3a8 8 0 00-8 7h16a8 8 0 00-8-7z"/><path d="M10 10v7a2 2 0 004 0"/></svg>},
+];
+const ICON_BY_KEY=Object.fromEntries(ICON_SET.map(i=>[i.key,i]));
+const ICON_GROUPS=[...new Set(ICON_SET.map(i=>i.group))];
+
+// Keyword→key map for auto-matching
+const ICON_KEYWORDS=[
+  [/grocer|supermark|market|produce|costco|walmart|loblaws/i,"grocery"],
+  [/dine|dining|restaur|takeout|take.out|delivery|fast.food|meal|lunch|dinner|breakfast/i,"dining"],
+  [/coffee|cafe|espresso|latte|cappuc|starbucks|tim.horton/i,"coffee"],
+  [/pizza|sushi|burger|taco|food/i,"pizza"],
+  [/bar|pub|alcohol|beer|wine|drink|cocktail/i,"cocktail"],
+  [/uber|lyft|taxi|cab|transit|bus|subway|metro|train/i,"transit"],
+  [/gas|fuel/i,"gas"],
+  [/car|auto|vehicle|truck|motor|parking|toll|mechanic/i,"car"],
+  [/flight|airline|airplane/i,"airplane"],
+  [/bike|cycling|bicycle/i,"bicycle"],
+  [/hous|rent|mortgage|home|property|real.estat|condo|apart|lease/i,"house"],
+  [/repair|reno|maint|hardware/i,"wrench"],
+  [/electric|hydro|water|utilit/i,"lightning"],
+  [/internet|wifi/i,"wifi"],
+  [/phone|cell|mobile|rogers|bell|telus/i,"phone"],
+  [/shop|retail|amazon|online|mall|boutique/i,"bag"],
+  [/cloth|fashion|apparel|wear|shoes|dress|outfit/i,"tag"],
+  [/gift|donat|charit|present/i,"gift"],
+  [/health|medic|doctor|dental|dentist|hospital|clinic|prescri|eye|vision|therapy|chiro|physio/i,"cross"],
+  [/pharmacy|pharma|drug/i,"pill"],
+  [/fitness|gym|sport|workout|exercise|yoga|run|swim/i,"dumbbell"],
+  [/insur|coverage|premium/i,"shield"],
+  [/saving|invest|rrsp|tfsa|portfolio|retire/i,"piggy"],
+  [/tax|irs|cra|filing/i,"receipt"],
+  [/subscri|membership/i,"repeat"],
+  [/cable|stream|netflix|spotify|music.sub/i,"repeat"],
+  [/entertain|movie|cinema|film|game|gaming|concert|event|ticket|show|theatre|theater/i,"play"],
+  [/music|song|album/i,"music"],
+  [/educ|school|tuition|course|book|tutoring|college|univers|learn|training/i,"book"],
+  [/beauty|hair|spa|salon|barber|grooming|cosmetic|makeup|personal.care/i,"scissors"],
+  [/travel|vacation|trip|hotel|airbnb|resort|tour|holiday|luggage/i,"globe"],
+  [/pet|dog|cat|vet|animal/i,"paw"],
+  [/kid|child|baby|daycare|toy/i,"baby"],
+  [/hobby|sport.equip|craft/i,"sun"],
+  [/atm|cash|bank|transfer|wire|withdrawal|deposit/i,"bank"],
+  [/card|credit|visa|mastercard/i,"card"],
+  [/wallet|spend/i,"wallet"],
+];
+
+// Main icon renderer — supports custom overrides via catIcons map
+function getCatIcon(category="",type="expense",color="currentColor",catIcons={}){
+  // Income always gets trending-up
+  if(type==="income") return ICON_BY_KEY["trending-up"].svg(color);
+
+  const override=catIcons[category];
+  if(override){
+    if(override.startsWith("data:")||override.startsWith("http")){
+      return <img src={override} style={{width:20,height:20,borderRadius:4,objectFit:"cover"}} alt=""/>;
+    }
+    if(ICON_BY_KEY[override]) return ICON_BY_KEY[override].svg(color);
+  }
+
+  const c=(category||"").toLowerCase();
+  for(const [re,key] of ICON_KEYWORDS){
+    if(re.test(c)&&ICON_BY_KEY[key]) return ICON_BY_KEY[key].svg(color);
+  }
+  return ICON_BY_KEY["clock"].svg(color);
+}
+
 
 // ── Auth / crypto helpers ─────────────────────────────────────────────────────
 function _b64e(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
@@ -117,6 +271,7 @@ function Btn({children,onClick,v,disabled,full,sm,style}){
 }
 
 function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
+  const nfmt=useNfmt();
   const [open,setOpen]=useState(true);
   const confirmed=mExp.filter(e=>e.confirmed).length;
   const overdue=mExp.filter(e=>!e.confirmed&&e.expectedDate<today()).length;
@@ -152,7 +307,7 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
                 <span style={{fontSize:12,fontWeight:500,color:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.source}</span>
                 {e.note&&<span style={{fontSize:10,color:"#94a3b8"}}>{e.note}</span>}
               </div>
-              <span style={{fontSize:12,fontWeight:700,color:e.confirmed?GREEN:YELLOW,flexShrink:0}}>{fmt(e.amount)}</span>
+              <span style={{fontSize:12,fontWeight:700,color:e.confirmed?GREEN:YELLOW,flexShrink:0}}>{nfmt(e.amount)}</span>
               {e.confirmed
                 ?<button onClick={()=>onRevert(e.id)} title="Click to revert" style={{width:24,height:24,borderRadius:"50%",background:"#d1fae5",border:"2px solid #059669",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:GREEN}}>✓</button>
                 :<button onClick={()=>onConfirm(e.id)} title="Mark as received" style={{width:24,height:24,borderRadius:"50%",background:"#fef3c7",border:"2px solid #d97706",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",flexShrink:0,fontFamily:"inherit",color:YELLOW}}>?</button>}
@@ -165,6 +320,7 @@ function ExpectedIncomeWidget({mExp,ml,month,GREEN,YELLOW,onConfirm,onRevert}){
 }
 
 function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,month,ml,GREEN,RED}){
+  const nfmt=useNfmt();
   const [open,setOpen]=useState(true);
   return(
     <div style={{...CA,marginBottom:14}}>
@@ -172,7 +328,7 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <span style={{fontSize:11,fontWeight:500,color:T.tx3}}>Bills Due — {ml(month)}</span>
           <span style={{fontSize:11,color:billsUnpaid.length===0?GREEN:RED}}>{billsPaid.length}/{monthBills.length} paid</span>
-          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED}}>{fmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
+          {billsUnpaid.length>0&&<span style={{fontSize:11,color:RED}}>{nfmt(billsUnpaid.reduce((s,b)=>s+b.amount,0))} remaining</span>}
         </div>
         <span style={{fontSize:13,color:T.tx3,flexShrink:0}}>{open?"▲":"▼"}</span>
       </button>
@@ -188,7 +344,7 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
                   </div>
                   <span style={{fontSize:12,color:paid?T.tx3:T.tx1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:paid?"line-through":"none"}}>{b.name}</span>
                 </div>
-                <span style={{fontSize:12,fontWeight:500,color:paid?T.tx3:RED,flexShrink:0}}>{fmt(b.amount)}</span>
+                <span style={{fontSize:12,fontWeight:500,color:paid?T.tx3:RED,flexShrink:0}}>{nfmt(b.amount)}</span>
               </div>
             );
           })}
@@ -198,16 +354,18 @@ function BillsDueWidget({monthBills,billsPaid,billsUnpaid,billPaid,onToggleBill,
   );
 }
 
-function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={},fxRate=1.38}){
+function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onConfirm,onRevert,vacations=[],vacationTxns=[],bills=[],billPayments=[],onToggleBill,goals=[],accounts=[],holdings=[],stockPrices={},fxRate=1.38,settings={}}){
+  const nfmt=useNfmt();
   const opts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const ml=m=>new Date(m+"-02").toLocaleString("default",{month:"long",year:"numeric"});
   const mt=txns.filter(t=>t.date&&t.date.startsWith(month));
   const actualIncome=mt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
   const txnSpending=mt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  // Paid bills for this month count as spending
-  const paidBillsTotal=billPayments.filter(p=>p.month===month).reduce((s,p)=>s+p.amount,0);
   const vacSpendMonth=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((s,t)=>s+t.amount,0);
-  const spending=txnSpending+paidBillsTotal+vacSpendMonth;
+  // spending = expense transactions + vacation transactions only.
+  // bill_payments are NOT added here — bills are tracked as expense transactions when paid,
+  // so adding paidBillsTotal would double-count any bill that also has an expense transaction.
+  const spending=txnSpending+vacSpendMonth;
   const mExp=expected.filter(e=>e.expectedDate&&e.expectedDate.startsWith(month));
   const pendingExp=mExp.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0);
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
@@ -273,61 +431,117 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
   // Anomaly detection — flag transactions >2.5x category average (min 3 txns)
   const catAvgs={};cats.forEach(c=>{const ct=txns.filter(t=>t.type==="expense"&&t.category===c&&t.amount>0);if(ct.length>=3)catAvgs[c]=ct.reduce((s,t)=>s+t.amount,0)/ct.length;});
   const isAnomaly=t=>t.type==="expense"&&catAvgs[t.category]&&t.amount>2.5*catAvgs[t.category];
+  // Greeting + date helpers
+  const greetHour=new Date().getHours();
+  const greeting=greetHour<12?"Good morning":greetHour<17?"Good afternoon":"Good evening";
+  const firstName=(settings.name||"").split(" ")[0]||null;
+  const nowDate=new Date();
+  const dayOfWeek=nowDate.toLocaleString("default",{weekday:"long"});
+  const dayNum=nowDate.getDate();
+  const monthName=nowDate.toLocaleString("default",{month:"long"});
+  const fullYear=nowDate.getFullYear();
+
+  // Month navigator helpers
+  const curIdx=opts.indexOf(month);
+  const canPrev=curIdx>0;
+  const canNext=curIdx<opts.length-1;
+  const isCurrentMonth=month===opts[opts.length-1];
+
   return (
     <div>
-      {/* Header */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:10}}>
-        <h2 style={{margin:0,fontSize:18,fontWeight:600,color:T.tx1}}>Dashboard</h2>
-        <select value={month} onChange={e=>setMonth(e.target.value)} style={{padding:"7px 12px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:13,background:T.surface,fontFamily:"inherit",color:T.tx1,fontWeight:400}}>
-          {opts.map(m=><option key={m} value={m}>{ml(m)}</option>)}
-        </select>
+      {/* Greeting row */}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontSize:22,fontWeight:700,color:T.tx1,lineHeight:1.2}}>
+            {greeting}{firstName?", "+firstName:""}
+          </div>
+          <div style={{fontSize:13,color:T.tx3,marginTop:3}}>
+            {dayOfWeek}, {monthName} {dayNum}, {fullYear}
+          </div>
+        </div>
+
+        {/* Pill month navigator */}
+        <div style={{display:"flex",alignItems:"center",gap:6,background:T.overlay,borderRadius:99,padding:"4px 6px",border:"1px solid "+T.border}}>
+          <button onClick={()=>canPrev&&setMonth(opts[curIdx-1])} disabled={!canPrev} style={{width:28,height:28,borderRadius:99,border:"none",background:canPrev?"transparent":"transparent",color:canPrev?T.tx1:T.tx3,cursor:canPrev?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:600,transition:"background 0.15s"}}
+            onMouseEnter={e=>{if(canPrev)e.currentTarget.style.background=T.border;}}
+            onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+            ‹
+          </button>
+          <div style={{position:"relative"}}>
+            <select value={month} onChange={e=>setMonth(e.target.value)}
+              style={{appearance:"none",WebkitAppearance:"none",border:"none",background:"transparent",fontSize:13,fontWeight:600,color:T.tx1,cursor:"pointer",padding:"2px 20px 2px 4px",fontFamily:"inherit",outline:"none"}}>
+              {opts.map(m=><option key={m} value={m}>{new Date(m+"-02").toLocaleString("default",{month:"short",year:"numeric"})}</option>)}
+            </select>
+            <span style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",pointerEvents:"none",fontSize:10,color:T.tx3}}>▾</span>
+          </div>
+          <button onClick={()=>canNext&&setMonth(opts[curIdx+1])} disabled={!canNext} style={{width:28,height:28,borderRadius:99,border:"none",background:"transparent",color:canNext?T.tx1:T.tx3,cursor:canNext?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:600,transition:"background 0.15s"}}
+            onMouseEnter={e=>{if(canNext)e.currentTarget.style.background=T.border;}}
+            onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+            ›
+          </button>
+          {!isCurrentMonth&&(
+            <button onClick={()=>setMonth(opts[opts.length-1])} style={{marginLeft:2,padding:"3px 10px",borderRadius:99,border:"1px solid "+T.border,background:T.surface,fontSize:11,fontWeight:600,color:T.tx2,cursor:"pointer",letterSpacing:"0.02em"}}
+              onMouseEnter={e=>{e.currentTarget.style.background=T.overlay;}}
+              onMouseLeave={e=>{e.currentTarget.style.background=T.surface;}}>
+              Today
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Hero — Net Position */}
+      <SelectableWrapper item={{label:`Net Position ${ml(month)}`,llmContext:`Net Position for ${ml(month)}: ${nfmt(actNet)} (income: ${nfmt(actualIncome)}, spending: ${nfmt(spending)})${pendingExp>0?`, projected: ${nfmt(projNet)}, pending income: ${nfmt(pendingExp)}`:''}${netDelta?`, ${netDelta.up?'up':'down'} ${nfmt(Math.abs(netDelta.d))} vs last month`:''}`}}>
       <div style={{...CA,padding:"24px 28px",marginBottom:12}}>
         <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:8}}>Net Position · {ml(month)}</div>
         <div style={{display:"flex",alignItems:"flex-end",gap:20,flexWrap:"wrap"}}>
-          <div style={{fontSize:40,fontWeight:600,color:actNet>=0?GREEN:RED,lineHeight:1}}>{fmt(actNet)}</div>
+          <div style={{fontSize:40,fontWeight:600,color:actNet>=0?GREEN:RED,lineHeight:1}}>{nfmt(actNet)}</div>
           <div style={{paddingBottom:6,display:"flex",flexDirection:"column",gap:3}}>
-            {netDelta&&<div style={{fontSize:12,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {fmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
-            {pendingExp>0&&<div style={{fontSize:12,color:T.tx3}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:600}}>{fmt(projNet)}</span> <span style={{color:YELLOW}}>· {fmt(pendingExp)} pending</span></div>}
+            {netDelta&&<div style={{fontSize:12,color:netDelta.up?GREEN:RED}}>{netDelta.up?"↑":"↓"} {nfmt(Math.abs(netDelta.d))}{netDelta.pct!=null?" ("+netDelta.pct+"%)":""} vs last month</div>}
+            {pendingExp>0&&<div style={{fontSize:12,color:T.tx3}}>Projected <span style={{color:projNet>=0?GREEN:RED,fontWeight:600}}>{nfmt(projNet)}</span> <span style={{color:YELLOW}}>· {nfmt(pendingExp)} pending</span></div>}
           </div>
         </div>
       </div>
+      </SelectableWrapper>
 
       {/* Net worth strip */}
       {(accounts.length>0||holdings.length>0)&&(
         <div style={{...CA,padding:"12px 18px",marginBottom:12,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
           <div style={{fontSize:11,fontWeight:500,color:T.tx3,flexShrink:0}}>Net Worth</div>
-          <div style={{fontSize:18,fontWeight:600,color:netWorth>=0?GREEN:RED}}>{fmt(netWorth+(portfolioValue||0))}</div>
+          <div style={{fontSize:18,fontWeight:600,color:netWorth>=0?GREEN:RED}}>{nfmt(netWorth+(portfolioValue||0))}</div>
           <div style={{fontSize:12,color:T.tx3,display:"flex",gap:14,flexWrap:"wrap"}}>
-            <span>Assets <span style={{color:GREEN,fontWeight:500}}>{fmt(totalAssets)}</span></span>
-            <span>Liabilities <span style={{color:RED,fontWeight:500}}>{fmt(totalLiab)}</span></span>
-            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:T.accent,fontWeight:500}}>{fmt(portfolioValue)}</span></span>}
+            <span>Assets <span style={{color:GREEN,fontWeight:500}}>{nfmt(totalAssets,netWorth+(portfolioValue||0))}</span></span>
+            <span>Liabilities <span style={{color:RED,fontWeight:500}}>{nfmt(totalLiab,netWorth+(portfolioValue||0))}</span></span>
+            {holdings.length>0&&portfolioValue>0&&<span>Portfolio <span style={{color:T.accent,fontWeight:500}}>{nfmt(portfolioValue,netWorth+(portfolioValue||0))}</span></span>}
           </div>
         </div>
       )}
       {/* Three stat cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:12}}>
+        <SelectableWrapper item={{label:`Income ${ml(month)}`,llmContext:`Income for ${ml(month)}: ${nfmt(actualIncome)}${incomeDelta&&incomeDelta.d!==0?`, ${incomeDelta.up?'up':'down'} ${nfmt(Math.abs(incomeDelta.d))} vs last month`:''}`}}>
         <div style={{...CA,padding:"18px 20px"}}>
           <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Income</div>
-          <div style={{fontSize:26,fontWeight:600,color:GREEN,lineHeight:1}}>{fmt(actualIncome)}</div>
-          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {fmt(Math.abs(incomeDelta.d))} vs last month</div>}
+          <div style={{fontSize:26,fontWeight:600,color:GREEN,lineHeight:1}}>{nfmt(actualIncome)}</div>
+          {incomeDelta&&incomeDelta.d!==0&&<div style={{fontSize:11,marginTop:6,color:incomeDelta.up?GREEN:RED}}>{incomeDelta.up?"↑":"↓"} {nfmt(Math.abs(incomeDelta.d))} vs last month</div>}
         </div>
+        </SelectableWrapper>
+        <SelectableWrapper item={{label:`Spending ${ml(month)}`,llmContext:`Spending for ${ml(month)}: ${nfmt(spending)}${vacSpend>0?` (including ${nfmt(vacSpend)} vacation)`:''}${budgetTotal>0?`, ${nfmt(Math.abs(budgetRemaining),budgetTotal)} ${budgetRemaining>=0?'under':'over'} budget`:''}${spendDelta&&spendDelta.d!==0?`, ${spendDelta.up?'up':'down'} ${nfmt(Math.abs(spendDelta.d),spending)} vs last month`:''}`}}>
         <div style={{...CA,padding:"18px 20px"}}>
           <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Spending</div>
-          <div style={{fontSize:26,fontWeight:600,color:RED,lineHeight:1}}>{fmt(spending)}</div>
-          {budgetTotal>0&&<div style={{fontSize:11,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{fmt(Math.abs(budgetRemaining))} {budgetRemaining>=0?"under budget":"over budget"}</div>}
-          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {fmt(Math.abs(spendDelta.d))} vs last month</div>}
-          {vacSpend>0&&<div style={{fontSize:11,color:T.tx3,marginTop:3}}>+{fmt(vacSpend)} vacation</div>}
+          <div style={{fontSize:26,fontWeight:600,color:RED,lineHeight:1}}>{nfmt(spending)}</div>
+          {budgetTotal>0&&<div style={{fontSize:11,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{nfmt(Math.abs(budgetRemaining),budgetTotal)} {budgetRemaining>=0?"under budget":"over budget"}</div>}
+          {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {nfmt(Math.abs(spendDelta.d),spending)} vs last month</div>}
+          {vacSpend>0&&<div style={{fontSize:11,color:T.tx3,marginTop:3}}>+{nfmt(vacSpend,spending)} vacation</div>}
         </div>
+        </SelectableWrapper>
+        <SelectableWrapper item={{label:`Expected Income ${ml(month)}`,llmContext:`Expected income for ${ml(month)}: ${nfmt(totalExp)} total${pendingExp>0?`, ${nfmt(pendingExp)} still pending (${mExp.filter(e=>!e.confirmed).length} items)`:', all received'}`}}>
         <div style={{...CA,padding:"18px 20px"}}>
           <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:6}}>Expected Income</div>
-          <div style={{fontSize:26,fontWeight:600,color:YELLOW,lineHeight:1}}>{fmt(totalExp)}</div>
+          <div style={{fontSize:26,fontWeight:600,color:YELLOW,lineHeight:1}}>{nfmt(totalExp)}</div>
           {pendingExp>0
-            ?<div style={{fontSize:11,color:YELLOW,marginTop:6}}>{fmt(pendingExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
+            ?<div style={{fontSize:11,color:YELLOW,marginTop:6}}>{nfmt(pendingExp,totalExp)} pending · {mExp.filter(e=>!e.confirmed).length} items</div>
             :mExp.length>0&&<div style={{fontSize:11,color:GREEN,marginTop:6}}>All received ✓</div>}
         </div>
+        </SelectableWrapper>
       </div>
 
       {/* Expected Income widget */}
@@ -338,6 +552,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
 
       {/* Goals strip */}
       {goals.length>0&&(
+        <SelectableWrapper item={{label:"Savings Goals",llmContext:`Savings goals: ${goals.map(g=>`${g.name} ${Math.round(g.targetAmount>0?Math.min(g.currentAmount/g.targetAmount,1)*100:0)}% (${nfmt(g.currentAmount)} of ${nfmt(g.targetAmount)})`).join(', ')}`}}>
         <div style={{...CA,marginBottom:14,padding:"16px 20px"}}>
           <div style={{fontSize:11,fontWeight:500,color:T.tx3,marginBottom:10}}>Savings Goals</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
@@ -353,18 +568,20 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                     <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?GREEN:T.accent,transition:"width 0.4s"}}/>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:11,color:T.accent}}>{fmt(g.currentAmount)}</span>
-                    <span style={{fontSize:11,color:T.tx3}}>{Math.round(pct*100)}% of {fmt(g.targetAmount)}</span>
+                    <span style={{fontSize:11,color:T.accent}}>{nfmt(g.currentAmount,g.targetAmount)}</span>
+                    <span style={{fontSize:11,color:T.tx3}}>{Math.round(pct*100)}% of {nfmt(g.targetAmount)}</span>
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
+        </SelectableWrapper>
       )}
 
       {/* Charts + Category */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+        <SelectableWrapper item={{label:`Spending by Category ${ml(month)}`,llmContext:`Spending by category for ${ml(month)}: `+catData.map(d=>d.name+' '+nfmt(d.amount)+(d.budget>0?' (budget '+nfmt(d.budget)+')':'')).join(', ')}}>
         <div style={CA}>
           <div style={{fontSize:13,fontWeight:500,marginBottom:14,color:T.tx1}}>Spending by Category</div>
           {catData.length===0?<div style={{color:T.tx3,fontSize:13}}>No expenses this month</div>:catData.map((d,i)=>{
@@ -381,8 +598,8 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                     {warn&&<span style={{fontSize:10,color:YELLOW,background:T.amberBg,padding:"1px 6px",borderRadius:99}}>near</span>}
                   </div>
                   <div style={{display:"flex",alignItems:"baseline",gap:4}}>
-                    <span style={{fontSize:12,fontWeight:500,color:over?RED:T.tx1}}>{fmt(d.amount)}</span>
-                    {d.budget>0&&<span style={{fontSize:11,color:T.tx3}}>/ {fmt(d.budget)}</span>}
+                    <span style={{fontSize:12,fontWeight:500,color:over?RED:T.tx1}}>{nfmt(d.amount,catData.reduce((s,x)=>s+x.amount,0))}</span>
+                    {d.budget>0&&<span style={{fontSize:11,color:T.tx3}}>/ {nfmt(d.budget)}</span>}
                   </div>
                 </div>
                 <div style={{height:3,borderRadius:99,background:T.border,overflow:"hidden"}}>
@@ -394,6 +611,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
             );
           })}
         </div>
+        </SelectableWrapper>
         <div style={CA}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:500,color:T.tx1}}>{chartTab==="6mo"?"6-Month Cashflow":curYear+" Annual"}</div>
@@ -418,9 +636,9 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
           ):(
             <>
               <div style={{display:"flex",gap:20,marginBottom:12}}>
-                <span style={{fontSize:12,color:GREEN,fontWeight:600}}>Income {fmt(yearIncome)}</span>
-                <span style={{fontSize:12,color:RED,fontWeight:600}}>Expenses {fmt(yearExpenses)}</span>
-                <span style={{fontSize:12,color:yearIncome-yearExpenses>=0?GREEN:RED,fontWeight:700}}>Net {fmt(yearIncome-yearExpenses)}</span>
+                <span style={{fontSize:12,color:GREEN,fontWeight:600}}>Income {nfmt(yearIncome)}</span>
+                <span style={{fontSize:12,color:RED,fontWeight:600}}>Expenses {nfmt(yearExpenses)}</span>
+                <span style={{fontSize:12,color:yearIncome-yearExpenses>=0?GREEN:RED,fontWeight:700}}>Net {nfmt(yearIncome-yearExpenses)}</span>
               </div>
               <ResponsiveContainer width="100%" height={196}>
                 <BarChart data={yearData} margin={{left:-12,right:8,top:4,bottom:0}} barSize={8} barGap={2}>
@@ -474,7 +692,7 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                           {m.status==="none"&&<span style={{display:"inline-block",width:16,height:16,borderRadius:"50%",background:"#f8fafc",border:"1.5px solid #f1f5f9"}}/>}
                         </td>
                       ))}
-                      <td style={{textAlign:"right",padding:"7px 0 7px 10px",color:"#94a3b8",fontSize:11}}>{fmt(row.budget)}/mo</td>
+                      <td style={{textAlign:"right",padding:"7px 0 7px 10px",color:"#94a3b8",fontSize:11}}>{nfmt(row.budget)}/mo</td>
                     </tr>
                   );
                 })}
@@ -488,13 +706,14 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
       {holdings.length>0&&<StockPriceChart holdings={holdings}/>}
 
       {/* Recent Transactions */}
+      <SelectableWrapper item={{label:`Recent Transactions ${ml(month)}`,llmContext:`Recent transactions for ${ml(month)} (${recent.length} shown): ${recent.slice(0,10).map(t=>`${t.date} ${t.merchant||t.source} ${t.type==='income'?'+':'-'}${nfmt(t.amount)}${t.category?' ('+t.category+')':''}`).join('; ')}`}}>
       <div style={CA}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#1E293B"}}>Recent Transactions</div>
         {recent.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No transactions this month</div>:recent.map(t=>(
           <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #f8fafc"}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <div style={{width:36,height:36,borderRadius:10,background:t.type==="income"?"#f0fdf4":"#fafafa",border:"1px solid "+(t.type==="income"?"#bbf7d0":"#f1f5f9"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>
-                null
+              <div style={{width:36,height:36,borderRadius:10,background:t.type==="income"?T.greenBg:T.overlay,border:"1px solid "+(t.type==="income"?"#bbf7d0":T.border),display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                {getCatIcon(t.category,t.type,t.type==="income"?T.green:T.tx2,catIcons)}
               </div>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -504,10 +723,11 @@ function Dashboard({txns,expected,cats,catBudgets,month,setMonth,onConfirm,onRev
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>{t.date}{t.type==="expense"&&t.category?" · "+t.category:" · Income"}</div>
               </div>
             </div>
-            <div style={{fontWeight:700,fontSize:14,color:t.type==="income"?GREEN:"#374151"}}>{t.type==="income"?"+":"-"}{fmt(t.amount)}</div>
+            <div style={{fontWeight:700,fontSize:14,color:t.type==="income"?GREEN:"#374151"}}>{t.type==="income"?"+":"-"}{nfmt(t.amount)}</div>
           </div>
         ))}
       </div>
+      </SelectableWrapper>
     </div>
   );
 }
@@ -797,7 +1017,7 @@ function ExpectedIncome({expected,onUpdate,onConfirm}){
   );
 }
 
-function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}) {
+function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple, discreteMode}) {
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -859,6 +1079,10 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
       }
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (discreteMode) {
+    return <DiscreteModeBlockedCard />;
+  }
 
   const pickFolder = async () => {
     if (!("showDirectoryPicker" in window)) { folderRef.current.click(); return; }
@@ -989,7 +1213,7 @@ function LocalFolderSync({cats, receiptFPs=new Set(), onSaveFPs, onSaveMultiple}
   ];
 
   return (
-    <div style={{maxWidth:520}}>
+    <div style={{width:"100%"}}>
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Folder Sync</h2>
       <div style={{...CA,marginBottom:14}}>
         <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #7dd3fc",borderRadius:12,padding:"13px 16px",marginBottom:18,fontSize:13,color:"#0369a1",lineHeight:1.65,fontWeight:500}}>
@@ -1053,11 +1277,15 @@ function FileThumbnail({ item }) {
   return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 11, color: "#6b7280" }}>File</div>;
 }
 
-function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave}){
+function UploadReceipts({cats,receiptFPs=new Set(),onSaveFPs,onSave, discreteMode}){
   const [items,setItems]=useState([]);
   const [stage,setStage]=useState("select");
   const [busy,setBusy]=useState(false);
   const ref=useRef();
+
+  if (discreteMode) {
+    return <DiscreteModeBlockedCard />;
+  }
 
   const loadFiles = async files => {
     const fps = receiptFPs;
@@ -1229,7 +1457,7 @@ function RecurringForm({title,type,cats,onSaveMultiple}){
   };
   const lbl=(CADENCES.find(c=>c.v===f.recurrence)||{l:""}).l;
   return (
-    <div style={{maxWidth:500}}>
+    <div style={{width:"100%"}}>
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>{title}</h2>
       <div style={CA}>
         <Fld label={type==="income"?"Source":"Merchant / Description"}><input style={IS} value={f.merchant} onChange={e=>set("merchant",e.target.value)} placeholder={type==="income"?"e.g. Salary, Freelance":"e.g. Walmart, Netflix, Rent"}/></Fld>
@@ -1341,7 +1569,7 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
   if(editGroupId){
     const gCount=Math.max(1,parseInt(gEd.occurrences)||1);const gAmt=parseFloat(gEd.amount)||0;
     return (
-      <div style={{maxWidth:500}}>
+      <div style={{width:"100%"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}><button onClick={()=>setEditGroupId(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button><h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Edit Recurring Group</h2></div>
         <div style={CA}>
           <div style={{background:"#fef3c7",border:"1px solid #fde68a",borderRadius:8,padding:"10px 13px",marginBottom:16,fontSize:12,color:"#92400e"}}>This replaces all entries in this group with new ones based on your updated settings.</div>
@@ -1440,53 +1668,152 @@ function History({txns,cats,onUpdate,fMonth,setFMonth,onToast}){
   );
 }
 
-function Categories({cats,onUpdate,catBudgets,onUpdateBudgets}){
+function IconPicker({value,onChange,onClose}){
+  const [group,setGroup]=useState("All");
+  const [search,setSearch]=useState("");
+  const fileRef=useRef();
+  const filtered=ICON_SET.filter(i=>(group==="All"||i.group===group)&&(!search||i.label.toLowerCase().includes(search.toLowerCase())));
+  const handleUpload=e=>{
+    const f=e.target.files[0];if(!f)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{onChange(ev.target.result);onClose();};
+    reader.readAsDataURL(f);
+  };
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.35)"}} onClick={onClose}>
+      <div style={{background:T.surface,borderRadius:T.rCard+4,boxShadow:"0 8px 40px rgba(0,0,0,0.18)",width:380,maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+        {/* Header */}
+        <div style={{padding:"14px 16px 10px",borderBottom:"1px solid "+T.border,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <span style={{fontSize:14,fontWeight:700,color:T.tx1}}>Choose Icon</span>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:T.tx3,lineHeight:1,padding:2}}>×</button>
+        </div>
+        {/* Search + upload row */}
+        <div style={{padding:"10px 16px 8px",borderBottom:"1px solid "+T.border,display:"flex",gap:8,flexShrink:0}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search icons…" style={{...IS,flex:1,padding:"6px 10px",fontSize:12}}/>
+          <button onClick={()=>fileRef.current.click()} style={{padding:"6px 12px",borderRadius:T.r,border:"1px solid "+T.border,background:T.overlay,fontSize:12,fontWeight:600,color:T.tx2,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"inherit"}}>
+            ↑ Upload image
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleUpload}/>
+        </div>
+        {/* Group tabs */}
+        <div style={{padding:"8px 16px 0",display:"flex",gap:6,flexWrap:"wrap",flexShrink:0}}>
+          {["All",...ICON_GROUPS].map(g=>(
+            <button key={g} onClick={()=>setGroup(g)} style={{padding:"3px 10px",borderRadius:99,border:"1px solid "+(group===g?T.accent:T.border),background:group===g?T.accent:"transparent",color:group===g?"#fff":T.tx2,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",transition:"all 0.12s"}}>{g}</button>
+          ))}
+        </div>
+        {/* Grid */}
+        <div style={{padding:"12px 16px 16px",overflowY:"auto",display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6}}>
+          {/* Clear option */}
+          <button title="Auto-detect" onClick={()=>{onChange(null);onClose();}} style={{width:44,height:44,borderRadius:T.r,border:"1px dashed "+T.border,background:T.overlay,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:T.tx3}}>auto</button>
+          {filtered.map(icon=>{
+            const active=value===icon.key;
+            return(
+              <button key={icon.key} title={icon.label} onClick={()=>{onChange(icon.key);onClose();}}
+                style={{width:44,height:44,borderRadius:T.r,border:"1px solid "+(active?T.accent:T.border),background:active?T.accentBg:T.surface,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.1s"}}
+                onMouseEnter={e=>{if(!active){e.currentTarget.style.background=T.overlay;e.currentTarget.style.borderColor=T.tx3;}}}
+                onMouseLeave={e=>{if(!active){e.currentTarget.style.background=T.surface;e.currentTarget.style.borderColor=T.border;}}}>
+                {icon.svg(active?T.accent:T.tx2)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Categories({cats,onUpdate,catBudgets,onUpdateBudgets,catIcons={},onUpdateCatIcons}){
   const [newCat,setNewCat]=useState("");
   const [editIdx,setEditIdx]=useState(null);
   const [editVal,setEditVal]=useState("");
   const [budgetEdit,setBudgetEdit]=useState({});
+  const [iconPickerFor,setIconPickerFor]=useState(null); // cat name
   const add=()=>{const t=newCat.trim();if(!t||cats.includes(t))return;onUpdate([...cats,t]);setNewCat("");};
-  const del=i=>{const c=cats[i];onUpdate(cats.filter((_,j)=>j!==i));const b={...catBudgets};delete b[c];onUpdateBudgets(b);};
+  const del=i=>{
+    const c=cats[i];
+    onUpdate(cats.filter((_,j)=>j!==i));
+    const b={...catBudgets};delete b[c];onUpdateBudgets(b);
+    const ic={...catIcons};delete ic[c];onUpdateCatIcons&&onUpdateCatIcons(ic);
+  };
   const startEdit=i=>{setEditIdx(i);setEditVal(cats[i]);};
-  const saveEdit=()=>{const t=editVal.trim();if(!t)return;const old=cats[editIdx];const c=[...cats];c[editIdx]=t;onUpdate(c);if(catBudgets[old]!==undefined){const b={...catBudgets};b[t]=b[old];delete b[old];onUpdateBudgets(b);}setEditIdx(null);};
-  const setBudget=(cat,val)=>{setBudgetEdit(p=>({...p,[cat]:val}));};
+  const saveEdit=()=>{
+    const t=editVal.trim();if(!t)return;
+    const old=cats[editIdx];const c=[...cats];c[editIdx]=t;onUpdate(c);
+    if(catBudgets[old]!==undefined){const b={...catBudgets};b[t]=b[old];delete b[old];onUpdateBudgets(b);}
+    if(catIcons[old]!==undefined){const ic={...catIcons};ic[t]=ic[old];delete ic[old];onUpdateCatIcons&&onUpdateCatIcons(ic);}
+    setEditIdx(null);
+  };
+  const setBudget=(cat,val)=>setBudgetEdit(p=>({...p,[cat]:val}));
   const saveBudget=(cat)=>{const v=parseFloat(budgetEdit[cat]);onUpdateBudgets({...catBudgets,[cat]:isNaN(v)||v<=0?0:v});setBudgetEdit(p=>{const n={...p};delete n[cat];return n;});};
+  const setIcon=(cat,val)=>{
+    const ic={...catIcons};
+    if(val==null) delete ic[cat]; else ic[cat]=val;
+    onUpdateCatIcons&&onUpdateCatIcons(ic);
+  };
   return (
-    <div style={{maxWidth:520}}>
+    <div style={{width:"100%"}}>
+      {iconPickerFor&&<IconPicker value={catIcons[iconPickerFor]||null} onChange={v=>setIcon(iconPickerFor,v)} onClose={()=>setIconPickerFor(null)}/>}
       <h2 style={{margin:"0 0 18px",fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>Categories</h2>
       <div style={CA}>
         <div style={{display:"flex",gap:8,marginBottom:16}}>
           <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="New category name" style={{...IS,flex:1}}/>
           <Btn onClick={add} disabled={!newCat.trim()}>Add</Btn>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",alignItems:"center",gap:"0 8px",marginBottom:4}}>
-          <span style={{fontSize:11,color:"#9ca3af",fontWeight:600,textTransform:"uppercase"}}>Category</span>
-          <span style={{fontSize:11,color:"#9ca3af",fontWeight:600,textTransform:"uppercase",textAlign:"right",minWidth:110}}>Monthly Budget</span>
+        {/* Column headers */}
+        <div style={{display:"grid",gridTemplateColumns:"36px 1fr 120px auto auto",alignItems:"center",gap:"0 10px",marginBottom:4,paddingBottom:6,borderBottom:"1px solid "+T.border}}>
+          <span/>
+          <span style={{fontSize:11,color:T.tx3,fontWeight:600,textTransform:"uppercase"}}>Category</span>
+          <span style={{fontSize:11,color:T.tx3,fontWeight:600,textTransform:"uppercase",textAlign:"right"}}>Monthly Budget</span>
           <span/>
           <span/>
         </div>
-        {cats.map((c,i)=>(
-          <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",alignItems:"center",gap:"0 8px",padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>
-            {editIdx===i
-              ?<><input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus onKeyDown={e=>e.key==="Enter"&&saveEdit()} style={{...IS,flex:1,gridColumn:"1"}}/><Btn sm onClick={saveEdit}>Save</Btn><Btn sm v="secondary" onClick={()=>setEditIdx(null)}>Cancel</Btn><span/></>
-              :<>
-                <span style={{fontSize:13}}>{c}</span>
-                <div style={{display:"flex",alignItems:"center",gap:4}}>
-                  <span style={{fontSize:11,color:"#6b7280"}}>$</span>
-                  <input
-                    type="number" min="0" placeholder="—"
+        {cats.map((c,i)=>{
+          const iconVal=catIcons[c];
+          const isImg=iconVal&&(iconVal.startsWith("data:")||iconVal.startsWith("http"));
+          const hasCustom=!!iconVal;
+          return(
+            <div key={i} style={{display:"grid",gridTemplateColumns:"36px 1fr 120px auto auto",alignItems:"center",gap:"0 10px",padding:"8px 0",borderBottom:"1px solid "+T.overlay}}>
+              {/* Icon button */}
+              <button title="Change icon" onClick={()=>setIconPickerFor(c)}
+                style={{width:36,height:36,borderRadius:T.r,border:"1px solid "+(hasCustom?T.accent:T.border),background:hasCustom?T.accentBg:T.overlay,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all 0.12s"}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.background=T.accentBg;}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor=hasCustom?T.accent:T.border;e.currentTarget.style.background=hasCustom?T.accentBg:T.overlay;}}>
+                {isImg
+                  ?<img src={iconVal} style={{width:22,height:22,borderRadius:4,objectFit:"cover"}} alt=""/>
+                  :getCatIcon(c,"expense",hasCustom?T.accent:T.tx3,catIcons)
+                }
+              </button>
+              {/* Name / edit */}
+              {editIdx===i
+                ?<input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus onKeyDown={e=>e.key==="Enter"&&saveEdit()} style={{...IS,padding:"5px 8px",fontSize:13}}/>
+                :<span style={{fontSize:13,fontWeight:500,color:T.tx1}}>{c}</span>
+              }
+              {/* Budget */}
+              {editIdx===i
+                ?<span/>
+                :<div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end"}}>
+                  <span style={{fontSize:11,color:T.tx3}}>$</span>
+                  <input type="number" min="0" placeholder="—"
                     value={budgetEdit[c]!==undefined?budgetEdit[c]:(catBudgets[c]||"")}
                     onChange={e=>setBudget(c,e.target.value)}
                     onBlur={()=>budgetEdit[c]!==undefined&&saveBudget(c)}
                     onKeyDown={e=>e.key==="Enter"&&saveBudget(c)}
-                    style={{...IS,width:80,textAlign:"right"}}
-                  />
+                    style={{...IS,width:76,textAlign:"right",padding:"5px 8px",fontSize:13}}/>
                 </div>
-                <button onClick={()=>startEdit(i)} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
-                <button onClick={()=>del(i)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>Remove</button>
-              </>}
-          </div>
-        ))}
+              }
+              {/* Edit / Save button */}
+              {editIdx===i
+                ?<Btn sm onClick={saveEdit}>Save</Btn>
+                :<button onClick={()=>startEdit(i)} style={{background:"none",border:"1px solid "+T.border,borderRadius:T.r,padding:"4px 10px",cursor:"pointer",fontSize:11,color:T.tx2,fontFamily:"inherit"}}>Edit</button>
+              }
+              {/* Remove / Cancel */}
+              {editIdx===i
+                ?<Btn sm v="secondary" onClick={()=>setEditIdx(null)}>Cancel</Btn>
+                :<button onClick={()=>del(i)} style={{background:"none",border:"1px solid #fecaca",borderRadius:T.r,padding:"4px 10px",cursor:"pointer",fontSize:11,color:T.red,fontFamily:"inherit"}}>Remove</button>
+              }
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1531,7 +1858,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
   const deleteSelected=()=>{onSaveTxns(vacationTxns.filter(t=>!selected.has(t.id)));exitSelect();};
 
   if(view==="new") return (
-    <div style={{maxWidth:460}}>
+    <div style={{width:"100%"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
         <button onClick={()=>setView("list")} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
         <h2 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:"-0.3px"}}>New Vacation</h2>
@@ -1555,7 +1882,7 @@ function Vacations({vacations,vacationTxns,onSaveVacations,onSaveTxns}){
     const total=txns.reduce((s,t)=>s+t.amount,0);
     const remaining=vac.budget>0?vac.budget-total:null;
     return (
-      <div style={{maxWidth:560}}>
+      <div style={{width:"100%"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:editingMeta?12:18}}>
           <button onClick={()=>{setView("list");setEditingMeta(false);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9ca3af",padding:0,fontFamily:"inherit"}}>←</button>
           <h2 style={{margin:0,fontSize:19,fontWeight:600,flex:1}}>{vac.name}</h2>
@@ -1895,6 +2222,7 @@ function StockPriceChart({holdings}){
 }
 
 function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
+  const nfmt=useNfmt();
   const [prices,setPrices]=useState({});
   const [fxRate,setFxRate]=useState(1.38); // USD→CAD live rate
   const [loading,setLoading]=useState(false);
@@ -1903,7 +2231,7 @@ function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
 
   // helpers
   const getCur=tk=>prices[tk]?.currency??(tk.toUpperCase().endsWith('.TO')?'CAD':'USD');
-  const fmtN=(n,cur)=>cur==='USD'?fmtUSD(n):fmt(n);
+  const fmtN=(n,cur)=>cur==='USD'&&!window.__discreteMode?fmtUSD(n):nfmt(n);
   const toCAD=(amount,cur)=>cur==='USD'?amount*fxRate:amount;
   const [form,setForm]=useState({ticker:"",shares:"",costBasis:""});
   const [editId,setEditId]=useState(null);
@@ -2035,16 +2363,16 @@ function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
               {isMixed?(
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {hasUSD&&<div style={{display:"flex",alignItems:"baseline",gap:6}}>
-                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{fmtUSD(holdings.filter(h=>getCur(h.ticker)==='USD').reduce((s,h)=>s+hVal(h),0))}</span>
+                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{fmtN(holdings.filter(h=>getCur(h.ticker)==='USD').reduce((s,h)=>s+hVal(h),0),'USD')}</span>
                     <span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>USD</span>
                   </div>}
                   {hasCAD&&<div style={{display:"flex",alignItems:"baseline",gap:6}}>
-                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{fmt(holdings.filter(h=>getCur(h.ticker)==='CAD').reduce((s,h)=>s+hVal(h),0))}</span>
+                    <span style={{fontSize:18,fontWeight:800,color:"#1E293B",letterSpacing:"-0.4px"}}>{nfmt(holdings.filter(h=>getCur(h.ticker)==='CAD').reduce((s,h)=>s+hVal(h),0))}</span>
                     <span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>CAD</span>
                   </div>}
                 </div>
               ):(
-                <div style={{fontSize:22,fontWeight:800,color:"#1E293B",letterSpacing:"-0.5px"}}>{hasUSD?fmtUSD(totalValueCAD/fxRate):fmt(totalValueCAD)}</div>
+                <div style={{fontSize:22,fontWeight:800,color:"#1E293B",letterSpacing:"-0.5px"}}>{hasUSD?fmtN(totalValueCAD/fxRate,'USD'):nfmt(totalValueCAD)}</div>
               )}
             </div>
             {/* Gain/Loss card */}
@@ -2053,12 +2381,12 @@ function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
                 <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Total Gain / Loss</div>
                 {isMixed?(
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    {hasUSD&&(()=>{const usdHlds=holdings.filter(h=>getCur(h.ticker)==='USD'&&h.costBasis!=null);const g=usdHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=usdHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return usdHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{fmtUSD(g)}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>USD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
-                    {hasCAD&&(()=>{const cadHlds=holdings.filter(h=>getCur(h.ticker)==='CAD'&&h.costBasis!=null);const g=cadHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=cadHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return cadHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{fmt(g)}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>CAD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
+                    {hasUSD&&(()=>{const usdHlds=holdings.filter(h=>getCur(h.ticker)==='USD'&&h.costBasis!=null);const g=usdHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=usdHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return usdHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{fmtN(g,'USD')}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>USD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
+                    {hasCAD&&(()=>{const cadHlds=holdings.filter(h=>getCur(h.ticker)==='CAD'&&h.costBasis!=null);const g=cadHlds.reduce((s,h)=>s+hVal(h)-h.costBasis*h.shares,0);const c=cadHlds.reduce((s,h)=>s+h.costBasis*h.shares,0);return cadHlds.length?<div style={{display:"flex",alignItems:"baseline",gap:6}}><span style={{fontSize:18,fontWeight:800,color:g>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{g>=0?"+":""}{nfmt(g)}</span><span style={{fontSize:11,fontWeight:700,color:"#64748b",background:"#f1f5f9",padding:"1px 6px",borderRadius:20}}>CAD</span>{c>0&&<span style={{fontSize:11,color:g>=0?"#059669":"#dc2626",fontWeight:600}}>{g>=0?"+":""}{((g/c)*100).toFixed(2)}%</span>}</div>:null;})()}
                   </div>
                 ):(
                   <>
-                    <div style={{fontSize:20,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.5px"}}>{totalGainCAD>=0?"+":""}{hasUSD?fmtUSD(totalGainCAD/fxRate):fmt(totalGainCAD)}</div>
+                    <div style={{fontSize:20,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.5px"}}>{totalGainCAD>=0?"+":""}{hasUSD?fmtN(totalGainCAD/fxRate,'USD'):nfmt(totalGainCAD)}</div>
                     {totalCostCAD>0&&<div style={{fontSize:11,fontWeight:600,color:totalGainCAD>=0?"#059669":"#dc2626",marginTop:3}}>{totalGainCAD>=0?"+":""}{((totalGainCAD/totalCostCAD)*100).toFixed(2)}%</div>}
                   </>
                 )}
@@ -2070,16 +2398,16 @@ function Stocks({holdings,onSaveHoldings,onPricesUpdate,onFxRateUpdate}){
             <div style={{marginTop:8,padding:"10px 16px",borderRadius:12,background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",border:"1px solid #bae6fd",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
                 <span style={{fontSize:11,fontWeight:700,color:"#0369a1",textTransform:"uppercase",letterSpacing:"0.07em"}}>Combined Value</span>
-                <span style={{fontSize:11,color:"#64748b",background:"#fff",border:"1px solid #bae6fd",padding:"1px 7px",borderRadius:20,fontWeight:600}}>CAD · 1 USD = {fmt(fxRate)}</span>
+                <span style={{fontSize:11,color:"#64748b",background:"#fff",border:"1px solid #bae6fd",padding:"1px 7px",borderRadius:20,fontWeight:600}}>CAD · 1 USD = {nfmt(fxRate)}</span>
               </div>
               <div style={{display:"flex",gap:24,alignItems:"baseline"}}>
                 <div style={{textAlign:"right"}}>
                   <div style={{fontSize:11,color:"#64748b",fontWeight:600}}>Portfolio</div>
-                  <div style={{fontSize:18,fontWeight:800,color:"#0369a1",letterSpacing:"-0.4px"}}>{fmt(totalValueCAD)}</div>
+                  <div style={{fontSize:18,fontWeight:800,color:"#0369a1",letterSpacing:"-0.4px"}}>{nfmt(totalValueCAD)}</div>
                 </div>
                 {totalGainCAD!=null&&<div style={{textAlign:"right"}}>
                   <div style={{fontSize:11,color:"#64748b",fontWeight:600}}>Gain / Loss</div>
-                  <div style={{fontSize:18,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{totalGainCAD>=0?"+":""}{fmt(totalGainCAD)}</div>
+                  <div style={{fontSize:18,fontWeight:800,color:totalGainCAD>=0?"#059669":"#dc2626",letterSpacing:"-0.4px"}}>{totalGainCAD>=0?"+":""}{nfmt(totalGainCAD)}</div>
                 </div>}
               </div>
             </div>
@@ -2386,7 +2714,7 @@ function CSVImport({txns,cats,onImport}){
 }
 
 // ── Cash Flow Forecast ────────────────────────────────────────────────────────
-function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
+function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings,catBudgets={},cats=[]}){
   const DAYS=90;
   // Current balance: sum of all accounts
   const startBalance=accounts.reduce((s,a)=>s+(+a.balance||0),0);
@@ -2400,11 +2728,72 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
     const days=[];
     let balance=startBalance;
 
-    // Average daily spend from last 60 days of transactions
-    const since=new Date();since.setDate(since.getDate()-60);
-    const sinceStr=since.toISOString().split("T")[0];
-    const recentSpend=txns.filter(t=>t.type==="expense"&&t.date>=sinceStr).reduce((s,t)=>s+t.amount,0);
-    const dailySpend=recentSpend/60;
+    // ── Daily spend estimate ──────────────────────────────────────────────────
+    // Strategy: use 3-month rolling average per category if ≥3 months of data
+    // exist for that category; otherwise fall back to the category's budget
+    // target. Sum all categories for total monthly spend → divide by 30.
+    const expenseTxns=txns.filter(t=>t.type==="expense");
+
+    // Find the earliest month that has any expense data
+    const monthsWithData=new Set(expenseTxns.map(t=>t.date.slice(0,7)));
+    const sortedMonths=[...monthsWithData].sort();
+    const dataMonthCount=sortedMonths.length;
+
+    // Build last-3-months per-category spend map
+    const now=new Date();
+    const last3Months=[];
+    for(let m=1;m<=3;m++){
+      const d=new Date(now.getFullYear(),now.getMonth()-m,1);
+      last3Months.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));
+    }
+
+    // Per-category 3-month totals and month counts
+    const catMonthTotals={}; // {cat: {ym: total}}
+    expenseTxns.filter(t=>last3Months.includes(t.date.slice(0,7))).forEach(t=>{
+      const cat=t.category||"Uncategorized";
+      const ym=t.date.slice(0,7);
+      if(!catMonthTotals[cat]) catMonthTotals[cat]={};
+      catMonthTotals[cat][ym]=(catMonthTotals[cat][ym]||0)+t.amount;
+    });
+
+    // Determine monthly spend estimate for each known category
+    // Use the union of cats with budgets + cats seen in data
+    const allCats=new Set([...cats,...Object.keys(catBudgets),...Object.keys(catMonthTotals)]);
+    let estimatedMonthlySpend=0;
+    allCats.forEach(cat=>{
+      const monthData=catMonthTotals[cat]||{};
+      const activeMonths=last3Months.filter(ym=>monthData[ym]>0);
+      if(dataMonthCount>=3&&activeMonths.length>=3){
+        // Enough data: use 3-month rolling average for this category
+        const avg=activeMonths.reduce((s,ym)=>s+(monthData[ym]||0),0)/activeMonths.length;
+        estimatedMonthlySpend+=avg;
+      } else if(dataMonthCount>=3&&activeMonths.length>0){
+        // Have overall data but sparse for this cat — blend actual avg + budget
+        const avg=activeMonths.reduce((s,ym)=>s+(monthData[ym]||0),0)/activeMonths.length;
+        const budget=catBudgets[cat]||0;
+        estimatedMonthlySpend+=budget>0?(avg+budget)/2:avg;
+      } else {
+        // Fewer than 3 months of overall data — rely on budget target
+        estimatedMonthlySpend+=catBudgets[cat]||0;
+      }
+    });
+
+    // If we have some actual spend data but no category breakdown at all, fall
+    // back to a simple recent-60-day average so the chart isn't flat zero.
+    if(estimatedMonthlySpend===0&&expenseTxns.length>0){
+      const since=new Date();since.setDate(since.getDate()-60);
+      const sinceStr=since.toISOString().split("T")[0];
+      const recent=expenseTxns.filter(t=>t.date>=sinceStr).reduce((s,t)=>s+t.amount,0);
+      estimatedMonthlySpend=recent/2; // 60 days → monthly
+    }
+
+    const dailySpend=estimatedMonthlySpend/30;
+    // Label for UI — explains which method was used
+    const spendMethod=dataMonthCount>=3
+      ?"3-month rolling average by category"
+      :dataMonthCount>0
+        ?"category budgets + partial spend data"
+        :"category budget targets";
 
     // Build a map of scheduled events per date
     const events={};
@@ -2426,9 +2815,43 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
       }
     });
 
-    // Expected income
-    expected.filter(e=>!e.confirmed&&e.date>=today_str).forEach(e=>{
-      addEvent(e.date,e.source,+e.amount||0,"income");
+    // Expected income — use expectedDate (not date), and extrapolate recurring entries
+    // First pass: add all explicitly stored future entries
+    const addedDates=new Set();
+    expected.filter(e=>!e.confirmed&&e.expectedDate&&e.expectedDate>=today_str).forEach(e=>{
+      addEvent(e.expectedDate,e.source,+e.amount||0,"income");
+      addedDates.add(e.id);
+    });
+    // Second pass: for recurring entries, project forward up to 90 days if no future entries exist
+    const recurGroups={};
+    expected.filter(e=>e.cadence&&e.cadence!=="once").forEach(e=>{
+      if(!recurGroups[e.groupId||e.id]||e.expectedDate>recurGroups[e.groupId||e.id].expectedDate)
+        recurGroups[e.groupId||e.id]={...e};
+    });
+    const advanceDate=(dateStr,cadence)=>{
+      const d=new Date(dateStr+"T12:00:00");
+      if(cadence==="weekly")      d.setDate(d.getDate()+7);
+      else if(cadence==="biweekly") d.setDate(d.getDate()+14);
+      else if(cadence==="every15") d.setDate(d.getDate()+15);
+      else if(cadence==="monthly") d.setMonth(d.getMonth()+1);
+      else if(cadence==="bimonthly") d.setMonth(d.getMonth()+2);
+      else if(cadence==="quarterly") d.setMonth(d.getMonth()+3);
+      else if(cadence==="annually") d.setFullYear(d.getFullYear()+1);
+      return d.toISOString().split("T")[0];
+    };
+    Object.values(recurGroups).forEach(e=>{
+      // Find last known entry for this group and project forward
+      const groupEntries=expected.filter(x=>(x.groupId||x.id)===(e.groupId||e.id));
+      const lastDate=groupEntries.reduce((m,x)=>x.expectedDate>m?x.expectedDate:m,"");
+      if(!lastDate) return;
+      const endDate=new Date();endDate.setDate(endDate.getDate()+DAYS);
+      const endStr=endDate.toISOString().split("T")[0];
+      let cur=lastDate;
+      for(let i=0;i<50;i++){
+        cur=advanceDate(cur,e.cadence);
+        if(cur>endStr) break;
+        if(cur>=today_str) addEvent(cur,e.source,+e.amount||0,"income");
+      }
     });
 
     // Extra what-if expense
@@ -2448,15 +2871,16 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
       });
       days.push({date:dateStr,balance:+balance.toFixed(2),events:dayEvents,day:i});
     }
-    return days;
-  },[txns,bills,billPayments,expected,accounts,startBalance,extraExpense,extraLabel]);
+    return {days,spendMethod,estimatedMonthlySpend};
+  },[txns,bills,billPayments,expected,accounts,startBalance,extraExpense,extraLabel,catBudgets,cats]);
 
-  const minBalance=Math.min(...projection.map(d=>d.balance));
-  const dangerDays=projection.filter(d=>d.balance<threshold);
+  const {days:projDays,spendMethod,estimatedMonthlySpend}=projection;
+  const minBalance=Math.min(...projDays.map(d=>d.balance));
+  const dangerDays=projDays.filter(d=>d.balance<threshold);
   const firstDanger=dangerDays[0];
 
   // Chart data — weekly points
-  const chartData=projection.filter((_,i)=>i%7===0||i===DAYS-1).map(d=>({
+  const chartData=projDays.filter((_,i)=>i%7===0||i===DAYS-1).map(d=>({
     date:new Date(d.date).toLocaleDateString("en-CA",{month:"short",day:"numeric"}),
     Balance:+d.balance.toFixed(0),
     Threshold:threshold,
@@ -2468,14 +2892,17 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
   return(
     <div>
       <div style={{fontSize:22,fontWeight:800,color:"#0f172a",marginBottom:4}}>Cash Flow Forecast</div>
-      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>90-day projection based on your spending patterns, upcoming bills, and expected income.</div>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>
+        90-day projection based on upcoming bills and expected income.{" "}
+        <span style={{color:"#94a3b8"}}>Daily spend estimate: <strong style={{fontWeight:600,color:"#64748b"}}>{fmt(estimatedMonthlySpend)}/mo</strong> via {spendMethod}.</span>
+      </div>
 
       {/* Summary cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:28}}>
         {[
           {label:"Starting Balance",val:fmt(startBalance),color:"#0284C7",sub:accounts.length+" account"+(accounts.length!==1?"s":"")},
           {label:"Lowest Point",val:fmt(minBalance),color:healthColor,sub:minBalance<threshold?"Below threshold":"Looking good"},
-          {label:"90-Day Outlook",val:fmt(projection[DAYS-1]?.balance||0),color:projection[DAYS-1]?.balance>startBalance?GREEN:RED,sub:projection[DAYS-1]?.balance>startBalance?"Net positive":"Net negative"},
+          {label:"90-Day Outlook",val:fmt(projDays[DAYS-1]?.balance||0),color:projDays[DAYS-1]?.balance>startBalance?GREEN:RED,sub:projDays[DAYS-1]?.balance>startBalance?"Net positive":"Net negative"},
         ].map(c=>(
           <div key={c.label} style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{c.label}</div>
@@ -2528,7 +2955,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #e2e8f0",padding:18}}>
         <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:12}}>Upcoming Events</div>
         <div style={{maxHeight:240,overflowY:"auto"}}>
-          {projection.filter(d=>d.events.length>0).slice(0,20).map(d=>d.events.map((ev,i)=>(
+          {projDays.filter(d=>d.events.length>0).slice(0,20).map(d=>d.events.map((ev,i)=>(
             <div key={d.date+i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9",fontSize:12}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
                 <span>{""}</span>
@@ -2540,7 +2967,7 @@ function CashFlowForecast({txns,bills,billPayments,expected,accounts,settings}){
               <div style={{fontWeight:700,color:ev.type==="income"?GREEN:RED}}>{ev.type==="income"?"+":"-"}{fmt(ev.amount)}</div>
             </div>
           )))}
-          {projection.every(d=>d.events.length===0)&&<div style={{fontSize:12,color:"#94a3b8",textAlign:"center",padding:16}}>No scheduled events found. Add bills and expected income to see them here.</div>}
+          {projDays.every(d=>d.events.length===0)&&<div style={{fontSize:12,color:"#94a3b8",textAlign:"center",padding:16}}>No scheduled events found. Add bills and expected income to see them here.</div>}
         </div>
       </div>
     </div>
@@ -2862,97 +3289,163 @@ function Reports({txns,bills,billPayments,cats,catBudgets,goals,vacations,vacati
 }
 
 // ── Alerts & Notifications ────────────────────────────────────────────────────
-function AlertsPanel({txns,bills,billPayments,catBudgets,goals,month,settings,onUpdateSettings}){
-  const alerts=useMemo(()=>{
+// ── Alert computation (shared hook) ──────────────────────────────────────────
+function useAlerts({txns,bills,billPayments,catBudgets,goals,month,settings}){
+  return useMemo(()=>{
     const found=[];
     const curMonth=month||today().slice(0,7);
-
-    // 1. Unpaid bills due within 3 days
     const todayStr=today();
+
     bills.filter(b=>b.active!==false).forEach(b=>{
       const paid=billPayments.some(p=>p.billId===b.id&&p.month===curMonth);
       if(paid) return;
       const dueStr=curMonth+"-"+String(b.dueDay||15).padStart(2,"0");
       const daysUntil=Math.ceil((new Date(dueStr)-new Date(todayStr))/(1000*60*60*24));
       if(daysUntil<=3&&daysUntil>=-3){
-        found.push({id:"bill-"+b.id,type:daysUntil<0?"overdue":"due-soon",icon:daysUntil<0?"high":"medium",title:`${b.name} is ${daysUntil<0?"overdue":"due soon"}`,detail:`${fmt(b.amount)} ${daysUntil<0?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:daysUntil<0?"high":"medium"});
+        const over=daysUntil<0;
+        found.push({id:"bill-"+b.id,title:`${b.name} ${over?"overdue":"due soon"}`,detail:`${fmt(b.amount)} · ${over?Math.abs(daysUntil)+" days overdue":`due in ${daysUntil} day${daysUntil!==1?"s":""}`}`,severity:over?"high":"medium",category:"bill"});
       }
     });
 
-    // 2. Category budget overages
-    const mt=[...txns].filter(t=>t.type==="expense"&&t.date?.startsWith(curMonth));
+    const mt=txns.filter(t=>t.type==="expense"&&t.date?.startsWith(curMonth));
     Object.entries(catBudgets).forEach(([cat,budget])=>{
       if(!budget) return;
       const spent=mt.filter(t=>t.category===cat).reduce((s,t)=>s+t.amount,0);
       const pct=spent/budget*100;
-      if(pct>=100) found.push({id:"budget-over-"+cat,type:"budget-over",icon:"high",title:`${cat} budget exceeded`,detail:`${fmt(spent)} spent of ${fmt(budget)} budget (${pct.toFixed(0)}%)`,severity:"high"});
-      else if(pct>=80) found.push({id:"budget-warn-"+cat,type:"budget-warn",icon:"medium",title:`${cat} budget at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium"});
+      if(pct>=100) found.push({id:"budget-over-"+cat,title:`${cat} budget exceeded`,detail:`${fmt(spent)} of ${fmt(budget)} — ${pct.toFixed(0)}% used`,severity:"high",category:"budget"});
+      else if(pct>=80) found.push({id:"budget-warn-"+cat,title:`${cat} at ${pct.toFixed(0)}%`,detail:`${fmt(spent)} of ${fmt(budget)} used this month`,severity:"medium",category:"budget"});
     });
 
-    // 3. Goals close to target
     goals.forEach(g=>{
       if(!g.target||!g.saved) return;
       const pct=g.saved/g.target*100;
-      if(pct>=100) found.push({id:"goal-done-"+g.id,type:"goal-done",icon:"done",title:`Goal "${g.name}" reached!`,detail:`You saved ${fmt(g.saved)} — goal complete.`,severity:"info"});
-      else if(pct>=75) found.push({id:"goal-near-"+g.id,type:"goal-near",icon:"info",title:`Goal "${g.name}" is ${pct.toFixed(0)}% complete`,detail:`${fmt(g.target-g.saved)} to go`,severity:"info"});
+      if(pct>=100) found.push({id:"goal-done-"+g.id,title:`Goal "${g.name}" complete!`,detail:`Saved ${fmt(g.saved)} — target reached`,severity:"info",category:"goal"});
+      else if(pct>=75) found.push({id:"goal-near-"+g.id,title:`Goal "${g.name}" at ${pct.toFixed(0)}%`,detail:`${fmt(g.target-g.saved)} remaining`,severity:"info",category:"goal"});
     });
 
-    // 4. Large transaction alert
-    const largeThreshold=settings?.largeTransactionAlert||500;
-    const bigTxns=mt.filter(t=>t.amount>=largeThreshold);
-    bigTxns.forEach(t=>{
-      found.push({id:"large-"+t.id,type:"large",icon:"expense",title:`Large transaction: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium"});
+    const threshold=settings?.largeTransactionAlert||500;
+    mt.filter(t=>t.amount>=threshold).forEach(t=>{
+      found.push({id:"large-"+t.id,title:`Large charge: ${t.merchant||"Unknown"}`,detail:`${fmt(t.amount)} on ${t.date}`,severity:"medium",category:"transaction"});
     });
 
     return found;
   },[txns,bills,billPayments,catBudgets,goals,month,settings]);
+}
 
-  const [dismissed,setDismissed]=useState(new Set());
+// Severity icon SVGs
+function AlertIcon({severity}){
+  const s={width:16,height:16,viewBox:"0 0 16 16",fill:"none",flexShrink:0};
+  if(severity==="high") return(
+    <svg {...s}><circle cx="8" cy="8" r="7" fill={T.red} opacity={0.12}/><path d="M8 5v3.5" stroke={T.red} strokeWidth={1.8} strokeLinecap="round"/><circle cx="8" cy="11" r="1" fill={T.red}/></svg>
+  );
+  if(severity==="medium") return(
+    <svg {...s}><circle cx="8" cy="8" r="7" fill={T.amber} opacity={0.15}/><path d="M8 5v3.5" stroke={T.amber} strokeWidth={1.8} strokeLinecap="round"/><circle cx="8" cy="11" r="1" fill={T.amber}/></svg>
+  );
+  // info / goal
+  return(
+    <svg {...s}><circle cx="8" cy="8" r="7" fill={T.green} opacity={0.12}/><path d="M8 7v4" stroke={T.green} strokeWidth={1.8} strokeLinecap="round"/><circle cx="8" cy="5.5" r="1" fill={T.green}/></svg>
+  );
+}
+
+function AlertsPanel({alerts,dismissed,onDismiss,onDismissAll,settings,onUpdateSettings,onEnable,onDisable}){
   const visible=alerts.filter(a=>!dismissed.has(a.id));
   const highCount=visible.filter(a=>a.severity==="high").length;
   const medCount=visible.filter(a=>a.severity==="medium").length;
+  const infCount=visible.filter(a=>a.severity==="info").length;
 
-  const severityBg={high:"#fef2f2",medium:"#fffbeb",info:"#f0fdf4"};
-  const severityBorder={high:"#fecaca",medium:"#fde047",info:"#bbf7d0"};
+  const severityBg={high:T.redBg,medium:T.amberBg,info:T.greenBg};
+  const severityBorder={high:"#fecaca",medium:"#fde68a",info:"#bbf7d0"};
 
   return(
-    <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px 12px",borderBottom:"1px solid "+T.border,flexShrink:0}}>
         <div>
-          <div style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>Alerts</div>
-          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{visible.length===0?"All clear":""+highCount+" urgent · "+medCount+" warnings"}</div>
+          <div style={{fontSize:15,fontWeight:700,color:T.tx1}}>Notifications</div>
+          <div style={{fontSize:11,color:T.tx3,marginTop:2}}>
+            {visible.length===0?"All clear":[highCount&&`${highCount} urgent`,medCount&&`${medCount} warnings`,infCount&&`${infCount} info`].filter(Boolean).join(" · ")}
+          </div>
         </div>
-        {visible.length>0&&<button onClick={()=>setDismissed(new Set(alerts.map(a=>a.id)))} style={{fontSize:11,padding:"4px 10px",border:"1px solid #e2e8f0",borderRadius:7,cursor:"pointer",background:"#f8fafc",color:"#64748b",fontFamily:"inherit"}}>Dismiss all</button>}
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {visible.length>0&&<button onClick={onDismissAll} style={{fontSize:11,padding:"4px 10px",border:"1px solid "+T.border,borderRadius:99,cursor:"pointer",background:T.overlay,color:T.tx2,fontFamily:"inherit",fontWeight:500}}>Clear all</button>}
+          <button onClick={onDisable} title="Turn off notifications" style={{background:"none",border:"none",cursor:"pointer",color:T.tx3,fontFamily:"inherit",fontSize:11,padding:"4px 6px"}}>Turn off</button>
+        </div>
       </div>
-      {visible.length===0&&(
-        <div style={{textAlign:"center",padding:"24px 0",color:"#94a3b8",fontSize:13}}>No alerts right now — you're on track!</div>
-      )}
-      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+
+      {/* Alert list */}
+      <div style={{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:8}}>
+        {visible.length===0&&(
+          <div style={{textAlign:"center",padding:"32px 0",color:T.tx3,fontSize:13}}>
+            <svg width={32} height={32} viewBox="0 0 24 24" fill="none" stroke={T.tx3} strokeWidth={1.5} style={{display:"block",margin:"0 auto 10px"}}><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+            You're all caught up!
+          </div>
+        )}
         {visible.map(a=>(
-          <div key={a.id} style={{display:"flex",alignItems:"flex-start",gap:10,background:severityBg[a.severity]||"#f8fafc",border:`1px solid ${severityBorder[a.severity]||"#e2e8f0"}`,borderRadius:10,padding:"10px 12px"}}>
-            <span style={{fontSize:18,flexShrink:0}}>{a.icon}</span>
+          <div key={a.id} style={{display:"flex",alignItems:"flex-start",gap:10,background:severityBg[a.severity]||T.overlay,border:`1px solid ${severityBorder[a.severity]||T.border}`,borderRadius:T.r,padding:"10px 12px"}}>
+            <div style={{marginTop:1}}><AlertIcon severity={a.severity}/></div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:600,fontSize:13,color:"#0f172a"}}>{a.title}</div>
-              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{a.detail}</div>
+              <div style={{fontWeight:600,fontSize:13,color:T.tx1,lineHeight:1.3}}>{a.title}</div>
+              <div style={{fontSize:11,color:T.tx2,marginTop:3}}>{a.detail}</div>
             </div>
-            <button onClick={()=>setDismissed(p=>new Set([...p,a.id]))} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#94a3b8",padding:"0 2px",fontFamily:"inherit",lineHeight:1}}>×</button>
+            <button onClick={()=>onDismiss(a.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:T.tx3,padding:"0 2px",fontFamily:"inherit",lineHeight:1,flexShrink:0}}>×</button>
           </div>
         ))}
       </div>
-      {/* Alert preferences */}
-      <div style={{marginTop:16,paddingTop:14,borderTop:"1px solid #f1f5f9"}}>
-        <div style={{fontSize:11,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>Alert Preferences</div>
-        <div style={{display:"flex",alignItems:"center",gap:10,fontSize:12}}>
-          <label style={{color:"#374151",whiteSpace:"nowrap"}}>Large transaction threshold:</label>
-          <input type="number" min={50} step={50} value={settings?.largeTransactionAlert||500} onChange={e=>onUpdateSettings({...settings,largeTransactionAlert:+e.target.value})} style={{...IS,width:100}}/>
+
+      {/* Preferences */}
+      <div style={{borderTop:"1px solid "+T.border,padding:"12px 16px",flexShrink:0}}>
+        <div style={{fontSize:11,fontWeight:600,color:T.tx3,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.06em"}}>Preferences</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:12,color:T.tx2}}>
+          <span>Large transaction threshold</span>
+          <div style={{display:"flex",alignItems:"center",gap:4}}>
+            <span style={{color:T.tx3,fontSize:11}}>$</span>
+            <input type="number" min={50} step={50} value={settings?.largeTransactionAlert||500}
+              onChange={e=>onUpdateSettings({...settings,largeTransactionAlert:+e.target.value})}
+              style={{...IS,width:70,textAlign:"right",padding:"4px 8px",fontSize:12}}/>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
+// Bell icon with slide-in drawer
+function AlertsBell({alerts,dismissed,onDismiss,onDismissAll,settings,onUpdateSettings,onEnable,onDisable}){
+  const [open,setOpen]=useState(false);
+  const visible=alerts.filter(a=>!dismissed.has(a.id));
+  const urgentCount=visible.filter(a=>a.severity==="high"||a.severity==="medium").length;
+
+  return(
+    <>
+      <button onClick={()=>setOpen(v=>!v)} title="Notifications"
+        style={{position:"relative",width:34,height:34,borderRadius:"50%",border:"1px solid "+(open?T.accent:T.border),background:open?T.accentBg:T.surface,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s"}}
+        onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.background=T.accentBg;}}
+        onMouseLeave={e=>{if(!open){e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.surface;}}}>
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke={open?T.accent:T.tx2} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 01-3.46 0"/>
+        </svg>
+        {urgentCount>0&&(
+          <span style={{position:"absolute",top:-3,right:-3,minWidth:16,height:16,borderRadius:99,background:T.red,color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",border:"2px solid "+T.surface,lineHeight:1}}>
+            {urgentCount>9?"9+":urgentCount}
+          </span>
+        )}
+      </button>
+
+      {/* Backdrop */}
+      {open&&<div style={{position:"fixed",inset:0,zIndex:1199}} onClick={()=>setOpen(false)}/>}
+
+      {/* Drawer */}
+      <div style={{position:"fixed",top:0,right:0,width:340,height:"100vh",background:T.surface,boxShadow:"-4px 0 24px rgba(0,0,0,0.10)",zIndex:1200,transform:open?"translateX(0)":"translateX(100%)",transition:"transform 0.22s cubic-bezier(.4,0,.2,1)",display:"flex",flexDirection:"column"}}>
+        <AlertsPanel alerts={alerts} dismissed={dismissed} onDismiss={onDismiss} onDismissAll={onDismissAll} settings={settings} onUpdateSettings={onUpdateSettings} onEnable={onEnable} onDisable={()=>{onDisable();setOpen(false);}}/>
+      </div>
+    </>
+  );
+}
+
 // ── Financial Health Score ────────────────────────────────────────────────────
 function HealthScore({txns,accounts,holdings,catBudgets,goals,bills,billPayments,month,fxRate,stockPrices}){
+  const nfmt=useNfmt();
   const score=useMemo(()=>{
     const curMonth=month||today().slice(0,7);
     const last3=[0,1,2].map(i=>{const d=new Date();d.setMonth(d.getMonth()-i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
@@ -2990,11 +3483,41 @@ function HealthScore({txns,accounts,holdings,catBudgets,goals,bills,billPayments
   const label=score.total>=80?"Excellent":score.total>=60?"Good":score.total>=40?"Fair":"Needs Attention";
 
   const metrics=[
-    {label:"Savings Rate",val:score.savingsRate+"%",target:"20%",score:score.savingsScore,tip:"Aim to save at least 20% of income"},
-    {label:"Emergency Fund",val:score.emergencyMonths+"mo",target:"3mo",score:score.emergencyScore,tip:"Target 3 months of expenses in cash"},
-    {label:"Budget Adherence",val:score.adherePct+"%",target:"100%",score:score.adherePct2,tip:"Stay under budget in all categories"},
-    {label:"Goal Progress",val:score.goalPct+"%",target:"100%",score:score.goalPct2,tip:"Average progress across your savings goals"},
+    {
+      label:"Savings Rate",val:score.savingsRate+"%",target:"20%",score:score.savingsScore,
+      tip:"Aim to save at least 20% of income",
+      weight:"30% of score",
+      calc:"(Monthly income − Monthly expenses) ÷ Monthly income × 100. Averaged over your last 3 months.",
+      pro:"One of the strongest predictors of long-term financial health. High savings rate directly accelerates wealth building.",
+      flaw:"Ignores one-time windfalls or large irregular expenses that distort a single month. A 3-month average smooths this but can still be skewed by bonuses or medical bills.",
+    },
+    {
+      label:"Emergency Fund",val:score.emergencyMonths+"mo",target:"3mo",score:score.emergencyScore,
+      tip:"Target 3 months of expenses in cash",
+      weight:"25% of score",
+      calc:"Total balance across all non-investment, non-loan accounts ÷ average monthly expenses over 3 months.",
+      pro:"Measures your real-world buffer against job loss or emergencies. Directly tied to your actual spending pace.",
+      flaw:"Treats all cash accounts equally — doesn't distinguish between a chequing account and a locked GIC. Also doesn't account for dual income, job stability, or access to credit.",
+    },
+    {
+      label:"Budget Adherence",val:score.adherePct+"%",target:"100%",score:score.adherePct2,
+      tip:"Stay under budget in all categories",
+      weight:"20% of score",
+      calc:"Number of budget categories where spending ≤ budget this month ÷ total number of budgeted categories × 100.",
+      pro:"Rewards consistent discipline across all categories. Going over in even one category counts against you.",
+      flaw:"Categories with no budget set are excluded entirely — so a sparse budget gives an inflated score. Also treats a $1 overage the same as a $500 overage.",
+    },
+    {
+      label:"Goal Progress",val:score.goalPct+"%",target:"100%",score:score.goalPct2,
+      tip:"Average progress across your savings goals",
+      weight:"15% of score",
+      calc:"Average of (amount saved ÷ target amount × 100) across all active goals with a target > $0.",
+      pro:"Keeps long-term priorities visible alongside day-to-day spending. Penalises stalled goals.",
+      flaw:"Weights all goals equally regardless of size or urgency. A $500 vacation fund and a $50,000 down payment count the same. No goals set = 100% by default.",
+    },
   ];
+
+  const [hoveredMetric,setHoveredMetric]=useState(null);
 
   return(
     <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:20,marginBottom:24}}>
@@ -3014,15 +3537,36 @@ function HealthScore({txns,accounts,holdings,catBudgets,goals,bills,billPayments
           <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>Based on savings, emergency fund, budgets &amp; goals</div>
         </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
-        {metrics.map(m=>(
-          <div key={m.label} style={{background:"#f8fafc",borderRadius:10,padding:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,position:"relative"}}>
+        {metrics.map((m,i)=>(
+          <div key={m.label} style={{background:"#f8fafc",borderRadius:10,padding:10,cursor:"default",position:"relative",transition:"box-shadow .15s",boxShadow:hoveredMetric===i?"0 0 0 2px #0284C7 inset":""}}
+            onMouseEnter={()=>setHoveredMetric(i)}
+            onMouseLeave={()=>setHoveredMetric(null)}
+          >
             <div style={{fontSize:10,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>{m.label}</div>
             <div style={{fontSize:15,fontWeight:800,color:"#0f172a"}}>{m.val} <span style={{fontSize:10,color:"#94a3b8",fontWeight:400}}>/ {m.target}</span></div>
             <div style={{background:"#e2e8f0",borderRadius:99,height:4,marginTop:6}}>
               <div style={{height:4,borderRadius:99,background:m.score>=80?"#059669":m.score>=50?"#f59e0b":"#ef4444",width:`${Math.min(100,m.score)}%`,transition:"width .4s"}}/>
             </div>
             <div style={{fontSize:10,color:"#94a3b8",marginTop:4,lineHeight:1.3}}>{m.tip}</div>
+
+            {/* Tooltip */}
+            {hoveredMetric===i&&(
+              <div style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",width:260,background:"#1e293b",color:"#f1f5f9",borderRadius:10,padding:"12px 14px",fontSize:11,lineHeight:1.5,zIndex:100,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",pointerEvents:"none"}}>
+                <div style={{fontWeight:700,fontSize:12,marginBottom:6,color:"#fff"}}>{m.label} <span style={{fontWeight:400,color:"#94a3b8",fontSize:10}}>({m.weight})</span></div>
+                <div style={{marginBottom:8}}>
+                  <span style={{color:"#7dd3fc",fontWeight:600}}>How it's calculated: </span>{m.calc}
+                </div>
+                <div style={{marginBottom:8}}>
+                  <span style={{color:"#86efac",fontWeight:600}}>✓ Strength: </span>{m.pro}
+                </div>
+                <div>
+                  <span style={{color:"#fca5a5",fontWeight:600}}>⚠ Limitation: </span>{m.flaw}
+                </div>
+                {/* Arrow */}
+                <div style={{position:"absolute",bottom:-5,left:"50%",transform:"translateX(-50%)",width:10,height:10,background:"#1e293b",clipPath:"polygon(0 0,100% 0,50% 100%)"}}/>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -3067,7 +3611,7 @@ function SpendingAnomalies({txns,cats,month}){
             <div style={{flex:1}}>
               <strong>{a.cat}</strong> spending is <strong>{a.type==="high"?"+"+((a.ratio-1)*100).toFixed(0):"-"+((1-a.ratio)*100).toFixed(0)}%</strong> vs your 3-month average
             </div>
-            <div style={{color:"#64748b",whiteSpace:"nowrap"}}>{fmt(a.curSpend)} vs {fmt(a.avg)} avg</div>
+            <div style={{color:"#64748b",whiteSpace:"nowrap"}}>{nfmt(a.curSpend)} vs {nfmt(a.avg)} avg</div>
           </div>
         ))}
         {anomalies.dupes.length>0&&(
@@ -4240,6 +4784,7 @@ function SplitTransactions({txns,members,splits,onSaveSplits}){
 }
 
 function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
+  const nfmt=useNfmt();
   const [form,setForm]=useState({name:"",amount:"",category:cats[0]||"Other",dueDay:"15",note:""});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const monthOpts=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
@@ -4281,7 +4826,7 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
         {[{l:"Monthly Total",v:totalAmt,c:"#1E293B"},{l:"Paid",v:paidAmt,c:"#059669"},{l:"Remaining",v:totalAmt-paidAmt,c:totalAmt-paidAmt>0?"#dc2626":"#059669"}].map(card=>(
           <div key={card.l} style={{...CA,padding:"16px 20px"}}>
             <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{card.l}</div>
-            <div style={{fontSize:22,fontWeight:800,color:card.c,letterSpacing:"-0.5px"}}>{fmt(card.v)}</div>
+            <div style={{fontSize:22,fontWeight:800,color:card.c,letterSpacing:"-0.5px"}}>{nfmt(card.v)}</div>
           </div>
         ))}
       </div>
@@ -4324,7 +4869,7 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
                 <div style={{fontSize:13,fontWeight:600,color:paid?"#94a3b8":"#1E293B",textDecoration:paid?"line-through":"none"}}>{b.name}</div>
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>Due {ordinal(b.dueDay)} · {b.category}{b.note?" · "+b.note:""}</div>
               </div>
-              <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{fmt(b.amount)}</div>
+              <div style={{fontSize:14,fontWeight:700,color:paid?"#94a3b8":"#dc2626"}}>{nfmt(b.amount)}</div>
               <button onClick={()=>startEdit(b)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit",flexShrink:0}}>Edit</button>
               <button onClick={()=>remove(b.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit",flexShrink:0}}>Remove</button>
             </div>
@@ -4336,6 +4881,7 @@ function Bills({bills,billPayments,onSaveBills,onSaveBillPayments,cats}){
 }
 
 function Goals({goals,onSaveGoals}){
+  const nfmt=useNfmt();
   const [form,setForm]=useState({name:"",emoji:"",targetAmount:"",currentAmount:"",monthlyTarget:"",deadline:"",color:"#0284C7"});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [contrib,setContrib]=useState({});
@@ -4367,15 +4913,15 @@ function Goals({goals,onSaveGoals}){
                   <button onClick={()=>remove(g.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:18,fontFamily:"inherit",padding:0,lineHeight:1}}>×</button>
                 </div>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span style={{fontSize:22,fontWeight:800,color:g.color||"#0284C7",letterSpacing:"-0.5px"}}>{fmt(g.currentAmount)}</span>
-                  <span style={{fontSize:13,color:"#94a3b8",alignSelf:"flex-end",marginBottom:2}}>of {fmt(g.targetAmount)}</span>
+                  <span style={{fontSize:22,fontWeight:800,color:g.color||"#0284C7",letterSpacing:"-0.5px"}}>{nfmt(g.currentAmount)}</span>
+                  <span style={{fontSize:13,color:"#94a3b8",alignSelf:"flex-end",marginBottom:2}}>of {nfmt(g.targetAmount)}</span>
                 </div>
                 <div style={{height:8,borderRadius:99,background:"#f1f5f9",overflow:"hidden",marginBottom:6}}>
                   <div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:pct>=1?"#059669":g.color||"#0284C7",transition:"width 0.4s ease"}}/>
                 </div>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:pct<1?12:0}}>
                   <span style={{fontSize:11,color:"#94a3b8"}}>{Math.round(pct*100)}% saved</span>
-                  {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{fmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
+                  {pct<1&&<span style={{fontSize:11,color:"#94a3b8"}}>{nfmt(remaining)} to go{monthsLeft?" · ~"+monthsLeft+" mo":""}</span>}
                   {pct>=1&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Goal reached!</span>}
                 </div>
                 {pct<1&&(
@@ -4411,6 +4957,7 @@ function Goals({goals,onSaveGoals}){
 }
 
 function NetWorth({accounts,accountHistory,onSaveAccounts,onSaveAccountHistory,holdings=[],stockPrices={},fxRate=1.38}){
+  const nfmt=useNfmt();
   const [form,setForm]=useState({name:"",type:"chequing",balance:""});
   const set=(k,v)=>setForm(p=>({...p,[k]:v}));
   const [editId,setEditId]=useState(null);
@@ -4451,7 +4998,7 @@ function NetWorth({accounts,accountHistory,onSaveAccounts,onSaveAccountHistory,h
             <Btn sm v="secondary" onClick={()=>setEditId(null)}>✕</Btn>
           </div>
         :<>
-          <div style={{fontSize:14,fontWeight:700,color:isAsset(a.type)?"#059669":"#dc2626"}}>{fmt(a.balance)}</div>
+          <div style={{fontSize:14,fontWeight:700,color:isAsset(a.type)?"#059669":"#dc2626"}}>{nfmt(a.balance)}</div>
           <button onClick={()=>{setEditId(a.id);setEditBal(String(a.balance));}} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
           <button onClick={()=>remove(a.id)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
         </>}
@@ -4463,17 +5010,17 @@ function NetWorth({accounts,accountHistory,onSaveAccounts,onSaveAccountHistory,h
       {(accounts.length>0||holdings.length>0)&&(
         <div style={{...CA,padding:"24px 28px",marginBottom:16,borderLeft:`4px solid ${netWorth>=0?"#0284C7":"#dc2626"}`}}>
           <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Net Worth</div>
-          <div style={{fontSize:40,fontWeight:800,color:netWorth>=0?"#059669":"#dc2626",letterSpacing:"-1.5px",marginBottom:10}}>{fmt(netWorth)}</div>
+          <div style={{fontSize:40,fontWeight:800,color:netWorth>=0?"#059669":"#dc2626",letterSpacing:"-1.5px",marginBottom:10}}>{nfmt(netWorth)}</div>
           <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
-            {totalAssets>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Assets <span style={{color:"#059669",fontWeight:700}}>{fmt(totalAssets)}</span></span>}
-            {portfolioValue>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Portfolio <span style={{color:"#0284C7",fontWeight:700}}>{fmt(portfolioValue)}</span></span>}
-            {totalLiab>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Liabilities <span style={{color:"#dc2626",fontWeight:700}}>{fmt(totalLiab)}</span></span>}
+            {totalAssets>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Assets <span style={{color:"#059669",fontWeight:700}}>{nfmt(totalAssets)}</span></span>}
+            {portfolioValue>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Portfolio <span style={{color:"#0284C7",fontWeight:700}}>{nfmt(portfolioValue)}</span></span>}
+            {totalLiab>0&&<span style={{fontSize:13,color:"#94a3b8"}}>Liabilities <span style={{color:"#dc2626",fontWeight:700}}>{nfmt(totalLiab)}</span></span>}
           </div>
         </div>
       )}
       <div style={{display:"grid",gridTemplateColumns:assets.length>0&&liabilities.length>0?"1fr 1fr":"1fr",gap:16,marginBottom:16}}>
-        {assets.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Assets <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalAssets)}</span></div>{assets.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
-        {liabilities.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Liabilities <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {fmt(totalLiab)}</span></div>{liabilities.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+        {assets.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Assets <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {nfmt(totalAssets)}</span></div>{assets.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
+        {liabilities.length>0&&<div style={CA}><div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#1E293B"}}>Liabilities <span style={{color:"#94a3b8",fontWeight:400,fontSize:12}}>· {nfmt(totalLiab)}</span></div>{liabilities.map(a=><AccountRow key={a.id} a={a}/>)}</div>}
       </div>
       <div style={CA}>
         <div style={{fontSize:13,fontWeight:600,marginBottom:14,color:"#1E293B"}}>Add Account</div>
@@ -4501,9 +5048,86 @@ const MEASURE_TYPES=[
 ];
 const DIM_TYPES=["string","number","date","boolean","currency"];
 
+// ── JSON-Schema response shapes reused across measures ─────────────────────────
+const RS_SCALAR={type:"object",properties:{value:{type:"number"},count:{type:"integer"}},required:["value"]};
+const RS_ROWS  ={type:"array", items:{type:"object",properties:{name:{type:"string"},value:{type:"number"},count:{type:"integer"}},required:["name","value"]}};
+
 const DEFAULT_SCHEMA={views:{
+
+  // ── expenses ── transactions WHERE type='expense' UNION ALL vacation_txns ─────
+  expenses:{
+    label:"Expenses",
+    description:"All spending — regular transactions + vacation purchases",
+    table:"transactions",
+    baseSQL:"SELECT amount,date,COALESCE(category,'Other') as category,COALESCE(merchant,'?') as merchant,COALESCE(note,'') as note FROM transactions WHERE type='expense'",
+    joins:[
+      {type:"UNION ALL",label:"Vacation Transactions",table:"vacation_txns",
+       sql:"SELECT amount,date,COALESCE(category,'Vacation') as category,COALESCE(merchant,'?') as merchant,'' as note FROM vacation_txns"}
+    ],
+    defaultDateField:"date",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["total","count","avg"],default:"total",description:"Aggregation to apply"},
+        filter: {type:"string",description:"Date range: thismonth | lastmonth | thisyear | last30days | last3months | month=YYYY-MM | year=YYYY"},
+        groupBy:{type:"string",enum:["category","merchant","month"],description:"Dimension to group results by"},
+        limit:  {type:"integer",description:"Max rows when grouping (default 20)"}
+      }
+    },
+    dimensions:{
+      date:    {type:"date",   label:"Date",     field:"date",     sql:"${TABLE}.date"},
+      month:   {type:"string", label:"Month",    field:"date",     sql:"strftime('%Y-%m',${TABLE}.date)"},
+      category:{type:"string", label:"Category", field:"category", sql:"COALESCE(${TABLE}.category,'Other')"},
+      merchant:{type:"string", label:"Merchant", field:"merchant", sql:"COALESCE(${TABLE}.merchant,'?')"},
+    },
+    measures:{
+      total:{type:"sum",    label:"Total Spent",  description:"Sum of all expense amounts including vacation spending", sql:"ROUND(SUM(${TABLE}.amount),2)", responseSchema:RS_SCALAR},
+      count:{type:"count",  label:"Count",        description:"Number of expense transactions",                         sql:"COUNT(*)",                       responseSchema:RS_SCALAR},
+      avg:  {type:"average",label:"Average",      description:"Average expense amount per transaction",                 sql:"ROUND(AVG(${TABLE}.amount),2)", responseSchema:RS_SCALAR},
+    }
+  },
+
+  // ── income ── transactions WHERE type='income' ────────────────────────────────
+  income:{
+    label:"Income",
+    description:"All income transactions",
+    table:"transactions",
+    baseSQL:"SELECT amount,date,COALESCE(category,'Income') as category,COALESCE(merchant,source,'?') as merchant,COALESCE(note,'') as note FROM transactions WHERE type='income'",
+    joins:[],
+    defaultDateField:"date",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["total","count"],default:"total",description:"Aggregation to apply"},
+        filter: {type:"string",description:"Date range: thismonth | lastmonth | thisyear | last30days | month=YYYY-MM | year=YYYY"},
+        groupBy:{type:"string",enum:["source","month"],description:"Dimension to group results by"},
+        limit:  {type:"integer",description:"Max rows when grouping"}
+      }
+    },
+    dimensions:{
+      date:  {type:"date",   label:"Date",   field:"date",     sql:"${TABLE}.date"},
+      month: {type:"string", label:"Month",  field:"date",     sql:"strftime('%Y-%m',${TABLE}.date)"},
+      source:{type:"string", label:"Source", field:"merchant", sql:"COALESCE(${TABLE}.merchant,'?')"},
+    },
+    measures:{
+      total:{type:"sum",  label:"Total Income", description:"Sum of all income amounts", sql:"ROUND(SUM(${TABLE}.amount),2)", responseSchema:RS_SCALAR},
+      count:{type:"count",label:"Count",        description:"Number of income transactions", sql:"COUNT(*)",                  responseSchema:RS_SCALAR},
+    }
+  },
+
+  // ── transactions (all) ────────────────────────────────────────────────────────
   transactions:{
     label:"Transactions",description:"All income and expense transactions",source:"txns",table:"transactions",
+    joins:[],
+    defaultDateField:"date",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_expenses","total_income","net_position","avg_expense","spend_x_income"],default:"count"},
+        filter: {type:"string",description:"Date filter"},
+        groupBy:{type:"string",enum:["category","merchant","month","type"]}
+      }
+    },
     dimensions:{
       date:    {type:"date",   label:"Date",     description:"Date the transaction occurred",   field:"date",    sql:"${TABLE}.date"},
       month:   {type:"string", label:"Month",    description:"Year-month of the transaction",   field:"date",    sql:"strftime('%Y-%m', ${TABLE}.date)"},
@@ -4514,17 +5138,27 @@ const DEFAULT_SCHEMA={views:{
       note:    {type:"string", label:"Note",     description:"Optional transaction note",       field:"note",    sql:"${TABLE}.note"},
     },
     measures:{
-      count:          {type:"count",   label:"Count",         description:"Total number of transactions",              query:"data.txns.length",                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
-      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",                query:"data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                       sql:"SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)"},
-      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                 query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                                                                                        sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END)"},
-      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",         query:"data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)-data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)",                                                                                                                                                                                                   sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE -${TABLE}.amount END)"},
-      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",    query:"(()=>{const e=data.txns.filter(t=>t.type==='expense');return e.length?e.reduce((s,t)=>s+t.amount,0)/e.length:0})()",                                                                                                                                                                                                                       sql:"AVG(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE NULL END)"},
-      avg_income:     {type:"divide",  label:"Avg Income",    description:"Average income amount per transaction",     query:"(()=>{const i=data.txns.filter(t=>t.type==='income');return i.length?i.reduce((s,t)=>s+t.amount,0)/i.length:0})()",                                                                                                                                                                                                                        sql:"AVG(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE NULL END)"},
-      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses ÷ total income × 100 (%)",  query:"(()=>{const i=data.txns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const e=data.txns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);return i>0?Math.round(e/i*100):0})()",                                                                                                                                        sql:"ROUND(SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)*100.0/NULLIF(SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END),0),1)"},
+      count:          {type:"count",   label:"Count",         description:"Total number of transactions",             sql:"COUNT(*)",                                                                                                                                                                 responseSchema:RS_SCALAR},
+      total_expenses: {type:"sum",     label:"Total Expenses",description:"Sum of all expense amounts",               sql:"SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)",                                                                                               responseSchema:RS_SCALAR},
+      total_income:   {type:"sum",     label:"Total Income",  description:"Sum of all income amounts",                sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END)",                                                                                                responseSchema:RS_SCALAR},
+      net_position:   {type:"subtract",label:"Net Position",  description:"Total income minus total expenses",        sql:"SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE -${TABLE}.amount END)",                                                                                 responseSchema:RS_SCALAR},
+      avg_expense:    {type:"divide",  label:"Avg Expense",   description:"Average expense amount per transaction",   sql:"AVG(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE NULL END)",                                                                                            responseSchema:RS_SCALAR},
+      spend_x_income: {type:"multiply",label:"Expense Ratio", description:"Total expenses ÷ total income × 100 (%)", sql:"ROUND(SUM(CASE WHEN ${TABLE}.type='expense' THEN ${TABLE}.amount ELSE 0 END)*100.0/NULLIF(SUM(CASE WHEN ${TABLE}.type='income' THEN ${TABLE}.amount ELSE 0 END),0),1)",responseSchema:RS_SCALAR},
     }
   },
+
+  // ── bills ─────────────────────────────────────────────────────────────────────
   bills:{
     label:"Bills",description:"Recurring monthly bills and subscriptions",source:"bills",table:"bills",
+    joins:[],
+    defaultDateField:null,
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_monthly","total_yearly","avg_bill"],default:"total_monthly"},
+        groupBy:{type:"string",enum:["name","category"]}
+      }
+    },
     dimensions:{
       name:    {type:"string", label:"Name",     description:"Bill name (e.g. Rent, Netflix)",         field:"name",    sql:"${TABLE}.name"},
       amount:  {type:"currency",label:"Amount",  description:"Monthly bill amount in CAD",             field:"amount",  sql:"${TABLE}.amount"},
@@ -4533,14 +5167,26 @@ const DEFAULT_SCHEMA={views:{
       active:  {type:"boolean",label:"Active",   description:"Whether the bill is currently active",   field:"active",  sql:"${TABLE}.active"},
     },
     measures:{
-      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                     query:"data.bills.filter(b=>b.active!==false).length",                                                                                                            sql:"COUNT(*) FILTER (WHERE ${TABLE}.active=1)"},
-      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)",                                                                                       sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)"},
-      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",     query:"data.bills.filter(b=>b.active!==false).reduce((s,b)=>s+b.amount,0)*12",                                                                                    sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)*12"},
-      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",               query:"(()=>{const a=data.bills.filter(b=>b.active!==false);return a.length?a.reduce((s,b)=>s+b.amount,0)/a.length:0})()",                                        sql:"AVG(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE NULL END)"},
+      count:         {type:"count",   label:"Active Count",  description:"Number of active bills",                    sql:"COUNT(*) FILTER (WHERE ${TABLE}.active=1)",                              responseSchema:RS_SCALAR},
+      total_monthly: {type:"sum",     label:"Total Monthly", description:"Sum of all active monthly bill amounts",    sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)",       responseSchema:RS_SCALAR},
+      total_yearly:  {type:"multiply",label:"Total Yearly",  description:"Monthly total × 12 — annual bill cost",    sql:"SUM(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE 0 END)*12",    responseSchema:RS_SCALAR},
+      avg_bill:      {type:"divide",  label:"Avg Bill",      description:"Average monthly bill amount",              sql:"AVG(CASE WHEN ${TABLE}.active=1 THEN ${TABLE}.amount ELSE NULL END)",     responseSchema:RS_SCALAR},
     }
   },
+
+  // ── expected_income ───────────────────────────────────────────────────────────
   expected_income:{
     label:"Expected Income",description:"Scheduled and recurring expected income payments",source:"expected",table:"expected_income",
+    joins:[],
+    defaultDateField:"expectedDate",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count_pending","total_pending","total_confirmed","confirmation_rate"],default:"total_pending"},
+        filter: {type:"string",description:"Date filter applied to expectedDate"},
+        groupBy:{type:"string",enum:["source","month","confirmed"]}
+      }
+    },
     dimensions:{
       source:       {type:"string", label:"Source",       description:"Income source / payer name",                     field:"source",      sql:"${TABLE}.source"},
       amount:       {type:"currency",label:"Amount",      description:"Expected payment amount in CAD",                 field:"amount",      sql:"${TABLE}.amount"},
@@ -4550,14 +5196,25 @@ const DEFAULT_SCHEMA={views:{
       cadence:      {type:"string", label:"Cadence",      description:"Recurrence frequency",                          field:"cadence",     sql:"${TABLE}.cadence"},
     },
     measures:{
-      count_pending:    {type:"count",  label:"Pending Count",   description:"Number of unconfirmed upcoming payments",       query:"data.expected.filter(e=>!e.confirmed).length",                                                                                                                                               sql:"COUNT(*) FILTER (WHERE ${TABLE}.confirmed=0)"},
-      total_pending:    {type:"sum",    label:"Total Pending",   description:"Sum of all unconfirmed expected amounts",       query:"data.expected.filter(e=>!e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                           sql:"SUM(CASE WHEN ${TABLE}.confirmed=0 THEN ${TABLE}.amount ELSE 0 END)"},
-      total_confirmed:  {type:"sum",    label:"Total Confirmed", description:"Sum of all confirmed received payments",        query:"data.expected.filter(e=>e.confirmed).reduce((s,e)=>s+e.amount,0)",                                                                                                                            sql:"SUM(CASE WHEN ${TABLE}.confirmed=1 THEN ${TABLE}.amount ELSE 0 END)"},
-      confirmation_rate:{type:"divide", label:"Confirmation %",  description:"% of payments confirmed",                      query:"(()=>{const t=data.expected.length;return t?Math.round(data.expected.filter(e=>e.confirmed).length/t*100):0})()",                                                                              sql:"ROUND(SUM(${TABLE}.confirmed)*100.0/NULLIF(COUNT(*),0),1)"},
+      count_pending:    {type:"count",  label:"Pending Count",   description:"Number of unconfirmed upcoming payments",  sql:"COUNT(*) FILTER (WHERE ${TABLE}.confirmed=0)",                         responseSchema:RS_SCALAR},
+      total_pending:    {type:"sum",    label:"Total Pending",   description:"Sum of all unconfirmed expected amounts",  sql:"SUM(CASE WHEN ${TABLE}.confirmed=0 THEN ${TABLE}.amount ELSE 0 END)",  responseSchema:RS_SCALAR},
+      total_confirmed:  {type:"sum",    label:"Total Confirmed", description:"Sum of all confirmed received payments",   sql:"SUM(CASE WHEN ${TABLE}.confirmed=1 THEN ${TABLE}.amount ELSE 0 END)",  responseSchema:RS_SCALAR},
+      confirmation_rate:{type:"divide", label:"Confirmation %",  description:"% of payments confirmed",                 sql:"ROUND(SUM(${TABLE}.confirmed)*100.0/NULLIF(COUNT(*),0),1)",             responseSchema:RS_SCALAR},
     }
   },
+
+  // ── goals ─────────────────────────────────────────────────────────────────────
   goals:{
     label:"Goals",description:"Financial savings goals and progress",source:"goals",table:"goals",
+    joins:[],
+    defaultDateField:"deadline",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_target","total_saved","total_remaining","avg_progress"],default:"avg_progress"},
+        groupBy:{type:"string",enum:["name"]}
+      }
+    },
     dimensions:{
       name:          {type:"string", label:"Name",           description:"Goal name",                                   field:"name",          sql:"${TABLE}.name"},
       target_amount: {type:"currency",label:"Target Amount", description:"Goal target amount in CAD",                   field:"targetAmount",  sql:"${TABLE}.targetAmount"},
@@ -4566,29 +5223,51 @@ const DEFAULT_SCHEMA={views:{
       progress_pct:  {type:"number", label:"Progress %",     description:"Completion % — currentAmount/targetAmount×100",field:"currentAmount", sql:"ROUND(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0),1)"},
     },
     measures:{
-      count:           {type:"count",   label:"Count",           description:"Total number of goals",                    query:"data.goals.length",                                                                                                                                        sql:"COUNT(*)"},
-      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",           query:"data.goals.reduce((s,g)=>s+g.targetAmount,0)",                                                                                                            sql:"SUM(${TABLE}.targetAmount)"},
-      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved",         query:"data.goals.reduce((s,g)=>s+g.currentAmount,0)",                                                                                                           sql:"SUM(${TABLE}.currentAmount)"},
-      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",   query:"data.goals.reduce((s,g)=>s+(g.targetAmount-g.currentAmount),0)",                                                                                          sql:"SUM(${TABLE}.targetAmount-${TABLE}.currentAmount)"},
-      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion % across all goals",   query:"(()=>{const gs=data.goals;return gs.length?Math.round(gs.reduce((s,g)=>s+(g.currentAmount/Math.max(g.targetAmount,1)*100),0)/gs.length):0})()",           sql:"ROUND(AVG(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0)),1)"},
+      count:           {type:"count",   label:"Count",           description:"Total number of goals",                   sql:"COUNT(*)",                                                                       responseSchema:RS_SCALAR},
+      total_target:    {type:"sum",     label:"Total Target",    description:"Sum of all goal target amounts",          sql:"SUM(${TABLE}.targetAmount)",                                                     responseSchema:RS_SCALAR},
+      total_saved:     {type:"sum",     label:"Total Saved",     description:"Sum of all current amounts saved",        sql:"SUM(${TABLE}.currentAmount)",                                                    responseSchema:RS_SCALAR},
+      total_remaining: {type:"subtract",label:"Total Remaining", description:"Total still needed to reach all goals",  sql:"SUM(${TABLE}.targetAmount-${TABLE}.currentAmount)",                              responseSchema:RS_SCALAR},
+      avg_progress:    {type:"divide",  label:"Avg Progress %",  description:"Average completion % across all goals",  sql:"ROUND(AVG(${TABLE}.currentAmount*100.0/NULLIF(${TABLE}.targetAmount,0)),1)",     responseSchema:RS_SCALAR},
     }
   },
+
+  // ── accounts ──────────────────────────────────────────────────────────────────
   accounts:{
     label:"Accounts",description:"Bank and financial accounts",source:"accounts",table:"accounts",
+    joins:[],
+    defaultDateField:null,
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_assets","total_liabilities","net_worth"],default:"net_worth"},
+        groupBy:{type:"string",enum:["name","type"]}
+      }
+    },
     dimensions:{
       name:   {type:"string", label:"Name",    description:"Account name (e.g. TD Chequing, Visa)",    field:"name",   sql:"${TABLE}.name"},
       type:   {type:"string", label:"Type",    description:"chequing, savings, credit_card, loan, etc",field:"type",   sql:"${TABLE}.type"},
       balance:{type:"currency",label:"Balance",description:"Current balance in CAD",                   field:"balance",sql:"${TABLE}.balance"},
     },
     measures:{
-      count:             {type:"count",   label:"Count",             description:"Total number of accounts",                                                                                                                          query:"data.accounts.length",                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          sql:"COUNT(*)"},
-      total_assets:      {type:"sum",     label:"Total Assets",      description:"Sum of asset account balances",                                                                                                                     query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                 sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance ELSE 0 END)"},
-      total_liabilities: {type:"sum",     label:"Total Liabilities", description:"Sum of liability balances",                                                                                                                        query:"data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                                                                                                                                                             sql:"SUM(CASE WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN ${TABLE}.balance ELSE 0 END)"},
-      net_worth:         {type:"subtract",label:"Net Worth",         description:"Total assets minus total liabilities",                                                                                                              query:"data.accounts.filter(a=>['chequing','savings','investment','property','other_asset'].includes(a.type)).reduce((s,a)=>s+a.balance,0)-data.accounts.filter(a=>['credit_card','loan','mortgage','other_liability'].includes(a.type)).reduce((s,a)=>s+a.balance,0)",                                                                                                                                                          sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN -${TABLE}.balance ELSE 0 END)"},
+      count:             {type:"count",   label:"Count",             description:"Total number of accounts",              sql:"COUNT(*)",                                                                                                                                                                                                                                       responseSchema:RS_SCALAR},
+      total_assets:      {type:"sum",     label:"Total Assets",      description:"Sum of asset account balances",         sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance ELSE 0 END)",                                                                                                                 responseSchema:RS_SCALAR},
+      total_liabilities: {type:"sum",     label:"Total Liabilities", description:"Sum of liability balances",             sql:"SUM(CASE WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN ${TABLE}.balance ELSE 0 END)",                                                                                                                         responseSchema:RS_SCALAR},
+      net_worth:         {type:"subtract",label:"Net Worth",         description:"Total assets minus total liabilities",  sql:"SUM(CASE WHEN ${TABLE}.type IN ('chequing','savings','investment','property','other_asset') THEN ${TABLE}.balance WHEN ${TABLE}.type IN ('credit_card','loan','mortgage','other_liability') THEN -${TABLE}.balance ELSE 0 END)",               responseSchema:RS_SCALAR},
     }
   },
+
+  // ── holdings ──────────────────────────────────────────────────────────────────
   holdings:{
     label:"Stock Holdings",description:"Investment portfolio — stock holdings and cost basis",source:"holdings",table:"holdings",
+    joins:[],
+    defaultDateField:null,
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_cost","total_shares"],default:"total_cost"},
+        groupBy:{type:"string",enum:["ticker"]}
+      }
+    },
     dimensions:{
       ticker:    {type:"string", label:"Ticker",     description:"Stock ticker (e.g. TSLA, XEQT.TO)",            field:"ticker",   sql:"${TABLE}.ticker"},
       shares:    {type:"number", label:"Shares",     description:"Number of shares held",                        field:"shares",   sql:"${TABLE}.shares"},
@@ -4596,13 +5275,27 @@ const DEFAULT_SCHEMA={views:{
       total_cost:{type:"currency",label:"Total Cost",description:"Cost basis × shares for this holding",         field:"costBasis",sql:"${TABLE}.costBasis * ${TABLE}.shares"},
     },
     measures:{
-      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",         query:"data.holdings.length",                                                                                                                                                                                    sql:"COUNT(*)"},
-      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of cost basis × shares for all holdings",query:"data.holdings.filter(h=>h.costBasis!=null).reduce((s,h)=>s+h.costBasis*h.shares,0)",                                                                                                                   sql:"SUM(${TABLE}.costBasis * ${TABLE}.shares)"},
-      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",    query:"data.holdings.reduce((s,h)=>s+h.shares,0)",                                                                                                                                                               sql:"SUM(${TABLE}.shares)"},
+      count:        {type:"count",label:"Holdings Count",description:"Number of distinct stock holdings",           sql:"COUNT(*)",                                      responseSchema:RS_SCALAR},
+      total_cost:   {type:"sum",  label:"Total Cost",    description:"Sum of cost basis × shares for all holdings", sql:"SUM(${TABLE}.costBasis * ${TABLE}.shares)",     responseSchema:RS_SCALAR},
+      total_shares: {type:"sum",  label:"Total Shares",  description:"Total share count across all holdings",      sql:"SUM(${TABLE}.shares)",                          responseSchema:RS_SCALAR},
     }
   },
+
+  // ── vacations ─────────────────────────────────────────────────────────────────
   vacations:{
     label:"Vacations",description:"Vacation budgets and date ranges",source:"vacations",table:"vacations",
+    joins:[
+      {type:"LEFT JOIN",label:"Vacation Transactions",table:"vacation_txns",
+       sql:"LEFT JOIN vacation_txns vt ON vt.vacationId=${TABLE}.id"}
+    ],
+    defaultDateField:"startDate",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_budget","total_spent","total_remaining"],default:"total_spent"},
+        groupBy:{type:"string",enum:["name"]}
+      }
+    },
     dimensions:{
       name:      {type:"string", label:"Name",       description:"Vacation name (e.g. Paris 2026)",  field:"name",      sql:"${TABLE}.name"},
       start_date:{type:"date",   label:"Start Date", description:"Vacation start date",              field:"startDate", sql:"${TABLE}.startDate"},
@@ -4611,14 +5304,26 @@ const DEFAULT_SCHEMA={views:{
       notes:     {type:"string", label:"Notes",      description:"Optional notes",                   field:"notes",     sql:"${TABLE}.notes"},
     },
     measures:{
-      count:          {type:"count",   label:"Count",           description:"Total number of vacations",                              query:"data.vacations.length",                                                                                                                                                               sql:"COUNT(*)"},
-      total_budget:   {type:"sum",     label:"Total Budget",    description:"Sum of all vacation budgets",                            query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)",                                                                                                                                   sql:"SUM(${TABLE}.budget)"},
-      total_spent:    {type:"sum",     label:"Total Spent",     description:"Sum of all vacation transaction amounts",                query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                sql:"(SELECT SUM(vt.amount) FROM vacation_txns vt)"},
-      total_remaining:{type:"subtract",label:"Total Remaining", description:"Total budgets minus total spending",                     query:"(data.vacations||[]).reduce((s,v)=>s+v.budget,0)-(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                             sql:"SUM(${TABLE}.budget)-(SELECT COALESCE(SUM(vt.amount),0) FROM vacation_txns vt)"},
+      count:          {type:"count",   label:"Count",           description:"Total number of vacations",              sql:"COUNT(DISTINCT ${TABLE}.id)",                                                                    responseSchema:RS_SCALAR},
+      total_budget:   {type:"sum",     label:"Total Budget",    description:"Sum of all vacation budgets",            sql:"SUM(DISTINCT ${TABLE}.budget)",                                                                  responseSchema:RS_SCALAR},
+      total_spent:    {type:"sum",     label:"Total Spent",     description:"Sum of all vacation transaction amounts",sql:"(SELECT COALESCE(SUM(vt2.amount),0) FROM vacation_txns vt2)",                                    responseSchema:RS_SCALAR},
+      total_remaining:{type:"subtract",label:"Total Remaining", description:"Total budgets minus total spending",    sql:"SUM(DISTINCT ${TABLE}.budget)-(SELECT COALESCE(SUM(vt2.amount),0) FROM vacation_txns vt2)",       responseSchema:RS_SCALAR},
     }
   },
+
+  // ── vacation_txns ─────────────────────────────────────────────────────────────
   vacation_txns:{
     label:"Vacation Transactions",description:"Individual spending entries recorded against a vacation",source:"vacationTxns",table:"vacation_txns",
+    joins:[],
+    defaultDateField:"date",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total","avg_txn"],default:"total"},
+        filter: {type:"string",description:"Date filter applied to transaction date"},
+        groupBy:{type:"string",enum:["category","merchant","month"]}
+      }
+    },
     dimensions:{
       vacation_id:{type:"string", label:"Vacation ID",description:"ID of the parent vacation",                     field:"vacationId",sql:"${TABLE}.vacationId"},
       date:       {type:"date",   label:"Date",        description:"Date the vacation expense occurred",           field:"date",      sql:"${TABLE}.date"},
@@ -4629,13 +5334,25 @@ const DEFAULT_SCHEMA={views:{
       note:       {type:"string", label:"Note",       description:"Optional note",                                field:"note",      sql:"${TABLE}.note"},
     },
     measures:{
-      count:  {type:"count", label:"Count",       description:"Total vacation transactions",                       query:"(data.vacationTxns||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
-      total:  {type:"sum",   label:"Total Spent", description:"Total amount spent across all vacation transactions",query:"(data.vacationTxns||[]).reduce((s,t)=>s+t.amount,0)",                                                                                                                                                  sql:"SUM(${TABLE}.amount)"},
-      avg_txn:{type:"divide",label:"Avg per Txn", description:"Average vacation transaction amount",              query:"(()=>{const t=data.vacationTxns||[];return t.length?t.reduce((s,x)=>s+x.amount,0)/t.length:0})()",                                                                                                     sql:"AVG(${TABLE}.amount)"},
+      count:  {type:"count", label:"Count",       description:"Total vacation transactions",                        sql:"COUNT(*)",              responseSchema:RS_SCALAR},
+      total:  {type:"sum",   label:"Total Spent", description:"Total amount spent across all vacation transactions", sql:"SUM(${TABLE}.amount)",  responseSchema:RS_SCALAR},
+      avg_txn:{type:"divide",label:"Avg per Txn", description:"Average vacation transaction amount",               sql:"AVG(${TABLE}.amount)",  responseSchema:RS_SCALAR},
     }
   },
+
+  // ── bill_payments ─────────────────────────────────────────────────────────────
   bill_payments:{
     label:"Bill Payments",description:"History of bills marked as paid each month",source:"billPayments",table:"bill_payments",
+    joins:[],
+    defaultDateField:"paidDate",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_paid","avg_payment"],default:"total_paid"},
+        filter: {type:"string",description:"Date filter applied to paidDate"},
+        groupBy:{type:"string",enum:["month","bill_id"]}
+      }
+    },
     dimensions:{
       bill_id:  {type:"string", label:"Bill ID",   description:"ID of the parent bill",                            field:"billId",  sql:"${TABLE}.billId"},
       month:    {type:"string", label:"Month",     description:"Month the bill was paid (YYYY-MM)",                field:"month",   sql:"${TABLE}.month"},
@@ -4644,13 +5361,25 @@ const DEFAULT_SCHEMA={views:{
       note:     {type:"string", label:"Note",      description:"Optional payment note",                           field:"note",    sql:"${TABLE}.note"},
     },
     measures:{
-      count:      {type:"count", label:"Payment Count",description:"Total bill payment records",                  query:"(data.billPayments||[]).length",                                                                                                                                                                           sql:"COUNT(*)"},
-      total_paid: {type:"sum",   label:"Total Paid",   description:"Sum of all recorded bill payments",           query:"(data.billPayments||[]).reduce((s,p)=>s+p.amount,0)",                                                                                                                                                    sql:"SUM(${TABLE}.amount)"},
-      avg_payment:{type:"divide",label:"Avg Payment",  description:"Average bill payment amount",                query:"(()=>{const p=data.billPayments||[];return p.length?p.reduce((s,x)=>s+x.amount,0)/p.length:0})()",                                                                                                      sql:"AVG(${TABLE}.amount)"},
+      count:      {type:"count", label:"Payment Count",description:"Total bill payment records",    sql:"COUNT(*)",             responseSchema:RS_SCALAR},
+      total_paid: {type:"sum",   label:"Total Paid",   description:"Sum of all recorded payments", sql:"SUM(${TABLE}.amount)", responseSchema:RS_SCALAR},
+      avg_payment:{type:"divide",label:"Avg Payment",  description:"Average bill payment amount",  sql:"AVG(${TABLE}.amount)", responseSchema:RS_SCALAR},
     }
   },
+
+  // ── account_history ───────────────────────────────────────────────────────────
   account_history:{
     label:"Account History",description:"Point-in-time account balance snapshots",source:"accountHistory",table:"account_history",
+    joins:[],
+    defaultDateField:"date",
+    toolSchema:{
+      type:"object",
+      properties:{
+        measure:{type:"string",enum:["count","total_balance","latest_total"],default:"latest_total"},
+        filter: {type:"string",description:"Date filter applied to snapshot date"},
+        groupBy:{type:"string",enum:["month","account_id"]}
+      }
+    },
     dimensions:{
       date:      {type:"date",   label:"Date",       description:"Date the balance snapshot was recorded",         field:"date",     sql:"${TABLE}.date"},
       month:     {type:"string", label:"Month",      description:"Year-month of the snapshot",                    field:"date",     sql:"strftime('%Y-%m', ${TABLE}.date)"},
@@ -4659,19 +5388,91 @@ const DEFAULT_SCHEMA={views:{
       note:      {type:"string", label:"Note",       description:"Optional note about this balance entry",        field:"note",     sql:"${TABLE}.note"},
     },
     measures:{
-      count:       {type:"count",label:"Snapshots",      description:"Total number of balance snapshots",         query:"(data.accountHistory||[]).length",                                                                                                                                                                         sql:"COUNT(*)"},
-      total_balance:{type:"sum", label:"Total Balance",  description:"Sum of all balance values in the table",   query:"(data.accountHistory||[]).reduce((s,e)=>s+e.balance,0)",                                                                                                                                                   sql:"SUM(${TABLE}.balance)"},
-      latest_total:{type:"sum",  label:"Latest Snapshot",description:"Sum of the most recent balance per account",query:"(()=>{const h=data.accountHistory||[];const byAcc={};h.forEach(e=>{if(!byAcc[e.accountId||'default']||e.date>byAcc[e.accountId||'default'].date)byAcc[e.accountId||'default']=e;});return Object.values(byAcc).reduce((s,e)=>s+e.balance,0)})()", sql:"SUM(${TABLE}.balance) FILTER (WHERE ${TABLE}.date=(SELECT MAX(ah2.date) FROM account_history ah2 WHERE ah2.accountId=${TABLE}.accountId))"},
+      count:        {type:"count",label:"Snapshots",       description:"Total number of balance snapshots",          sql:"COUNT(*)",           responseSchema:RS_SCALAR},
+      total_balance:{type:"sum",  label:"Total Balance",   description:"Sum of all balance values in the table",     sql:"SUM(${TABLE}.balance)", responseSchema:RS_SCALAR},
+      latest_total: {type:"sum",  label:"Latest Snapshot", description:"Sum of the most recent balance per account", sql:"SUM(${TABLE}.balance) FILTER (WHERE ${TABLE}.date=(SELECT MAX(ah2.date) FROM account_history ah2 WHERE ah2.accountId=${TABLE}.accountId))", responseSchema:RS_SCALAR},
     }
   }
 }};
 
 // DEFAULT_SETTINGS imported from ./constants/index.js
 
+function DeepSeekSettings({f,set,onSave,CodeBlock,copied,setCopied}){
+  const [status,setStatus]=useState(null); // null | "ok" | "notpulled" | "error" | "testing"
+
+  const testConnection=async()=>{
+    setStatus("testing");
+    try{
+      const r=await fetch("/api/llm/models");
+      if(r.ok){
+        const d=await r.json();
+        const models=(d.models||[]).map(m=>(m.name||m).toLowerCase());
+        const dsModel=(f.deepseekModel||"deepseek-r1:8b").toLowerCase();
+        const hasModel=models.some(m=>m.startsWith(dsModel.split(":")[0]));
+        setStatus(hasModel?"ok":"notpulled");
+      } else { setStatus("error"); }
+    }catch{ setStatus("error"); }
+  };
+
+  const modelName=f.deepseekModel||"deepseek-r1:8b";
+
+  return(
+    <div style={{padding:"4px 0 14px",display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{fontSize:12,color:T.tx2}}>
+        Runs <strong>DeepSeek R1</strong> locally via <a href="https://ollama.ai" target="_blank" rel="noreferrer" style={{color:T.accent}}>Ollama</a> — no API key or internet required after setup.
+      </div>
+
+      {/* Model selector */}
+      <div>
+        <div style={{fontSize:11,fontWeight:600,color:T.tx3,marginBottom:4}}>Model</div>
+        <div style={{display:"flex",background:T.overlay,borderRadius:T.r,padding:3,gap:2}}>
+          {[{k:"deepseek-r1:8b",l:"R1 8B"},{k:"deepseek-r1:14b",l:"R1 14B"},{k:"deepseek-r1:32b",l:"R1 32B"}].map(opt=>{
+            const active=(f.deepseekModel||"deepseek-r1:8b")===opt.k;
+            return(
+              <button key={opt.k} onClick={()=>{set("deepseekModel",opt.k);onSave({...f,deepseekModel:opt.k});}}
+                style={{flex:1,padding:"5px 8px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:active?600:400,
+                  background:active?T.surface:"transparent",color:active?T.tx1:T.tx3,
+                  boxShadow:active?T.shadow:"none",transition:"all .15s",fontFamily:"inherit"}}>
+                {opt.l}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{fontSize:11,color:T.tx3,marginTop:4}}>8B · 8 GB RAM &nbsp;|&nbsp; 14B · 16 GB &nbsp;|&nbsp; 32B · 32 GB</div>
+      </div>
+
+      {/* Install steps */}
+      <div style={{background:T.overlay,borderRadius:T.rCard,padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{fontSize:11,fontWeight:600,color:T.tx2}}>Setup (one-time)</div>
+        <div>
+          <div style={{fontSize:11,color:T.tx3,marginBottom:2}}>1. Install Ollama</div>
+          <CodeBlock cmd="curl -fsSL https://ollama.ai/install.sh | sh"/>
+          <div style={{fontSize:11,color:T.tx3,marginTop:5}}>Windows: <a href="https://ollama.ai/download" target="_blank" rel="noreferrer" style={{color:T.accent}}>ollama.ai/download</a></div>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:T.tx3,marginBottom:2}}>2. Pull the model</div>
+          <CodeBlock cmd={`ollama pull ${modelName}`}/>
+        </div>
+      </div>
+
+      {/* Test button */}
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={testConnection} disabled={status==="testing"}
+          style={{flex:1,padding:"8px",borderRadius:T.r,border:"1px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:status==="testing"?"not-allowed":"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",opacity:status==="testing"?0.6:1}}>
+          {status==="testing"?"Testing...":"Test Connection"}
+        </button>
+      </div>
+      {status==="ok"&&<div style={{fontSize:12,color:"#059669",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:T.r,padding:"8px 12px"}}>✓ DeepSeek is ready</div>}
+      {status==="notpulled"&&<div style={{fontSize:12,color:"#d97706",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:T.r,padding:"8px 12px"}}>Ollama is running but {modelName} is not pulled yet — run the pull command above</div>}
+      {status==="error"&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:T.r,padding:"8px 12px"}}>Could not reach Ollama — make sure it is running (<code style={{background:"rgba(0,0,0,0.06)",padding:"1px 4px",borderRadius:3}}>ollama serve</code>)</div>}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
+function Settings({settings,onSave,authConfig,onSaveAuthConfig,onStartTutorial}){
   const [f,setF]=useState({...DEFAULT_SETTINGS,...settings});
   const [ollamaStatus,setOllamaStatus]=useState(()=>settings.ollamaStatus||null); // null | "ok" | "error"
   const [testing,setTesting]=useState(false);
@@ -4715,6 +5516,8 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
   const [geminiMsg,setGeminiMsg]=useState(null); // {type:"ok"|"err", text}
   const [geminiExpanded,setGeminiExpanded]=useState(()=>settings.geminiExpanded!==false);
   const [ollamaExpanded,setOllamaExpanded]=useState(()=>settings.ollamaExpanded!==false);
+  const [deepseekExpanded,setDeepseekExpanded]=useState(()=>settings.deepseekExpanded!==false);
+  const [openrouterExpanded,setOpenRouterExpanded]=useState(()=>settings.openrouterExpanded!==false);
 
   useEffect(()=>{
     fetch("/api/config/gemini-key").then(r=>r.json()).then(d=>{
@@ -4786,67 +5589,88 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
   );
 
   return(
-    <div style={{maxWidth:1200}}>
+    <div style={{width:"100%"}}>
       <h2 style={{margin:"0 0 16px",fontSize:18,fontWeight:600,color:T.tx1}}>Settings</h2>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
-      {/* ── Row 1: left col (Account + Appearance) | Security ── */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12,marginBottom:12,alignItems:"stretch"}}>
-
-        {/* Left column stretches to match Security height */}
-        <div style={{display:"flex",flexDirection:"column",gap:12}}>
-
-          {/* Account */}
-          <div style={S}>
-            <div style={SH}>Account</div>
-            <div style={{...SR,borderBottom:"none"}}>
-              <div style={SRL}>Name</div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <input style={{...IS,width:130,padding:"6px 10px",margin:0}} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Your name"/>
-                <SmBtn onClick={save} label="Save"/>
-              </div>
-            </div>
-            {authConfig?.email&&(
-              <div style={{...SR,borderBottom:"none"}}>
-                <div><div style={SRL}>Email</div><div style={SRS}>{authConfig.email}</div></div>
-              </div>
-            )}
+      {/* ── Account ─────────────────────────────────────────────────────── */}
+      <div style={S}>
+        <div style={SH}>Account</div>
+        <div style={{...SR,borderBottom:"none"}}>
+          <div style={SRL}>Name</div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input style={{...IS,width:200,padding:"6px 10px",margin:0}} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Your name"/>
+            <SmBtn onClick={save} label="Save"/>
           </div>
-
-          {/* Appearance — flex:1 fills remaining height */}
-          <div style={{...S,flex:1,display:"flex",flexDirection:"column"}}>
-            <div style={SH}>Appearance</div>
-            <div style={SR}>
-              <div><div style={SRL}>Dark Mode</div><div style={SRS}>Inverts colours across the app</div></div>
-              <Toggle on={f.darkMode} onToggle={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}}/>
-            </div>
-            <div style={{...SR,borderBottom:"none"}}>
-              <div style={SRL}>Colour Blind Mode</div>
-              <select value={f.colorBlindMode} onChange={e=>{set("colorBlindMode",e.target.value);setTimeout(()=>onSave({...f,colorBlindMode:e.target.value}),50);}} style={{padding:"6px 10px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:12,fontFamily:"inherit",outline:"none",background:T.surface,color:T.tx1}}>
-                <option value="none">None</option>
-                <option value="deuteranopia">Deuteranopia</option>
-                <option value="protanopia">Protanopia</option>
-                <option value="tritanopia">Tritanopia</option>
-                <option value="achromatopsia">Greyscale</option>
-              </select>
-            </div>
+        </div>
+        {authConfig?.email&&(
+          <div style={{...SR,borderBottom:"none"}}>
+            <div><div style={SRL}>Email</div><div style={SRS}>{authConfig.email}</div></div>
           </div>
+        )}
+      </div>
 
-        </div>{/* end left column */}
+      {/* ── Security ────────────────────────────────────────────────────── */}
+      {authConfig!==undefined&&<SecuritySettingsSection authConfig={authConfig} onSave={onSaveAuthConfig} compact/>}
 
-        {/* Security */}
-        {authConfig!==undefined
-          ? <SecuritySettingsSection authConfig={authConfig} onSave={onSaveAuthConfig} compact/>
-          : <div/>}
+      {/* ── Appearance ──────────────────────────────────────────────────── */}
+      <div style={S}>
+        <div style={SH}>Appearance</div>
+        <div style={SR}>
+          <div><div style={SRL}>Dark Mode</div><div style={SRS}>Inverts colours across the app</div></div>
+          <Toggle on={f.darkMode} onToggle={()=>{const v=!f.darkMode;set("darkMode",v);setTimeout(()=>onSave({...f,darkMode:v}),50);}}/>
+        </div>
+        <div style={{...SR,borderBottom:"none"}}>
+          <div style={SRL}>Colour Blind Mode</div>
+          <select value={f.colorBlindMode} onChange={e=>{set("colorBlindMode",e.target.value);setTimeout(()=>onSave({...f,colorBlindMode:e.target.value}),50);}} style={{padding:"6px 10px",borderRadius:T.r,border:"1px solid "+T.border,fontSize:12,fontFamily:"inherit",outline:"none",background:T.surface,color:T.tx1}}>
+            <option value="none">None</option>
+            <option value="deuteranopia">Deuteranopia</option>
+            <option value="protanopia">Protanopia</option>
+            <option value="tritanopia">Tritanopia</option>
+            <option value="achromatopsia">Greyscale</option>
+          </select>
+        </div>
+      </div>
 
-      </div>{/* end row 1 */}
-
-      {/* ── Row 2: AI | App ── */}
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,alignItems:"stretch"}}>
-
-      {/* AI */}
+      {/* ── AI ──────────────────────────────────────────────────────────── */}
       <div style={S}>
         <div style={SH}>AI</div>
+
+        {/* Active model selector */}
+        <div style={{...SR,borderBottom:"1px solid "+T.border}}>
+          <div><div style={SRL}>Jarvis Model</div><div style={SRS}>Which AI powers the chat assistant</div></div>
+          <div style={{display:"flex",background:T.overlay,borderRadius:T.r,padding:3,gap:2}}>
+            {[
+              {k:"gemini",      l:"Gemini"},
+              {k:"deepseek",    l:"DeepSeek"},
+              {k:"ollama",      l:"Ollama"},
+              {k:"openrouter",  l:"OpenRouter"},
+            ].map(opt=>{
+              const active=(f.globalChatModel||"deepseek")===opt.k;
+              return(
+                <button key={opt.k} onClick={()=>{set("globalChatModel",opt.k);setTimeout(()=>onSave({...f,globalChatModel:opt.k}),50);}}
+                  style={{padding:"5px 13px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,fontFamily:"inherit",
+                    background:active?T.surface:"transparent",color:active?T.tx1:T.tx3,
+                    boxShadow:active?T.shadow:"none",transition:"all 0.15s"}}>
+                  {opt.l}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* DeepSeek — shown when DeepSeek selected */}
+        {(f.globalChatModel==="deepseek")&&(
+          <div style={{borderBottom:"1px solid "+T.border}}>
+            <div onClick={()=>setDeepseekExpanded(p=>{onSave({...f,deepseekExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+              <div><div style={SRL}>DeepSeek (local)</div><div style={SRS}>Runs privately via Ollama on your machine</div></div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:deepseekExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+              </div>
+            </div>
+            {deepseekExpanded&&<DeepSeekSettings f={f} set={set} onSave={onSave} CodeBlock={CodeBlock} copied={copied} setCopied={setCopied}/>}
+          </div>
+        )}
 
         {/* Gemini */}
         <div style={{borderBottom:"1px solid #f1f5f9"}}>
@@ -4876,6 +5700,56 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
               )}
               {geminiMsg&&<div style={{marginTop:8,fontSize:12,color:geminiMsg.type==="ok"?"#059669":"#dc2626",background:geminiMsg.type==="ok"?"#f0fdf4":"#fef2f2",border:`1px solid ${geminiMsg.type==="ok"?"#bbf7d0":"#fecaca"}`,borderRadius:8,padding:"7px 12px"}}>{geminiMsg.text}</div>}
               <div style={{marginTop:8,fontSize:11,color:"#94a3b8"}}>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:"#0284C7"}}>aistudio.google.com/apikey</a></div>
+            </div>
+          )}
+        </div>
+
+        {/* OpenRouter */}
+        <div style={{borderBottom:"1px solid "+T.border}}>
+          <div onClick={()=>setOpenRouterExpanded(p=>{onSave({...f,openrouterExpanded:!p});return !p;})} style={{...SR,borderBottom:"none",cursor:"pointer"}}>
+            <div>
+              <div style={SRL}>OpenRouter</div>
+              <div style={SRS}>Cloud inference — Kimi, Claude, GPT-4, and 200+ models</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {f.openrouterKey&&<span style={{fontSize:11,color:"#059669",fontWeight:600}}>Key saved</span>}
+              <span style={{fontSize:12,color:"#94a3b8",display:"inline-block",transform:openrouterExpanded?"rotate(0deg)":"rotate(-90deg)",transition:"transform .2s"}}>▾</span>
+            </div>
+          </div>
+          {openrouterExpanded&&(
+            <div style={{padding:"4px 0 14px",display:"flex",flexDirection:"column",gap:10}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:T.tx2,marginBottom:4}}>API Key</div>
+                <input
+                  type="password"
+                  style={IS}
+                  value={f.openrouterKey||""}
+                  onChange={e=>set("openrouterKey",e.target.value)}
+                  placeholder="sk-or-v1-…"
+                />
+                <div style={{fontSize:11,color:T.tx3,marginTop:4}}>
+                  Get a free key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" style={{color:T.accent}}>openrouter.ai/keys</a>
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:11,fontWeight:600,color:T.tx2,marginBottom:4}}>Model</div>
+                <input
+                  style={IS}
+                  value={f.openrouterModel||"moonshotai/kimi-k2"}
+                  onChange={e=>set("openrouterModel",e.target.value)}
+                  placeholder="moonshotai/kimi-k2"
+                />
+                <div style={{fontSize:11,color:T.tx3,marginTop:4}}>
+                  Suggestions: <code style={{background:T.overlay,padding:"1px 4px",borderRadius:3}}>moonshotai/kimi-k2</code> · <code style={{background:T.overlay,padding:"1px 4px",borderRadius:3}}>anthropic/claude-3.5-haiku</code> · <code style={{background:T.overlay,padding:"1px 4px",borderRadius:3}}>openai/gpt-4o-mini</code>
+                </div>
+              </div>
+              <SmBtn onClick={()=>onSave({...f})} label="Save"/>
+              {f.globalChatModel!=="openrouter"&&(
+                <button onClick={()=>{set("globalChatModel","openrouter");setTimeout(()=>onSave({...f,globalChatModel:"openrouter"}),50);}}
+                  style={{padding:"8px",borderRadius:T.r,border:"1px solid "+T.border,background:T.accentBg,color:T.accent,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit"}}>
+                  Set as active model
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -4934,8 +5808,12 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
       </div>
 
       {/* ── App ─────────────────────────────────────────────────────────── */}
-      <div style={S}>
+      <div style={{...S,marginBottom:0}}>
         <div style={SH}>App</div>
+        <div style={SR}>
+          <div><div style={SRL}>Tutorial</div><div style={SRS}>Walk through CashHeap's key features</div></div>
+          <SmBtn onClick={onStartTutorial} label="Start Tutorial"/>
+        </div>
         <div style={SR}>
           <div><div style={SRL}>Developer Mode</div><div style={SRS}>Unlocks the Data Model editor</div></div>
           <Toggle on={f.devMode} onToggle={()=>{set("devMode",!f.devMode);setTimeout(()=>onSave({...f,devMode:!f.devMode}),50);}}/>
@@ -4962,7 +5840,6 @@ function Settings({settings,onSave,authConfig,onSaveAuthConfig}){
         </>}
       </div>
 
-      </div>{/* end row 2 */}
     </div>
   );
 }
@@ -5168,6 +6045,173 @@ function SecuritySettingsSection({authConfig,onSave,compact}){
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TOOL COVERAGE PANEL  (dev mode only)
+// Registry: every data point in the app + which Jarvis tool covers it
+// ─────────────────────────────────────────────────────────────────────────────
+
+// DATA_POINTS registry — update this whenever a new data entity or field is added.
+// Each entry: { entity, field, description, tools: [toolName,...] }
+// tools:[] means no tool coverage yet → shows as a gap
+const DATA_POINTS = [
+  // ── Transactions ────────────────────────────────────────────────────────────
+  {entity:"Transaction",field:"amount",         desc:"Expense or income amount",                           tools:["expenses","income","net","categories","monthly","merchants"]},
+  {entity:"Transaction",field:"date",           desc:"Transaction date",                                   tools:["expenses","income","daily_spend","weekly_spend","spending_trend","income_trend","net_trend"]},
+  {entity:"Transaction",field:"type",           desc:"'expense' or 'income'",                              tools:["expenses","income","net"]},
+  {entity:"Transaction",field:"category",       desc:"Spending category",                                  tools:["categories","top_category","txns_by_category","budget_vs_actual","budget_proximity","expense_share"]},
+  {entity:"Transaction",field:"merchant/source",desc:"Who was paid / income source",                       tools:["merchants","txns_by_merchant","income_by_source","vacation_merchants"]},
+  {entity:"Transaction",field:"note/memo",      desc:"Free-text note on a transaction",                    tools:["txns_search","txns_with_notes"]},
+  {entity:"Transaction",field:"taxDeductible",  desc:"Flagged as tax-deductible",                          tools:["tax_deductible","tax_summary","rrsp_contributions","tax_year_comparison"]},
+  {entity:"Transaction",field:"originalAmountUSD",desc:"Original USD amount before conversion",            tools:["usd_txns"]},
+  {entity:"Transaction",field:"fxRate",         desc:"CAD/USD exchange rate applied",                      tools:["usd_txns"]},
+  {entity:"Transaction",field:"cadence/groupId",desc:"Recurring group membership",                         tools:["recurring_txns"]},
+  {entity:"Transaction",field:"vacationId",     desc:"Linked vacation",                                    tools:["vacation_txns","vacation_biggest_txn","vacation_merchants"]},
+  // ── Categories & Budgets ────────────────────────────────────────────────────
+  {entity:"Category",   field:"name",           desc:"Category name string",                               tools:["categories","budgets","budget_vs_actual","budget_proximity","budget_remaining","over_budget","expense_share"]},
+  {entity:"CatBudget",  field:"budget",         desc:"Monthly spending cap per category",                  tools:["budgets","budget_vs_actual","budget_proximity","budget_remaining","over_budget","budget_utilization"]},
+  // ── Bills ───────────────────────────────────────────────────────────────────
+  {entity:"Bill",       field:"name/amount",    desc:"Recurring bill name and value",                      tools:["bills","bills_due","bills_paid","bills_total","cashflow_projection"]},
+  {entity:"Bill",       field:"dueDay",         desc:"Day of month the bill is due",                       tools:["bills_due","bills_overdue"]},
+  {entity:"Bill",       field:"active",         desc:"Whether bill is currently active",                   tools:["bills","bills_total"]},
+  {entity:"Bill",       field:"category",       desc:"Category assigned to the bill",                      tools:["bills"]},
+  {entity:"BillPayment",field:"paidDate/month", desc:"When and for which month a bill was paid",           tools:["bills_paid","bill_history"]},
+  {entity:"Bill",       field:"overdue",        desc:"Bills past due date and unpaid",                     tools:["bills_overdue"]},
+  // ── Expected Income ─────────────────────────────────────────────────────────
+  {entity:"ExpectedIncome",field:"source/amount",desc:"Future income entry",                               tools:["pending_income","all_expected_income","expected_income_recurring","expected_income_by_source","cashflow_projection"]},
+  {entity:"ExpectedIncome",field:"cadence",    desc:"Recurrence pattern",                                  tools:["expected_income_recurring","recurring_income"]},
+  {entity:"ExpectedIncome",field:"confirmed",  desc:"Whether income has been received",                    tools:["confirmed_income","expected_income_total_pending"]},
+  {entity:"ExpectedIncome",field:"expectedDate",desc:"Scheduled receipt date",                             tools:["pending_income","cashflow_projection"]},
+  // ── Goals ───────────────────────────────────────────────────────────────────
+  {entity:"Goal",       field:"name/target",    desc:"Goal name and target amount",                        tools:["goals_progress","goal_detail","goals_on_track"]},
+  {entity:"Goal",       field:"currentAmount",  desc:"Amount saved toward goal",                           tools:["goals_progress","goal_detail","goal_timeline"]},
+  {entity:"Goal",       field:"monthlyTarget",  desc:"Monthly savings target",                             tools:["goals_progress","goal_timeline","goals_on_track"]},
+  {entity:"Goal",       field:"deadline",       desc:"Target completion date",                             tools:["goal_timeline","goals_on_track"]},
+  // ── Net Worth / Accounts ────────────────────────────────────────────────────
+  {entity:"Account",    field:"balance/type",   desc:"Account balance and type (chequing/savings/etc)",   tools:["accounts_list","accounts_by_type","net_worth","runway","wishlist_affordable"]},
+  {entity:"AccountHistory",field:"balance/date",desc:"Historical balance snapshots per account",           tools:["balance_history","net_worth_trend","net_worth_change"]},
+  // ── Debts ───────────────────────────────────────────────────────────────────
+  {entity:"Debt",       field:"balance/rate",   desc:"Outstanding debt and interest rate",                 tools:["debt_summary","debt_total","debt_by_type","debt_interest_cost"]},
+  {entity:"Debt",       field:"type",           desc:"Debt type (credit/mortgage/loan)",                   tools:["debt_by_type"]},
+  // ── Subscriptions ───────────────────────────────────────────────────────────
+  {entity:"Subscription",field:"amount/cycle", desc:"Subscription cost and billing cycle",                 tools:["subscription_list","subscription_total","subscriptions_by_category"]},
+  {entity:"Subscription",field:"category",     desc:"Category assigned to subscription",                   tools:["subscriptions_by_category"]},
+  // ── Vacations ───────────────────────────────────────────────────────────────
+  {entity:"Vacation",   field:"name/budget",    desc:"Vacation name and budget",                           tools:["vacations","vacation_spending","vacations_by_year"]},
+  {entity:"VacationTxn",field:"amount/merchant",desc:"Individual purchases on a vacation",                 tools:["vacation_txns","vacation_biggest_txn","vacation_merchants"]},
+  // ── Holdings / Stocks ───────────────────────────────────────────────────────
+  {entity:"Holding",    field:"ticker/shares",  desc:"Stock or ETF position",                              tools:["portfolio","holdings_detail","holding"]},
+  {entity:"Holding",    field:"gain/loss",      desc:"Unrealized P&L on holding",                          tools:["portfolio_gain"]},
+  // ── Wishlist ────────────────────────────────────────────────────────────────
+  {entity:"WishlistItem",field:"name/price",   desc:"Desired purchase with price",                         tools:["wishlist","wishlist_affordable","wishlist_total"]},
+  // ── Tax ─────────────────────────────────────────────────────────────────────
+  {entity:"TaxRecord",  field:"deductible txns",desc:"Transactions tagged tax-deductible",                 tools:["tax_deductible","tax_summary","rrsp_contributions"]},
+  // ── Household ───────────────────────────────────────────────────────────────
+  {entity:"Member",     field:"name",           desc:"Household member name",                              tools:["household_members","household_balances"]},
+  {entity:"Split",      field:"amounts/member", desc:"Expense split allocation",                           tools:["household_balances"]},
+  {entity:"Settlement", field:"from/to/amount", desc:"Recorded settlement payment",                        tools:["household_settlements"]},
+  // ── Derived / Calculated ────────────────────────────────────────────────────
+  {entity:"Calc",       field:"spending trend", desc:"Month-over-month spend direction",                   tools:["spending_trend"]},
+  {entity:"Calc",       field:"income trend",   desc:"Month-over-month income direction",                  tools:["income_trend"]},
+  {entity:"Calc",       field:"net trend",      desc:"Net income minus expenses over time",                tools:["net_trend"]},
+  {entity:"Calc",       field:"savings rate",   desc:"% of income saved",                                  tools:["savings_rate"]},
+  {entity:"Calc",       field:"budget utilization",desc:"% of total budget consumed",                      tools:["budget_utilization"]},
+  {entity:"Calc",       field:"spending anomalies",desc:"Transactions unusually large vs category avg",    tools:["spending_anomalies"]},
+  {entity:"Calc",       field:"health score",   desc:"Composite financial health score 0-100",             tools:["health_score"]},
+  {entity:"Calc",       field:"cashflow forecast",desc:"Projected 30/60/90-day balance",                   tools:["cashflow_projection"]},
+  {entity:"Calc",       field:"avg daily spend",desc:"Average spending per day",                           tools:["avg_daily_spend"]},
+  {entity:"Calc",       field:"avg monthly spend",desc:"Average monthly spend over rolling window",        tools:["avg_monthly_spend"]},
+  {entity:"Calc",       field:"avg monthly income",desc:"Average monthly income",                          tools:["avg_monthly_income"]},
+  {entity:"Calc",       field:"runway",         desc:"Months of expenses current cash can cover",          tools:["runway"]},
+  {entity:"Calc",       field:"biggest month",  desc:"Which month had highest spend/income",               tools:["biggest_month"]},
+  {entity:"Calc",       field:"net worth trend",desc:"Net worth change over time",                         tools:["net_worth_trend","net_worth_change"]},
+  {entity:"Calc",       field:"goal timeline",  desc:"Months until a goal is reached",                     tools:["goal_timeline"]},
+  {entity:"Calc",       field:"debt interest cost",desc:"Estimated annual interest cost per debt",         tools:["debt_interest_cost"]},
+  {entity:"Calc",       field:"tax year comparison",desc:"Compare deductible totals between years",        tools:["tax_year_comparison"]},
+  {entity:"Calc",       field:"portfolio by currency",desc:"CAD vs USD asset split",                       tools:["portfolio_by_currency"]},
+  {entity:"Calc",       field:"debt payoff timeline",desc:"Months to pay off a debt at current rate",      tools:["debt_payoff_timeline"]},
+  {entity:"Calc",       field:"break-even month",desc:"Month when income will cover fixed costs",          tools:["breakeven"]},
+];
+
+function ToolCoveragePanel(){
+  const [filter,setFilter]=useState("all");
+  const [search,setSearch]=useState("");
+  const allTools=[...new Set(DATA_POINTS.flatMap(p=>p.tools))].sort();
+  const covered=DATA_POINTS.filter(p=>p.tools.length>0);
+  const gaps=DATA_POINTS.filter(p=>p.tools.length===0);
+  const coveragePct=Math.round(covered.length*100/DATA_POINTS.length);
+  const filtered=DATA_POINTS.filter(p=>{
+    if(filter==="gaps"&&p.tools.length>0)return false;
+    if(filter==="covered"&&p.tools.length===0)return false;
+    if(search){const q=search.toLowerCase();return(p.entity+p.field+p.desc+p.tools.join(" ")).toLowerCase().includes(q);}
+    return true;
+  });
+  // group by entity
+  const byEntity={};
+  filtered.forEach(p=>{(byEntity[p.entity]=byEntity[p.entity]||[]).push(p);});
+  const entityColors={Transaction:T.accent,Category:"#059669",Bill:"#d97706",ExpectedIncome:"#8b5cf6",Goal:"#ec4899",Account:"#06b6d4",AccountHistory:"#0891b2",Debt:"#dc2626",Subscription:"#f97316",Vacation:"#10b981",Holding:"#6366f1",WishlistItem:"#84cc16",TaxRecord:"#a16207",Member:"#7c3aed",Split:"#2563eb",Settlement:"#db2777",Calc:T.tx3};
+  return(
+    <div style={{padding:"24px 28px",maxWidth:1000}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:18,fontWeight:600,color:T.tx1,marginBottom:4}}>Tool Coverage</div>
+        <div style={{fontSize:13,color:T.tx2}}>All data points vs available Jarvis tools. Update <code style={{background:T.overlay,padding:"1px 5px",borderRadius:4,fontSize:12}}>DATA_POINTS</code> in SpendTracker.jsx whenever a new data entity or field is added.</div>
+      </div>
+      {/* Summary bar */}
+      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+        {[
+          {label:"Total data points",value:DATA_POINTS.length,color:T.tx1,bg:T.overlay},
+          {label:"Covered",value:covered.length,color:T.green,bg:T.greenBg},
+          {label:"Gaps",value:gaps.length,color:T.red,bg:T.redBg},
+          {label:"Coverage",value:coveragePct+"%",color:coveragePct>=80?T.green:coveragePct>=50?T.amber:T.red,bg:coveragePct>=80?T.greenBg:coveragePct>=50?T.amberBg:T.redBg},
+          {label:"Unique tools",value:allTools.length,color:T.accent,bg:T.accentBg},
+        ].map(s=>(
+          <div key={s.label} style={{background:s.bg,borderRadius:T.r,padding:"10px 16px",minWidth:120}}>
+            <div style={{fontSize:22,fontWeight:700,color:s.color}}>{s.value}</div>
+            <div style={{fontSize:11,color:T.tx2,marginTop:2}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      {/* Filter + search */}
+      <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+        {["all","covered","gaps"].map(f=>(
+          <button key={f} onClick={()=>setFilter(f)} style={{padding:"5px 14px",borderRadius:99,border:"none",cursor:"pointer",fontSize:12,fontWeight:500,background:filter===f?T.accent:T.overlay,color:filter===f?"#fff":T.tx2}}>{f==="all"?"All":f==="covered"?"✓ Covered":"✗ Gaps"}</button>
+        ))}
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" style={{marginLeft:"auto",border:"1px solid "+T.border,borderRadius:T.r,padding:"5px 10px",fontSize:12,color:T.tx1,background:T.surface,outline:"none",width:180}}/>
+      </div>
+      {/* Table grouped by entity */}
+      {Object.entries(byEntity).map(([entity,points])=>(
+        <div key={entity} style={{marginBottom:16,background:T.surface,borderRadius:T.rCard,boxShadow:T.shadow,overflow:"hidden"}}>
+          <div style={{padding:"8px 14px",background:T.overlay,display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:10,height:10,borderRadius:"50%",background:entityColors[entity]||T.tx3,flexShrink:0}}/>
+            <span style={{fontSize:12,fontWeight:600,color:T.tx1}}>{entity}</span>
+            <span style={{fontSize:11,color:T.tx3,marginLeft:"auto"}}>{points.filter(p=>p.tools.length>0).length}/{points.length} covered</span>
+          </div>
+          {points.map((p,i)=>(
+            <div key={i} style={{display:"flex",gap:8,padding:"7px 14px",borderTop:i===0?"none":"1px solid "+T.border,alignItems:"flex-start",background:p.tools.length===0?T.redBg:"transparent"}}>
+              <div style={{width:16,flexShrink:0,paddingTop:1}}>
+                {p.tools.length>0
+                  ?<svg width={12} height={12} viewBox="0 0 12 12"><circle cx={6} cy={6} r={5} fill={T.green}/><polyline points="3,6 5,9 9,3" fill="none" stroke="#fff" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  :<svg width={12} height={12} viewBox="0 0 12 12"><circle cx={6} cy={6} r={5} fill={T.red}/><line x1={4} y1={4} x2={8} y2={8} stroke="#fff" strokeWidth={1.5} strokeLinecap="round"/><line x1={8} y1={4} x2={4} y2={8} stroke="#fff" strokeWidth={1.5} strokeLinecap="round"/></svg>
+                }
+              </div>
+              <div style={{flex:"0 0 160px",fontSize:12,fontWeight:500,color:T.tx1}}>{p.field}</div>
+              <div style={{flex:1,fontSize:11,color:T.tx2}}>{p.desc}</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",flex:"0 0 280px"}}>
+                {p.tools.length===0
+                  ?<span style={{fontSize:10,color:T.red,fontStyle:"italic"}}>No tool coverage</span>
+                  :p.tools.map(t=>(
+                    <span key={t} style={{fontSize:10,background:T.accentBg,color:T.accent,borderRadius:99,padding:"1px 7px",fontWeight:500,whiteSpace:"nowrap"}}>{t}</span>
+                  ))
+                }
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      {filtered.length===0&&<div style={{textAlign:"center",color:T.tx3,padding:40}}>No matching data points</div>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DATA MODEL COMPONENT  (dev mode only)
 // ─────────────────────────────────────────────────────────────────────────────
 function DataModel({schema,onSave}){
@@ -5177,8 +6221,10 @@ function DataModel({schema,onSave}){
   const [rawError,setRawError]=useState(null);
   const [editingDim,setEditingDim]=useState(null); // {viewKey, dimKey} or null
   const [editingMsr,setEditingMsr]=useState(null); // {viewKey, msrKey} or null
+  const [editingJoin,setEditingJoin]=useState(null); // index or null
   const [dimForm,setDimForm]=useState({});
   const [msrForm,setMsrForm]=useState({});
+  const [joinForm,setJoinForm]=useState({type:"UNION ALL",label:"",table:"",sql:""});
   const [addingView,setAddingView]=useState(false);
   const [newViewForm,setNewViewForm]=useState({key:"",label:"",description:"",source:"",table:""});
 
@@ -5258,6 +6304,30 @@ function DataModel({schema,onSave}){
     startEditMsr(activeView,k);
   };
 
+  // Join CRUD
+  const startEditJoin=(idx)=>{
+    setEditingJoin(idx);
+    const j=(views[activeView].joins||[])[idx]||{type:"UNION ALL",label:"",table:"",sql:""};
+    setJoinForm({...j});
+    setEditingDim(null);setEditingMsr(null);
+  };
+  const saveJoin=()=>{
+    const v={...views[activeView]};
+    const joins=[...(v.joins||[])];
+    if(editingJoin==="new") joins.push({...joinForm});
+    else joins[editingJoin]={...joinForm};
+    v.joins=joins;
+    onSave({...schema,views:{...views,[activeView]:v}});
+    setEditingJoin(null);
+  };
+  const deleteJoin=(idx)=>{
+    const v={...views[activeView]};
+    const joins=[...(v.joins||[])];
+    joins.splice(idx,1);
+    v.joins=joins;
+    onSave({...schema,views:{...views,[activeView]:v}});
+  };
+
   // Add view
   const saveNewView=()=>{
     if(!newViewForm.key.trim()||!newViewForm.source.trim())return;
@@ -5314,6 +6384,50 @@ function DataModel({schema,onSave}){
       <div style={{display:"flex",gap:8,marginTop:8}}>
         <Btn sm onClick={saveMsr}>Save</Btn>
         <Btn sm v="secondary" onClick={()=>setEditingMsr(null)}>Cancel</Btn>
+      </div>
+    </div>
+  );
+
+  const JoinEditor=()=>(
+    <div style={{...CA,border:"2px solid #059669",marginBottom:12}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#059669",marginBottom:12}}>
+        {editingJoin==="new"?"Add Join":"Edit Join"}
+        <span style={{fontWeight:400,marginLeft:8,fontSize:11,color:T.tx3}}>Defines how this view's rows are extended via UNION ALL or LEFT JOIN</span>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+        <Fld label="Join Type">
+          <select style={{...IS,background:T.surface}} value={joinForm.type} onChange={e=>setJoinForm(p=>({...p,type:e.target.value}))}>
+            <option value="UNION ALL">UNION ALL — append rows</option>
+            <option value="LEFT JOIN">LEFT JOIN — widen columns</option>
+          </select>
+        </Fld>
+        <Fld label="Label (display name)">
+          <input style={IS} value={joinForm.label||""} onChange={e=>setJoinForm(p=>({...p,label:e.target.value}))} placeholder="e.g. Vacation Transactions"/>
+        </Fld>
+        <Fld label="Source Table">
+          <input style={IS} value={joinForm.table||""} onChange={e=>setJoinForm(p=>({...p,table:e.target.value}))} placeholder="e.g. vacation_txns"/>
+        </Fld>
+      </div>
+      <Fld label={joinForm.type==="UNION ALL"
+        ?"UNION ALL SQL — full SELECT matching the base columns (no ${TABLE} needed)"
+        :"JOIN SQL — the ON clause, use ${TABLE} for the primary table alias"}>
+        <textarea
+          style={{...IS,fontFamily:"'Menlo','Monaco','Courier New',monospace",fontSize:11,minHeight:72,resize:"vertical"}}
+          value={joinForm.sql||""}
+          onChange={e=>setJoinForm(p=>({...p,sql:e.target.value}))}
+          placeholder={joinForm.type==="UNION ALL"
+            ?"SELECT amount, date, COALESCE(category,'Vacation') as category, COALESCE(merchant,'?') as merchant, '' as note FROM vacation_txns"
+            :"LEFT JOIN vacation_txns vt ON vt.vacationId=${TABLE}.id"}
+        />
+      </Fld>
+      <div style={{fontSize:11,color:T.tx3,marginTop:6,padding:"6px 10px",background:T.overlay,borderRadius:T.r}}>
+        {joinForm.type==="UNION ALL"
+          ?"Jarvis builds: <code>(baseSQL UNION ALL joinSQL) AS t</code> — both sides filtered by date WHERE clause"
+          :"Jarvis builds: <code>SELECT ... FROM table AS t LEFT JOIN ...</code> — join added after the primary FROM"}
+      </div>
+      <div style={{display:"flex",gap:8,marginTop:10}}>
+        <Btn sm onClick={saveJoin}>Save Join</Btn>
+        <Btn sm v="secondary" onClick={()=>setEditingJoin(null)}>Cancel</Btn>
       </div>
     </div>
   );
@@ -5431,11 +6545,44 @@ function DataModel({schema,onSave}){
                         <span style={{fontSize:10,fontWeight:700,background:msrColor(m.type)+"22",color:msrColor(m.type),padding:"1px 8px",borderRadius:10,border:`1px solid ${msrColor(m.type)}44`}}>{m.type}</span>
                       </div>
                       <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>{m.description}</div>
-                      <code style={{fontSize:10,background:"#0f172a",color:"#a5f3fc",padding:"4px 8px",borderRadius:6,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.query}</code>
+                      <code style={{fontSize:10,background:"#0f172a",color:"#a5f3fc",padding:"4px 8px",borderRadius:6,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.sql||m.query}</code>
+                      {m.responseSchema&&<div style={{fontSize:10,color:T.tx3,marginTop:3}}>response: <code style={{fontSize:10,background:T.overlay,padding:"1px 5px",borderRadius:3}}>{JSON.stringify(m.responseSchema?.properties||m.responseSchema?.items?.properties||{}).slice(0,80)}</code></div>}
                     </div>
                     <div style={{display:"flex",gap:5,flexShrink:0}}>
                       <button onClick={()=>startEditMsr(activeView,mk)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#6b7280",fontFamily:"inherit"}}>Edit</button>
                       <button onClick={()=>deleteMsr(activeView,mk)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:"#dc2626",fontFamily:"inherit"}}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Joins — define how this view's FROM is assembled */}
+              <div style={{...CA,marginTop:16}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                  <div>
+                    <span style={{fontSize:13,fontWeight:700,color:T.tx1}}>Joins </span>
+                    <span style={{fontSize:11,color:T.tx3,fontWeight:400}}>— extend the view's rows or columns</span>
+                    {tv.baseSQL&&<div style={{fontSize:10,color:T.tx3,marginTop:3}}>Base SQL: <code style={{fontSize:10,background:T.overlay,padding:"1px 5px",borderRadius:3,color:T.tx2}}>{tv.baseSQL.slice(0,80)}…</code></div>}
+                  </div>
+                  <button onClick={()=>{setEditingJoin("new");setJoinForm({type:"UNION ALL",label:"",table:"",sql:""});setEditingDim(null);setEditingMsr(null);}} style={{padding:"4px 12px",borderRadius:T.r,border:"1.5px solid #bbf7d0",background:"#f0fdf4",color:"#059669",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>+ Add Join</button>
+                </div>
+                {editingJoin!==null&&<JoinEditor/>}
+                {(tv.joins||[]).length===0&&editingJoin===null&&(
+                  <div style={{fontSize:11,color:T.tx3,padding:"8px 0"}}>No joins — queries run directly against <code style={{fontSize:10,background:T.overlay,padding:"1px 5px",borderRadius:3}}>{tv.table||tv.source}</code></div>
+                )}
+                {(tv.joins||[]).map((j,idx)=>(
+                  <div key={idx} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 0",borderBottom:"1px solid "+T.border}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                        <span style={{fontWeight:600,fontSize:12,color:T.tx1}}>{j.label||j.table||"Unnamed Join"}</span>
+                        <span style={{fontSize:10,fontWeight:700,background:"#dcfce7",color:"#059669",padding:"2px 8px",borderRadius:10,border:"1px solid #bbf7d0"}}>{j.type}</span>
+                        {j.table&&<code style={{fontSize:10,background:T.overlay,padding:"1px 6px",borderRadius:4,color:T.tx2}}>{j.table}</code>}
+                      </div>
+                      <code style={{fontSize:10,background:"#0f172a",color:"#86efac",padding:"4px 8px",borderRadius:6,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{j.sql}</code>
+                    </div>
+                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                      <button onClick={()=>startEditJoin(idx)} style={{background:"none",border:"1px solid "+T.border,borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:T.tx2,fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>deleteJoin(idx)} style={{background:"none",border:"1px solid #fecaca",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:11,color:T.red,fontFamily:"inherit"}}>×</button>
                     </div>
                   </div>
                 ))}
@@ -5655,13 +6802,22 @@ function autoWidget(id,label,result,preferredType){
   if(!data&&Array.isArray(result)&&result.length>0){
     if(typeof result[0]==="object"&&result[0]!==null){
       const keys=Object.keys(result[0]);
+      // Scalar-with-metadata shape: [{value:X, count:N}] — single row, no name key
+      // Render as metric using the `value` field, ignore `count`
+      if(result.length===1&&result[0].value!=null&&!keys.includes("name")){
+        const v=result[0].value;
+        const isCurrency=/(spend|income|total|amount|balance|value|paid|net|bill|cost|price)/i.test(label);
+        const cnt=typeof result[0].count==="number"?result[0].count:null;
+        return{id:uid(),type:"metric",title:label,value:v,format:isCurrency?"currency":"number",subtitle:cnt!=null?`${cnt} transaction${cnt!==1?"s":""} `:undefined};
+      }
       const numKey=keys.find(k=>typeof result[0][k]==="number");
       const strKey=keys.find(k=>typeof result[0][k]==="string");
       if(numKey&&strKey){
         data=result.slice(0,20).map(r=>({name:String(r[strKey]),value:r[numKey]}));
       } else {
-        // table fallback
-        return{id:uid(),type:"table",title:label,columns:keys,rows:result.slice(0,20).map(r=>keys.map(k=>r[k]??"")),format:"currency"};
+        // table fallback — skip pure-numeric columns named 'count' to avoid currency formatting
+        const displayKeys=keys.filter(k=>k!=="count");
+        return{id:uid(),type:"table",title:label,columns:displayKeys,rows:result.slice(0,20).map(r=>displayKeys.map(k=>r[k]??"")),format:"currency"};
       }
     } else if(typeof result[0]==="number"){
       data=result.map((v,i)=>({name:String(i+1),value:v}));
@@ -5676,7 +6832,564 @@ function autoWidget(id,label,result,preferredType){
   return{id:uid(),type:chartType,title:label,data,xKey:"name",yKey:"value",format:"currency"};
 }
 
-function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSetMessages}){
+
+// ─── Tool library ──────────────────────────────────────────────────────────────
+// Domain query builders: each tool owns its JOIN/UNION logic internally.
+// The LLM picks a domain tool + params; tools produce correct SQL always.
+
+// Wrap SQL in the __SQL__: marker that executeTool detects
+const _sql=(sqlStr,params=[])=>`__SQL__:${JSON.stringify({sql:sqlStr,params})}`;
+
+// ── Filter parser ─────────────────────────────────────────────────────────────
+// Converts a single filter token like "month=2025-06" or "amount>50" into SQL.
+const _pf=(tok,dc='date')=>{
+  const t=tok.trim(); if(!t||t==='1=1') return null;
+  if(/^last\s*30\s*days?$/i.test(t)) return `${dc}>=date('now','-30 days')`;
+  if(/^last\s*3\s*months?$/i.test(t)) return `${dc}>=date('now','-3 months')`;
+  if(/^last\s*6\s*months?$/i.test(t)) return `${dc}>=date('now','-6 months')`;
+  if(/^last\s*12\s*months?$/i.test(t)) return `${dc}>=date('now','-12 months')`;
+  if(/^this\s*year$/i.test(t)) return `strftime('%Y',${dc})=strftime('%Y','now')`;
+  if(/^last\s*year$/i.test(t)) return `${dc}>=date('now','-1 year')`;
+  if(/^this\s*month$/i.test(t)) return `strftime('%Y-%m',${dc})=strftime('%Y-%m','now')`;
+  if(/^last\s*month$/i.test(t)) return `strftime('%Y-%m',${dc})=strftime('%Y-%m',date('now','-1 month'))`;
+  let m;
+  if((m=t.match(/^month=(\d{4}-\d{2})$/i))) return `strftime('%Y-%m',${dc})='${m[1]}'`;
+  if((m=t.match(/^year=(\d{4})$/i))) return `strftime('%Y',${dc})='${m[1]}'`;
+  if((m=t.match(/^from=(\d{4}-\d{2}(?:-\d{2})?)$/i))) return `${dc}>='${m[1].length===7?m[1]+'-01':m[1]}'`;
+  if((m=t.match(/^to=(\d{4}-\d{2}(?:-\d{2})?)$/i))) return `${dc}<='${m[1].length===7?m[1]+'-31':m[1]}'`;
+  if((m=t.match(/^amount\s*([><=!]+)\s*(\d+(?:\.\d+)?)$/i))) return `amount${m[1]}${m[2]}`;
+  if((m=t.match(/^category=(.+)$/i))) return `LOWER(COALESCE(category,''))='${m[1].toLowerCase().replace(/'/g,"''")}'`;
+  if((m=t.match(/^merchant=(.+)$/i))) return `LOWER(COALESCE(merchant,'')) LIKE LOWER('%${m[1].replace(/'/g,"''")}%')`;
+  if((m=t.match(/^(?:note|q|search)=(.+)$/i))) return `(LOWER(COALESCE(merchant,''))||' '||LOWER(COALESCE(note,''))||' '||LOWER(COALESCE(category,''))) LIKE LOWER('%${m[1].replace(/'/g,"''")}%')`;
+  if((m=t.match(/^type=(\w+)$/i))) return `type='${m[1].toLowerCase()}'`;
+  if(/^usd=true$/i.test(t)) return `originalAmountUSD IS NOT NULL`;
+  if(/^tax(?:deductible)?=true$/i.test(t)) return `taxDeductible=1`;
+  return null;
+};
+
+// Parse full filter string (AND-separated) → SQL condition string
+const _parseFilter=(filterStr,dc='date')=>{
+  if(!filterStr) return '1=1';
+  const cs=filterStr.split(/\s+AND\s+/i).map(t=>_pf(t,dc)).filter(Boolean);
+  return cs.length?cs.join(' AND '):'1=1';
+};
+
+// Split filter into date conditions (safe for both sides of a UNION)
+// and column conditions (only apply to transactions, not vacation_txns)
+const _splitFilter=(filterStr,dc='date')=>{
+  if(!filterStr) return{df:'1=1',cf:'1=1'};
+  const IS_DATE=/^(last|this|month=|year=|from=|to=)/i;
+  const tokens=filterStr.split(/\s+AND\s+/i);
+  const df=tokens.filter(t=>IS_DATE.test(t.trim())).map(t=>_pf(t,dc)).filter(Boolean);
+  const cf=tokens.filter(t=>!IS_DATE.test(t.trim())).map(t=>_pf(t,dc)).filter(Boolean);
+  return{df:df.length?df.join(' AND '):'1=1',cf:cf.length?cf.join(' AND '):'1=1'};
+};
+
+// GroupBy expression → SQL expression
+const _gb=(groupBy,dc='date')=>{
+  if(!groupBy) return null;
+  return{category:`COALESCE(category,'Other')`,merchant:`COALESCE(merchant,'?')`,
+    month:`strftime('%Y-%m',${dc})`,week:`strftime('%Y-W%W',${dc})`,
+    day:dc,date:dc,year:`strftime('%Y',${dc})`,
+    type:'type',source:`COALESCE(source,merchant,'?')`
+  }[groupBy.toLowerCase()]||groupBy;
+};
+
+// Aggregate expression
+const _agg=(agg='sum',col='amount')=>{
+  const a=agg.toLowerCase();
+  if(a==='avg') return `ROUND(AVG(${col}),2)`;
+  if(a==='count') return `COUNT(*)`;
+  if(a==='max') return `ROUND(MAX(${col}),2)`;
+  if(a==='min') return `ROUND(MIN(${col}),2)`;
+  return `ROUND(SUM(${col}),2)`;
+};
+
+// All expenses UNION: transactions expenses + vacation_txns
+// dateFilter applies to both sides; columnFilter wraps the outer query
+const _expUnion=(df='1=1',cf='1=1')=>{
+  const inner=
+    `SELECT amount,date,COALESCE(category,'Other') as category,COALESCE(merchant,'?') as merchant,`+
+    `COALESCE(note,'') as note `+
+    `FROM transactions WHERE type='expense' AND ${df} `+
+    `UNION ALL `+
+    `SELECT amount,date,COALESCE(category,'Vacation') as category,COALESCE(merchant,'?') as merchant,`+
+    `'' as note `+
+    `FROM vacation_txns WHERE ${df}`;
+  return cf==='1=1'?`(${inner})`:`(SELECT * FROM (${inner}) WHERE ${cf})`;
+};
+
+// Legacy alias for any tools that still use the old pattern
+const _allExp=(df='1=1')=>_expUnion(df);
+
+// ── Schema-driven query builder ────────────────────────────────────────────────
+// Takes a schema view object, a measure key, and options.
+// Builds FROM from view.baseSQL + UNION ALL joins (or falls back to view.table).
+// Substitutes ${TABLE} → alias 't' everywhere.
+// Returns a __SQL__: marker or null.
+const buildSchemaQuery=(view,measureKey,opts={})=>{
+  if(!view) return null;
+  const measure=view.measures?.[measureKey];
+  if(!measure?.sql) return null;
+  const {filter,groupByDim,sort,limit}=opts;
+  const alias='t';
+  const sub=(s)=>s.replace(/\$\{TABLE\}/g,alias);
+
+  // FROM: baseSQL UNION ALL each join's sql, aliased as 't'
+  let fromSQL;
+  if(view.baseSQL){
+    const parts=[view.baseSQL,...(view.joins||[]).filter(j=>j.type==='UNION ALL').map(j=>j.sql)];
+    fromSQL=`(${parts.join(' UNION ALL ')}) AS ${alias}`;
+  } else {
+    fromSQL=`${view.table} AS ${alias}`;
+  }
+
+  // Measure with substitution
+  const msrSQL=sub(measure.sql);
+
+  // WHERE from filter (applied to outer query)
+  const dc=view.defaultDateField||'date';
+  const whereSQL=filter?_parseFilter(filter,dc):null;
+  const whereStr=(whereSQL&&whereSQL!=='1=1')?` WHERE ${whereSQL}`:'';
+
+  // Optional GROUP BY from a named dimension key
+  const dimDef=groupByDim&&view.dimensions?.[groupByDim];
+  const gbExpr=dimDef?sub(dimDef.sql):null;
+
+  let sql;
+  if(gbExpr){
+    sql=`SELECT ${gbExpr} as name, ${msrSQL} as value, COUNT(*) as count`
+      +` FROM ${fromSQL}${whereStr}`
+      +` GROUP BY ${gbExpr} ORDER BY ${sort||'value DESC'}`
+      +(limit?` LIMIT ${+limit}`:'');
+  } else {
+    sql=`SELECT ${msrSQL} as value, COUNT(*) as count FROM ${fromSQL}${whereStr}`;
+  }
+  return `__SQL__:${JSON.stringify({sql})}`;
+};
+
+// ── Schema → compact tool-definition list (for Jarvis system prompt) ───────────
+// Each schema view with a toolSchema becomes a callable view-query tool.
+// The description tells the LLM what params it accepts and what the response looks like.
+const schemaToToolDefs=(schema)=>{
+  if(!schema?.views) return [];
+  return Object.entries(schema.views).map(([viewKey,v])=>{
+    if(!v.toolSchema||!v.measures) return null;
+    const measureEnum=Object.keys(v.measures).join('|');
+    const dimEnum=Object.keys(v.dimensions||{}).join('|');
+    const joinDesc=(v.joins||[]).filter(j=>j.type==='UNION ALL').map(j=>j.label).join('+');
+    return {
+      name:`view_${viewKey}`,
+      description:`${v.label}${joinDesc?` (includes ${joinDesc})`:''}. ${v.description}`,
+      input_schema:{
+        type:"object",
+        description:`Available measures: ${measureEnum}. Groupable by: ${dimEnum||'none'}.`,
+        properties:{
+          measure:{type:"string",enum:Object.keys(v.measures),default:Object.keys(v.measures)[0]},
+          filter: {type:"string",description:"Date filter: thismonth|lastmonth|thisyear|last30days|month=YYYY-MM|year=YYYY"},
+          groupBy:{type:"string",enum:Object.keys(v.dimensions||{}),description:"Dimension to group results by"},
+          limit:  {type:"integer",description:"Max rows when grouping"}
+        }
+      }
+    };
+  }).filter(Boolean);
+};
+
+const TOOL_LIBRARY={
+  // ══════════════════════════════════════════════════════════════════════════
+  // DOMAIN TOOLS — each handles its own JOINs and UNIONs internally
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── expenses ─────────────────────────────────────────────────────────────
+  // All spending: regular transactions + vacation purchases (UNION baked in)
+  // filter: month=YYYY-MM | year=YYYY | from/to | category=X | merchant=X |
+  //         amount>N | last30days | last3months | thisyear | q=text
+  // groupBy: category | merchant | month | week | day | year
+  // aggregate: sum (default) | avg | count | max | min
+  // sort: "value DESC" (default when groupBy set) | "name ASC" | etc
+  // limit: number
+  expenses:(args={})=>{
+    const{df,cf}=_splitFilter(args.filter);
+    const src=_expUnion(df,cf);
+    const gbExpr=_gb(args.groupBy);
+    const aggExpr=_agg(args.aggregate);
+    const limit=args.limit?`LIMIT ${+args.limit}`:'';
+    const sort=args.sort||(args.groupBy?'value DESC':'');
+    if(gbExpr) return _sql(`SELECT ${gbExpr} as name, ${aggExpr} as value, COUNT(*) as count FROM ${src} GROUP BY ${gbExpr} ORDER BY ${sort||'value DESC'} ${limit}`);
+    return _sql(`SELECT ${aggExpr} as value, COUNT(*) as count FROM ${src}`);
+  },
+  // ── income ────────────────────────────────────────────────────────────────
+  // filter: same syntax as expenses | groupBy: source | month | merchant | year
+  income:(args={})=>{
+    const where=_parseFilter(args.filter);
+    const gbExpr=_gb(args.groupBy);
+    const aggExpr=_agg(args.aggregate);
+    const limit=args.limit?`LIMIT ${+args.limit}`:'';
+    const src=`transactions WHERE type='income' AND ${where}`;
+    if(gbExpr) return _sql(`SELECT ${gbExpr} as name, ${aggExpr} as value, COUNT(*) as count FROM ${src} GROUP BY ${gbExpr} ORDER BY ${args.sort||'value DESC'} ${limit}`);
+    return _sql(`SELECT ${aggExpr} as value, COUNT(*) as count FROM ${src}`);
+  },
+
+  // ── net ───────────────────────────────────────────────────────────────────
+  // Income minus all expenses. groupBy: month | year
+  net:(args={})=>{
+    const{df,cf}=_splitFilter(args.filter);
+    const where=_parseFilter(args.filter);
+    if(args.groupBy){
+      const gbExpr=_gb(args.groupBy);
+      const since=df==='1=1'?'1=1':df;
+      return _sql(`SELECT mo as name, ROUND(inc-exp,2) as net, ROUND(inc,2) as income, ROUND(exp,2) as expenses `+
+        `FROM (SELECT ${gbExpr} as mo, SUM(amount) as inc, 0 as exp FROM transactions WHERE type='income' AND ${since} GROUP BY mo `+
+        `UNION ALL SELECT ${gbExpr} as mo, 0 as inc, SUM(amount) as exp FROM ${_expUnion(df,cf)} GROUP BY mo) GROUP BY mo ORDER BY mo`);
+    }
+    return _sql(`SELECT ROUND(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),2) as net, `+
+      `ROUND(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),2) as income, `+
+      `ROUND(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),2) as expenses `+
+      `FROM (SELECT amount,'income' as type FROM transactions WHERE type='income' AND ${where} `+
+      `UNION ALL SELECT amount,'expense' as type FROM ${_expUnion(df,cf)})`);
+  },
+
+  // ── budget ────────────────────────────────────────────────────────────────
+  // filter: month=YYYY-MM | from/to | category=X
+  // metric: summary (default) | proximity | over | remaining | utilization | targets
+  budget:(args={})=>{
+    const{df,cf}=_splitFilter(args.filter);
+    const src=_expUnion(df,cf);
+    const metric=(args.metric||'summary').toLowerCase();
+    const cat=(args.category||'').replace(/'/g,"''");
+    const catWhere=cat?`AND cb.category='${cat}'`:'';
+    const spentJoin=`LEFT JOIN (SELECT category as cat, SUM(amount) as spent FROM ${src} GROUP BY cat) t ON t.cat=cb.category`;
+    if(metric==='proximity'||metric==='closest')
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, ROUND(COALESCE(t.spent,0)*100.0/NULLIF(cb.budget,0),1) as percentUsed FROM cat_budgets cb ${spentJoin} WHERE cb.budget>0 ${catWhere} ORDER BY percentUsed DESC`);
+    if(metric==='over')
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT category as cat, SUM(amount) as spent FROM ${src} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
+    if(metric==='remaining')
+      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining FROM cat_budgets cb ${spentJoin} WHERE cb.budget>0 ${catWhere} ORDER BY remaining ASC`);
+    if(metric==='utilization')
+      return _sql(`SELECT ROUND(SUM(cb.budget),2) as totalBudget, ROUND(COALESCE(SUM(t.spent),0),2) as totalSpent, ROUND(COALESCE(SUM(t.spent),0)*100.0/NULLIF(SUM(cb.budget),0),1) as percentUsed, ROUND(SUM(cb.budget)-COALESCE(SUM(t.spent),0),2) as remaining FROM cat_budgets cb ${spentJoin} WHERE cb.budget>0`);
+    if(metric==='targets')
+      return _sql(`SELECT category as name, budget as value FROM cat_budgets ORDER BY budget DESC`);
+    // summary (default): full budget vs actual
+    return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, ROUND(COALESCE(t.spent,0)*100.0/NULLIF(cb.budget,0),1) as percentUsed FROM cat_budgets cb ${spentJoin} ORDER BY percentUsed DESC NULLS LAST`);
+  },
+
+  // ── bills ─────────────────────────────────────────────────────────────────
+  // status: all (default) | due | paid | overdue | history
+  // filter: month=YYYY-MM | category=X | amount>N
+  // name: bill name substring (for history)
+  bills:(args={})=>{
+    const month=(args.filter||'').match(/month=(\d{4}-\d{2})/i)?.[1]||args.month||new Date().toISOString().slice(0,7);
+    const status=(args.status||args.metric||'all').toLowerCase();
+    const today=new Date().toISOString().split('T')[0];
+    const nf=args.name?`AND LOWER(b.name) LIKE LOWER('%${(args.name||'').replace(/'/g,"''")}%')`:'';
+    const cf=(args.filter||'').match(/category=([^A\s]+)/i);
+    const catf=cf?`AND LOWER(b.category)='${cf[1].toLowerCase().replace(/'/g,"''")} '`:'';
+    if(status==='history')
+      return _sql(`SELECT bp.month, ROUND(bp.amount,2) as value, bp.paidDate FROM bill_payments bp JOIN bills b ON b.id=bp.billId WHERE LOWER(b.name) LIKE LOWER('%${(args.name||'').replace(/'/g,"''")}%') ORDER BY bp.month DESC LIMIT 24`);
+    if(status==='paid')
+      return _sql(`SELECT b.name, ROUND(bp.amount,2) as value, bp.paidDate, b.category FROM bills b JOIN bill_payments bp ON bp.billId=b.id WHERE bp.month='${month}' ${nf} ORDER BY b.dueDay`);
+    if(status==='due')
+      return _sql(`SELECT b.name, ROUND(b.amount,2) as value, '${month}-'||printf('%02d',b.dueDay) as dueDate, b.category FROM bills b WHERE b.active=1 AND b.id NOT IN (SELECT billId FROM bill_payments WHERE month='${month}') ${nf} ORDER BY b.dueDay`);
+    if(status==='overdue')
+      return _sql(`SELECT b.name, ROUND(b.amount,2) as value, '${month}-'||printf('%02d',b.dueDay) as dueDate FROM bills b WHERE b.active=1 AND '${month}-'||printf('%02d',b.dueDay)<'${today}' AND b.id NOT IN (SELECT billId FROM bill_payments WHERE month='${month}') ORDER BY b.dueDay`);
+    if(status==='total')
+      return _sql(`SELECT ROUND(SUM(amount),2) as monthlyTotal, COUNT(*) as count FROM bills WHERE active=1`);
+    // all: list with status column
+    return _sql(`SELECT b.name, ROUND(b.amount,2) as value, b.dueDay, b.category, CASE WHEN bp.id IS NOT NULL THEN 'paid' WHEN '${month}-'||printf('%02d',b.dueDay)<'${today}' THEN 'overdue' ELSE 'due' END as status FROM bills b LEFT JOIN bill_payments bp ON bp.billId=b.id AND bp.month='${month}' WHERE b.active=1 ${nf} ${catf} ORDER BY b.dueDay`);
+  },
+
+  // ── goals ─────────────────────────────────────────────────────────────────
+  // metric: progress (default) | timeline | on_track | detail
+  // name: goal name substring
+  goals:(args={})=>{
+    const metric=(args.metric||'progress').toLowerCase();
+    const n=(args.name||'').replace(/'/g,"''");
+    const nf=n?`WHERE LOWER(name) LIKE LOWER('%${n}%')`:'';
+    if(metric==='timeline')
+      return _sql(`SELECT name, ROUND(targetAmount,2) as target, ROUND(COALESCE(currentAmount,0),2) as saved, ROUND(targetAmount-COALESCE(currentAmount,0),2) as remaining, ROUND(monthlyTarget,2) as monthlyTarget, CASE WHEN monthlyTarget>0 THEN ROUND((targetAmount-COALESCE(currentAmount,0))/monthlyTarget,1) ELSE NULL END as monthsToGoal FROM goals ${nf||'WHERE targetAmount>0'}`);
+    if(metric==='on_track'||metric==='ontrack')
+      return _sql(`SELECT name, ROUND(targetAmount,2) as target, ROUND(COALESCE(currentAmount,0),2) as saved, deadline, CASE WHEN deadline IS NULL THEN 'No deadline' WHEN monthlyTarget>0 AND COALESCE(currentAmount,0)+(julianday(deadline)-julianday('now'))/30.0*monthlyTarget>=targetAmount THEN 'On track' ELSE 'Behind' END as status FROM goals WHERE targetAmount>0 ORDER BY deadline`);
+    if(metric==='detail')
+      return _sql(`SELECT name, ROUND(targetAmount,2) as target, ROUND(COALESCE(currentAmount,0),2) as saved, ROUND(targetAmount-COALESCE(currentAmount,0),2) as remaining, ROUND(COALESCE(currentAmount,0)*100.0/NULLIF(targetAmount,0),1) as percentComplete, deadline, ROUND(monthlyTarget,2) as monthlyTarget FROM goals ${nf} ORDER BY deadline`);
+    // progress (default)
+    return _sql(`SELECT name, ROUND(targetAmount,2) as target, ROUND(COALESCE(currentAmount,0),2) as saved, ROUND(COALESCE(currentAmount,0)*100.0/NULLIF(targetAmount,0),1) as percentComplete, ROUND(targetAmount-COALESCE(currentAmount,0),2) as remaining, deadline FROM goals ORDER BY percentComplete DESC`);
+  },
+
+  // ── net_worth ─────────────────────────────────────────────────────────────
+  // metric: current (default) | trend | change | by_type | accounts
+  net_worth:(args={})=>{
+    const metric=(args.metric||'current').toLowerCase();
+    const n=+args.months||12;
+    if(metric==='trend')
+      return _sql(`SELECT date as name, ROUND(SUM(balance),2) as value FROM account_history GROUP BY date ORDER BY date DESC LIMIT ${n}`);
+    if(metric==='change')
+      return _sql(`SELECT ROUND(SUM(CASE WHEN date=(SELECT MAX(date) FROM account_history) THEN balance ELSE 0 END),2) as latestNW, ROUND(SUM(CASE WHEN date=(SELECT MIN(date) FROM account_history WHERE date>=date('now','-${n} months')) THEN balance ELSE 0 END),2) as earliestNW FROM account_history WHERE date>=date('now','-${n} months')`);
+    if(metric==='by_type')
+      return _sql(`SELECT type, ROUND(SUM(balance),2) as balance, COUNT(*) as accounts FROM accounts GROUP BY type ORDER BY balance DESC`);
+    if(metric==='accounts')
+      return _sql(`SELECT name, type, ROUND(balance,2) as balance FROM accounts ORDER BY balance DESC`);
+    // current (default)
+    return _sql(`SELECT ROUND(SUM(balance),2) as netWorth, ROUND(SUM(CASE WHEN balance>0 THEN balance ELSE 0 END),2) as assets, ROUND(SUM(CASE WHEN balance<0 THEN balance ELSE 0 END),2) as liabilities FROM accounts`);
+  },
+
+  // ── debts ─────────────────────────────────────────────────────────────────
+  // metric: summary (default) | interest | total
+  // type: credit | mortgage | loan (optional filter)
+  debts:(args={})=>{
+    const metric=(args.metric||'summary').toLowerCase();
+    const t=(args.type||'').replace(/'/g,"''");
+    const tf=t?`WHERE LOWER(type) LIKE LOWER('%${t}%')`:'';
+    if(metric==='interest')
+      return _sql(`SELECT name, ROUND(balance,2) as balance, interestRate as rate, ROUND(balance*interestRate/100.0,2) as annualInterest FROM debts WHERE interestRate>0 ORDER BY annualInterest DESC`);
+    if(metric==='total')
+      return _sql(`SELECT ROUND(SUM(balance),2) as totalDebt, COUNT(*) as accounts, ROUND(SUM(minPayment),2) as totalMinPayment FROM debts`);
+    return _sql(`SELECT name, ROUND(balance,2) as balance, interestRate as rate, ROUND(minPayment,2) as minPayment, type FROM debts ${tf} ORDER BY balance DESC`);
+  },
+
+  // ── subscriptions ─────────────────────────────────────────────────────────
+  // groupBy: category (optional)
+  subscriptions:(args={})=>{
+    if(args.groupBy==='category')
+      return _sql(`SELECT COALESCE(category,'Uncategorized') as name, ROUND(SUM(CASE WHEN billingCycle='monthly' THEN amount WHEN billingCycle='annual' THEN amount/12.0 WHEN billingCycle='weekly' THEN amount*52/12.0 ELSE amount END),2) as monthlyValue, COUNT(*) as count FROM subscriptions GROUP BY COALESCE(category,'Uncategorized') ORDER BY monthlyValue DESC`);
+    if(args.metric==='total')
+      return _sql(`SELECT ROUND(SUM(CASE WHEN billingCycle='monthly' THEN amount WHEN billingCycle='annual' THEN amount/12.0 WHEN billingCycle='weekly' THEN amount*52/12.0 ELSE amount END),2) as monthlyTotal, COUNT(*) as count FROM subscriptions`);
+    return _sql(`SELECT name, ROUND(amount,2) as amount, billingCycle, category, ROUND(CASE WHEN billingCycle='annual' THEN amount/12.0 WHEN billingCycle='weekly' THEN amount*52/12.0 ELSE amount END,2) as monthlyEquiv FROM subscriptions ORDER BY monthlyEquiv DESC`);
+  },
+
+  // ── vacations ─────────────────────────────────────────────────────────────
+  // name: vacation name substring
+  // metric: list (default) | spending | txns | biggest | merchants
+  vacations:(args={})=>{
+    const metric=(args.metric||'list').toLowerCase();
+    const n=(args.name||'').replace(/'/g,"''");
+    const nw=n?`WHERE LOWER(v.name) LIKE LOWER('%${n}%')`:'';
+    const lim=args.limit||20;
+    if(metric==='spending')
+      return _sql(`SELECT v.name, v.budget, ROUND(COALESCE(SUM(vt.amount),0),2) as spent, ROUND(v.budget-COALESCE(SUM(vt.amount),0),2) as remaining FROM vacations v LEFT JOIN vacation_txns vt ON vt.vacationId=v.id ${nw} GROUP BY v.id ORDER BY v.startDate DESC`);
+    if(metric==='txns'||metric==='transactions')
+      return _sql(`SELECT vt.merchant as name, ROUND(vt.amount,2) as value, vt.date, vt.category FROM vacation_txns vt JOIN vacations v ON v.id=vt.vacationId ${nw} ORDER BY vt.amount DESC LIMIT ${lim}`);
+    if(metric==='biggest')
+      return _sql(`SELECT vt.merchant as name, ROUND(vt.amount,2) as value, vt.date, vt.category FROM vacation_txns vt JOIN vacations v ON v.id=vt.vacationId ${nw} ORDER BY vt.amount DESC LIMIT 1`);
+    if(metric==='merchants')
+      return _sql(`SELECT vt.merchant as name, ROUND(SUM(vt.amount),2) as value, COUNT(*) as count FROM vacation_txns vt JOIN vacations v ON v.id=vt.vacationId ${nw} GROUP BY vt.merchant ORDER BY value DESC LIMIT ${lim}`);
+    // list
+    return _sql(`SELECT v.name, v.startDate, v.endDate, v.budget, ROUND(COALESCE(SUM(vt.amount),0),2) as spent FROM vacations v LEFT JOIN vacation_txns vt ON vt.vacationId=v.id GROUP BY v.id ORDER BY v.startDate DESC`);
+  },
+
+  // ── portfolio ─────────────────────────────────────────────────────────────
+  // metric: summary (default) | detail | gain
+  // ticker: optional filter
+  portfolio:(args={})=>{
+    const metric=(args.metric||'summary').toLowerCase();
+    const t=(args.ticker||'').replace(/'/g,"''");
+    const tf=t?`WHERE UPPER(ticker)=UPPER('${t}')`:'';
+    // currentPrice is persisted to DB whenever the Stocks tab is open and prices load.
+    // Fall back to costBasis when currentPrice is null (prices not yet fetched).
+    const price=`COALESCE(currentPrice,costBasis)`;
+    const cost=`COALESCE(costBasis,0)`;
+    if(metric==='gain')
+      return _sql(`SELECT ticker, ROUND(shares,4) as shares, ROUND(${price},2) as price, ROUND(${cost},2) as costBasis, ROUND((${price}-${cost})*shares,2) as gain, ROUND((${price}-${cost})*100.0/NULLIF(${cost},0),1) as gainPct FROM holdings ${tf} ORDER BY gain DESC`);
+    if(metric==='detail')
+      return _sql(`SELECT ticker, name, ROUND(shares,4) as shares, ROUND(${price},2) as price, ROUND(${cost},2) as costBasis, ROUND(${price}*shares,2) as value FROM holdings ${tf} ORDER BY value DESC`);
+    // summary — total value, per-holding breakdown, overall gain
+    return _sql(`SELECT ticker, ROUND(${price}*shares,2) as value, ROUND((${price}-${cost})*shares,2) as gain, ROUND(${price},2) as currentPrice, ROUND(shares,4) as shares FROM holdings ORDER BY value DESC`);
+  },
+
+  // ── expected_income ───────────────────────────────────────────────────────
+  // filter: month=YYYY-MM | from/to | source=X
+  // metric: pending (default) | confirmed | recurring | all | total
+  expected_income:(args={})=>{
+    const metric=(args.metric||'pending').toLowerCase();
+    const where=_parseFilter(args.filter,'expectedDate');
+    const src=(args.source||'').replace(/'/g,"''");
+    const sf=src?`AND LOWER(source) LIKE LOWER('%${src}%')`:'';
+    if(metric==='confirmed')
+      return _sql(`SELECT source as name, ROUND(amount,2) as value, confirmedDate as date FROM expected_income WHERE confirmed=1 AND ${where} ${sf} ORDER BY confirmedDate DESC`);
+    if(metric==='recurring')
+      return _sql(`SELECT source as name, ROUND(amount,2) as value, expectedDate as nextDate, cadence FROM expected_income WHERE cadence IS NOT NULL AND cadence!='once' AND confirmed=0 ${sf} ORDER BY expectedDate`);
+    if(metric==='total')
+      return _sql(`SELECT ROUND(SUM(amount),2) as totalPending, COUNT(*) as count FROM expected_income WHERE confirmed=0 AND expectedDate>=date('now')`);
+    if(metric==='all')
+      return _sql(`SELECT source as name, ROUND(amount,2) as value, expectedDate, confirmed, cadence FROM expected_income WHERE ${where} ${sf} ORDER BY expectedDate`);
+    // pending (default)
+    return _sql(`SELECT source as name, ROUND(amount,2) as value, expectedDate FROM expected_income WHERE confirmed=0 AND ${where} ${sf} ORDER BY expectedDate`);
+  },
+
+  // ── tax ───────────────────────────────────────────────────────────────────
+  // year: YYYY (default: current year)
+  // metric: deductible (default) | summary | rrsp | compare
+  tax:(args={})=>{
+    const metric=(args.metric||'deductible').toLowerCase();
+    const y=args.year||new Date().getFullYear();
+    const y2=args.year2||new Date().getFullYear();
+    if(metric==='summary')
+      return _sql(`SELECT COALESCE(category,'Uncategorized') as name, ROUND(SUM(amount),2) as value, COUNT(*) as count FROM transactions WHERE taxDeductible=1 AND strftime('%Y',date)='${y}' GROUP BY category ORDER BY value DESC`);
+    if(metric==='rrsp')
+      return _sql(`SELECT merchant as name, ROUND(amount,2) as value, date, note FROM transactions WHERE (LOWER(COALESCE(category,''))||' '||LOWER(COALESCE(note,''))||' '||LOWER(COALESCE(merchant,''))) LIKE '%rrsp%' AND strftime('%Y',date)='${y}' ORDER BY date`);
+    if(metric==='compare'){
+      const y1=args.year1||(new Date().getFullYear()-1);
+      return _sql(`SELECT '${y1}' as year1, ROUND(SUM(CASE WHEN strftime('%Y',date)='${y1}' THEN amount ELSE 0 END),2) as deductible1, '${y2}' as year2, ROUND(SUM(CASE WHEN strftime('%Y',date)='${y2}' THEN amount ELSE 0 END),2) as deductible2 FROM transactions WHERE taxDeductible=1 AND strftime('%Y',date) IN ('${y1}','${y2}')`);
+    }
+    // deductible list (default)
+    return _sql(`SELECT COALESCE(merchant,source,'?') as name, ROUND(amount,2) as value, date, category, note FROM transactions WHERE taxDeductible=1 AND strftime('%Y',date)='${y}' ORDER BY date`);
+  },
+
+  // ── wishlist ──────────────────────────────────────────────────────────────
+  // metric: list (default) | affordable | total
+  wishlist:(args={})=>{
+    const metric=(args.metric||'list').toLowerCase();
+    if(metric==='affordable')
+      return _sql(`WITH cash AS (SELECT ROUND(SUM(balance),2) as bal FROM accounts WHERE type IN ('chequing','savings')) SELECT w.name, ROUND(w.price,2) as price, w.priority, CASE WHEN w.price<=cash.bal THEN 'Affordable' ELSE 'Not yet' END as status, ROUND(cash.bal-w.price,2) as balanceAfter FROM wishlist w, cash ORDER BY w.price ASC`);
+    if(metric==='total')
+      return _sql(`SELECT ROUND(SUM(price),2) as totalCost, COUNT(*) as items FROM wishlist`);
+    return _sql(`SELECT name, ROUND(price,2) as price, priority, notes FROM wishlist ORDER BY priority DESC, price ASC`);
+  },
+
+  // ── household ─────────────────────────────────────────────────────────────
+  // metric: balances (default) | members | settlements
+  household:(args={})=>{
+    const metric=(args.metric||'balances').toLowerCase();
+    if(metric==='members') return _sql(`SELECT name FROM members ORDER BY name`);
+    if(metric==='settlements') return _sql(`SELECT fromMember as 'from', toMember as 'to', ROUND(amount,2) as amount, date FROM settlements ORDER BY date DESC LIMIT 20`);
+    return _sql(`SELECT m.name, ROUND(COALESCE(SUM(CASE WHEN s.paidBy=m.id THEN s.amount ELSE 0 END),0),2) as paid, ROUND(COALESCE(SUM(CASE WHEN s.owedBy=m.id THEN s.amount ELSE 0 END),0),2) as owes FROM members m LEFT JOIN splits s ON s.paidBy=m.id OR s.owedBy=m.id GROUP BY m.id ORDER BY m.name`);
+  },
+
+  // ── trend ─────────────────────────────────────────────────────────────────
+  // metric: expenses (default) | income | net | net_worth | savings_rate
+  // months: look-back window (default 6)
+  trend:(args={})=>{
+    const metric=(args.metric||'expenses').toLowerCase();
+    const n=+args.months||6;
+    const since=`date>=date('now','-${n} months')`;
+    const exp=_expUnion(since);
+    if(metric==='income')
+      return _sql(`SELECT strftime('%Y-%m',date) as name, ROUND(SUM(amount),2) as value FROM transactions WHERE type='income' AND ${since} GROUP BY name ORDER BY name`);
+    if(metric==='net')
+      return _sql(`SELECT mo as name, ROUND(inc-exp,2) as net, ROUND(inc,2) as income, ROUND(exp,2) as expenses FROM (SELECT strftime('%Y-%m',date) as mo, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as inc, 0 as exp FROM transactions WHERE ${since} GROUP BY mo UNION ALL SELECT strftime('%Y-%m',date) as mo, 0 as inc, SUM(amount) as exp FROM ${exp} GROUP BY mo) GROUP BY mo ORDER BY mo`);
+    if(metric==='net_worth')
+      return _sql(`SELECT date as name, ROUND(SUM(balance),2) as value FROM account_history WHERE ${since} GROUP BY date ORDER BY date`);
+    if(metric==='savings_rate')
+      return _sql(`SELECT mo as name, ROUND((inc-exp)*100.0/NULLIF(inc,0),1) as savingsRate, ROUND(inc,2) as income, ROUND(exp,2) as expenses FROM (SELECT strftime('%Y-%m',date) as mo, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as inc, 0 as exp FROM transactions WHERE ${since} GROUP BY mo UNION ALL SELECT strftime('%Y-%m',date) as mo, 0 as inc, SUM(amount) as exp FROM ${exp} GROUP BY mo) GROUP BY mo ORDER BY mo`);
+    // expenses (default)
+    return _sql(`SELECT strftime('%Y-%m',date) as name, ROUND(SUM(amount),2) as value FROM ${exp} GROUP BY name ORDER BY name`);
+  },
+
+  // ── compare ───────────────────────────────────────────────────────────────
+  // metric: expenses (default) | income | net
+  // month1, month2: YYYY-MM
+  compare:(args={})=>{
+    const metric=(args.metric||'expenses').toLowerCase();
+    const m1=args.month1||args.from;
+    const m2=args.month2||args.to||new Date().toISOString().slice(0,7);
+    if(!m1) return _sql(`SELECT 'provide month1 and month2 params' as error`);
+    const expQ=(m)=>`(SELECT SUM(amount) FROM ${_expUnion(`strftime('%Y-%m',date)='${m}'`)})`;
+    const incQ=(m)=>`(SELECT SUM(amount) FROM transactions WHERE type='income' AND strftime('%Y-%m',date)='${m}')`;
+    if(metric==='income')
+      return _sql(`SELECT '${m1}' as month1, ROUND(COALESCE(${incQ(m1)},0),2) as value1, '${m2}' as month2, ROUND(COALESCE(${incQ(m2)},0),2) as value2, ROUND(COALESCE(${incQ(m2)},0)-COALESCE(${incQ(m1)},0),2) as change, ROUND((COALESCE(${incQ(m2)},0)-COALESCE(${incQ(m1)},0))*100.0/NULLIF(COALESCE(${incQ(m1)},0),0),1) as changePercent`);
+    if(metric==='net'){
+      const netQ=(m)=>`(COALESCE(${incQ(m)},0)-COALESCE(${expQ(m)},0))`;
+      return _sql(`SELECT '${m1}' as month1, ROUND(${netQ(m1)},2) as net1, '${m2}' as month2, ROUND(${netQ(m2)},2) as net2, ROUND(${netQ(m2)}-${netQ(m1)},2) as change`);
+    }
+    // expenses (default)
+    return _sql(`SELECT '${m1}' as month1, ROUND(COALESCE(${expQ(m1)},0),2) as value1, '${m2}' as month2, ROUND(COALESCE(${expQ(m2)},0),2) as value2, ROUND(COALESCE(${expQ(m2)},0)-COALESCE(${expQ(m1)},0),2) as change, ROUND((COALESCE(${expQ(m2)},0)-COALESCE(${expQ(m1)},0))*100.0/NULLIF(COALESCE(${expQ(m1)},0),0),1) as changePercent`);
+  },
+
+  // ── savings_rate ──────────────────────────────────────────────────────────
+  // filter: month=YYYY-MM | from/to | thisyear etc
+  savings_rate:(args={})=>{
+    const{df,cf}=_splitFilter(args.filter);
+    const where=_parseFilter(args.filter);
+    return _sql(`SELECT ROUND(SUM(inc),2) as income, ROUND(SUM(exp),2) as expenses, ROUND(SUM(inc)-SUM(exp),2) as saved, ROUND((SUM(inc)-SUM(exp))*100.0/NULLIF(SUM(inc),0),1) as rate FROM (SELECT amount as inc,0 as exp FROM transactions WHERE type='income' AND ${where} UNION ALL SELECT 0 as inc,amount as exp FROM ${_expUnion(df,cf)})`);
+  },
+
+  // ── runway ────────────────────────────────────────────────────────────────
+  // How many months current liquid cash can cover at the 3-month avg spend rate
+  runway:()=>_sql(`WITH cash AS (SELECT ROUND(SUM(balance),2) as bal FROM accounts WHERE type IN ('chequing','savings','other')), avg3 AS (SELECT ROUND(AVG(monthly),2) as avgMonthly FROM (SELECT strftime('%Y-%m',date) as mo, SUM(amount) as monthly FROM transactions WHERE type='expense' AND date>=date('now','-3 months') GROUP BY mo)) SELECT cash.bal as cashBalance, avg3.avgMonthly as avgMonthlySpend, ROUND(cash.bal/NULLIF(avg3.avgMonthly,0),1) as runwayMonths FROM cash, avg3`),
+
+  // ── spending_anomalies ────────────────────────────────────────────────────
+  // Transactions > threshold×category average (requires ≥3 txns in category for baseline)
+  // filter: month/from/to | threshold: multiplier (default 2.0)
+  spending_anomalies:(args={})=>{
+    const{df}=_splitFilter(args.filter);
+    const where=_parseFilter(args.filter);
+    const mult=args.threshold||2.0;
+    return _sql(`WITH avgs AS (SELECT category, AVG(amount) as avg_amount FROM transactions WHERE type='expense' GROUP BY category HAVING COUNT(*)>=3) SELECT t.merchant as name, t.amount as value, t.date, t.category, ROUND(a.avg_amount,2) as categoryAvg, ROUND(t.amount/a.avg_amount,1) as xAverage FROM transactions t JOIN avgs a ON a.category=t.category WHERE t.type='expense' AND ${where} AND t.amount>${mult}*a.avg_amount ORDER BY xAverage DESC LIMIT 15`);
+  },
+
+  // ── health_score ──────────────────────────────────────────────────────────
+  // JS-computed composite score — resolved by executeTool, not SQL
+  health_score:()=>'__HEALTH_SCORE__',
+
+  // ── cashflow_projection ───────────────────────────────────────────────────
+  // JS-computed — upcoming bills + expected income in next N days
+  cashflow_projection:(args={})=>`__CASHFLOW__:${+args.days||30}`,
+
+  // ── portfolio_by_currency ─────────────────────────────────────────────────
+  // CAD vs USD asset split across all holdings
+  portfolio_by_currency:(args={})=>_sql(`
+    SELECT
+      CASE WHEN UPPER(currency) = 'USD' THEN 'USD' ELSE 'CAD' END AS currency,
+      COUNT(*) AS holdings,
+      SUM(shares * COALESCE(avgCost, 0)) AS book_value
+    FROM holdings
+    GROUP BY 1
+    ORDER BY book_value DESC
+  `,[]),
+
+  // ── debt_payoff_timeline ──────────────────────────────────────────────────
+  // Months to pay off each debt at current monthly payment rate
+  debt_payoff_timeline:(args={})=>_sql(`
+    SELECT
+      name,
+      type,
+      ROUND(balance, 2) AS balance,
+      ROUND(interestRate, 2) AS interest_rate,
+      ROUND(monthlyPayment, 2) AS monthly_payment,
+      CASE
+        WHEN monthlyPayment > 0 AND interestRate > 0
+        THEN ROUND(
+          LOG(monthlyPayment / (monthlyPayment - balance * interestRate / 1200))
+          / LOG(1 + interestRate / 1200)
+        , 1)
+        WHEN monthlyPayment > 0
+        THEN ROUND(balance / monthlyPayment, 1)
+        ELSE NULL
+      END AS months_to_payoff
+    FROM debts
+    WHERE balance > 0
+    ORDER BY months_to_payoff ASC
+  `,[]),
+
+  // ── breakeven ────────────────────────────────────────────────────────────
+  // Month when projected income will cover all fixed costs (bills + budgets)
+  breakeven:(args={})=>_sql(`
+    WITH monthly_income AS (
+      SELECT AVG(monthly_total) AS avg_income FROM (
+        SELECT strftime('%Y-%m', date) AS m, SUM(amount) AS monthly_total
+        FROM transactions WHERE type = 'income'
+        GROUP BY m ORDER BY m DESC LIMIT 3
+      )
+    ),
+    fixed_costs AS (
+      SELECT SUM(amount) AS total_bills FROM bills WHERE active = 1 OR active IS NULL
+    )
+    SELECT
+      ROUND(monthly_income.avg_income, 2) AS avg_monthly_income,
+      ROUND(fixed_costs.total_bills, 2) AS total_fixed_costs,
+      CASE
+        WHEN monthly_income.avg_income >= fixed_costs.total_bills THEN 'Already covered'
+        ELSE 'Income does not cover fixed costs'
+      END AS status,
+      ROUND(fixed_costs.total_bills - monthly_income.avg_income, 2) AS shortfall
+    FROM monthly_income, fixed_costs
+  `,[]),
+
+  // ── sql_query ─────────────────────────────────────────────────────────────
+  // Escape hatch: run any SELECT directly against SQLite
+  sql_query:(args={})=>_sql(args.sql||'SELECT 1',args.params||[]),
+};
+
+function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSetMessages,discreteMode}){
   const setMessages = onSetMessages;
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(false);
@@ -5685,335 +7398,114 @@ function Insights({schema,settings,onNavigate,widgets,onSetWidgets,messages,onSe
   const inputRef=useRef(null);
 
   useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
+  const blocked=discreteMode;
 
-  // ─── Tool library: named functions the LLM can call by name + params ──────────
-  // The LLM never writes JavaScript — it just picks a tool name and fills params.
-  // _df and _label are imported from ./utils/dateUtils.js
 
-  // Helper: wrap a SQL string in the __SQL__: marker that executeTool/preloaded runner detect
-  const _sql=(sqlStr,params=[])=>`__SQL__:${JSON.stringify({sql:sqlStr,params})}`;
-
-  // All expenses = regular transactions + vacation_txns (both count as spending)
-  // Returns a SQL subquery alias usable anywhere you'd write "FROM transactions WHERE type='expense'"
-  const _allExp=(df='1=1')=>
-    `(SELECT amount,date,COALESCE(category,'Other') as category,COALESCE(merchant,'?') as merchant FROM transactions WHERE type='expense' AND ${df} `+
-    `UNION ALL `+
-    `SELECT amount,date,COALESCE(category,'Vacation') as category,COALESCE(merchant,'?') as merchant FROM vacation_txns WHERE ${df})`;
-
-  const TOOL_LIBRARY={
-    // ── Spending & Income ──────────────────────────────────────────────────────
-    // expenses(month?|from?,to?) — total expenses including vacation spending
-    expenses:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM ${_allExp(df)}`);
-    },
-    // income(month?|from?,to?) — total income
-    income:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM transactions WHERE type='income' AND ${df}`);
-    },
-    // net(month?|from?,to?) — income minus all expenses (including vacation)
-    net:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT ROUND(COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END),0),2) as value FROM (SELECT amount,date,'income' as type FROM transactions WHERE type='income' AND ${df} UNION ALL SELECT amount,date,'expense' as type FROM ${_allExp(df)})`);
-    },
-    // categories(month?|from?,to?) — expense totals grouped by category (includes vacation)
-    categories:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT category as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY category ORDER BY value DESC`);
-    },
-    // top_category(month?|from?,to?) — single highest-spend category
-    top_category:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT category as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY category ORDER BY value DESC LIMIT 1`);
-    },
-    // monthly(months?|from?,to?) — income & expenses per month (expenses include vacation)
-    monthly:(args={})=>{
-      const n=args.months||99;
-      const df=_sqlDf(args);
-      return _sql(`SELECT mo as name, ROUND(Income,2) as Income, ROUND(Expenses,2) as Expenses FROM (SELECT strftime('%Y-%m',date) as mo, SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as Income, 0 as Expenses FROM transactions WHERE ${df} GROUP BY mo UNION ALL SELECT strftime('%Y-%m',date) as mo, 0 as Income, SUM(amount) as Expenses FROM ${_allExp(df)} GROUP BY mo) GROUP BY mo ORDER BY mo LIMIT ${n}`);
-    },
-    // bills(type?) — "total"=sum, default=list [{name,value}]
-    bills:(args={})=>{
-      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(amount),0),2) as value FROM bills WHERE active=1`);
-      return _sql(`SELECT name, amount as value FROM bills WHERE active=1 ORDER BY amount DESC`);
-    },
-    // portfolio(type?) — cost-basis total or holdings list (live price not in DB)
-    portfolio:(args={})=>{
-      if(args.type==="total") return _sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as value FROM holdings WHERE costBasis IS NOT NULL`);
-      return _sql(`SELECT ticker as name, ROUND(costBasis*shares,2) as value, shares, costBasis FROM holdings WHERE costBasis IS NOT NULL ORDER BY value DESC`);
-    },
-    // merchants(month?|from?,to?, limit?) — top merchants by spend (includes vacation)
-    merchants:(args={})=>{
-      const df=_sqlDf(args);
-      const n=args.limit||10;
-      return _sql(`SELECT merchant as name, ROUND(SUM(amount),2) as value FROM ${_allExp(df)} GROUP BY merchant ORDER BY value DESC LIMIT ${n}`);
-    },
-    // transactions(month?|from?,to?, limit?) — recent transactions list
-    transactions:(args={})=>{
-      const df=_sqlDf(args);
-      const n=args.limit||10;
-      return _sql(`SELECT COALESCE(merchant,'?')||' ('||date||')' as name, amount as value, type, category FROM transactions WHERE ${df} ORDER BY date DESC LIMIT ${n}`);
-    },
-
-    // ── Expected Income ────────────────────────────────────────────────────────
-    // pending_income(month?|from?,to?) — unconfirmed expected income items
-    pending_income:(args={})=>{
-      const df=_sqlDf(args,'expectedDate');
-      return _sql(`SELECT source as name, amount as value, expectedDate as date FROM expected_income WHERE confirmed=0 AND ${df} ORDER BY expectedDate`);
-    },
-    // confirmed_income(month?|from?,to?) — confirmed received payments
-    confirmed_income:(args={})=>{
-      const df=_sqlDf(args,'expectedDate');
-      return _sql(`SELECT source as name, amount as value, COALESCE(confirmedDate,expectedDate) as date FROM expected_income WHERE confirmed=1 AND ${df} ORDER BY expectedDate`);
-    },
-    // all_expected_income(month?|from?,to?) — all expected income with confirmation status
-    all_expected_income:(args={})=>{
-      const df=_sqlDf(args,'expectedDate');
-      return _sql(`SELECT source as name, amount as value, expectedDate, confirmed, confirmedDate FROM expected_income WHERE ${df} ORDER BY expectedDate`);
-    },
-
-    // ── Budgets ────────────────────────────────────────────────────────────────
-    // budgets() — all category budgets
-    budgets:()=>_sql(`SELECT category as name, budget as value FROM cat_budgets ORDER BY budget DESC`),
-    // budget_vs_actual(month?|from?,to?) — category budget vs actual spend (includes vacation)
-    budget_vs_actual:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT cb.category as name, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT category as cat, SUM(amount) as spent FROM ${_allExp(df)} GROUP BY cat) t ON t.cat=cb.category ORDER BY percentUsed DESC NULLS LAST`);
-    },
-    // budget_remaining(category, month?|from?,to?) — remaining budget for one category
-    budget_remaining:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"''");
-      const df=_sqlDf(args);
-      return _sql(`SELECT cb.category, cb.budget, ROUND(COALESCE(t.spent,0),2) as spent, ROUND(cb.budget-COALESCE(t.spent,0),2) as remaining, CASE WHEN cb.budget>0 THEN ROUND(COALESCE(t.spent,0)*100.0/cb.budget,1) ELSE NULL END as percentUsed FROM cat_budgets cb LEFT JOIN (SELECT SUM(amount) as spent FROM ${_allExp(df)} WHERE category='${cat}') t ON 1=1 WHERE cb.category='${cat}'`);
-    },
-    // over_budget(month?|from?,to?) — categories where actual spend exceeds budget (includes vacation)
-    over_budget:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT cb.category as name, cb.budget, ROUND(t.spent,2) as spent, ROUND(t.spent-cb.budget,2) as over FROM cat_budgets cb JOIN (SELECT category as cat, SUM(amount) as spent FROM ${_allExp(df)} GROUP BY cat) t ON t.cat=cb.category WHERE t.spent>cb.budget ORDER BY over DESC`);
-    },
-
-    // ── Bills ─────────────────────────────────────────────────────────────────
-    // bills_due(month?) — bills not yet paid this month
-    bills_due:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return _sql(`SELECT b.name, b.amount as value, b.dueDay, b.category FROM bills b WHERE b.active=1 AND b.id NOT IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
-    },
-    // bills_paid(month?) — bills paid this month
-    bills_paid:(args={})=>{
-      const m=args.month||new Date().toISOString().slice(0,7);
-      return _sql(`SELECT b.name, b.amount as value, b.dueDay FROM bills b WHERE b.active=1 AND b.id IN (SELECT billId FROM bill_payments WHERE month='${m}') ORDER BY b.dueDay`);
-    },
-
-    // ── Holdings / Portfolio ───────────────────────────────────────────────────
-    // holdings_detail() — each holding with shares, cost basis, total cost
-    holdings_detail:()=>_sql(`SELECT ticker as name, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings ORDER BY totalCost DESC NULLS LAST`),
-    // portfolio_gain() — total portfolio cost basis (market price not stored in DB)
-    portfolio_gain:()=>_sql(`SELECT ROUND(COALESCE(SUM(costBasis*shares),0),2) as totalCost, COUNT(*) as holdings, ROUND(AVG(costBasis),2) as avgCostBasis FROM holdings WHERE costBasis IS NOT NULL`),
-    // holding(ticker) — detail for one ticker
-    holding:(args={})=>{
-      const t=(args.ticker||"").replace(/'/g,"''");
-      return _sql(`SELECT ticker, shares, costBasis, ROUND(costBasis*shares,2) as totalCost FROM holdings WHERE UPPER(ticker)=UPPER('${t}') LIMIT 1`);
-    },
-
-    // ── Vacations ─────────────────────────────────────────────────────────────
-    // vacations() — all vacations with dates and budgets
-    vacations:()=>_sql(`SELECT name, startDate, endDate, budget FROM vacations ORDER BY startDate`),
-    // vacation_spending(name) — budget vs actual spend for a named vacation
-    vacation_spending:(args={})=>{
-      const name=(args.name||"").replace(/'/g,"''");
-      return _sql(`SELECT v.name, v.startDate, v.endDate, v.budget, ROUND(COALESCE(SUM(vt.amount),0),2) as spent, ROUND(v.budget-COALESCE(SUM(vt.amount),0),2) as remaining FROM vacations v LEFT JOIN vacation_txns vt ON vt.vacationId=v.id WHERE LOWER(v.name) LIKE LOWER('%${name}%') GROUP BY v.id ORDER BY v.startDate`);
-    },
-
-    // ── Account History ────────────────────────────────────────────────────────
-    // account_balance() — most recent balance snapshot
-    account_balance:()=>_sql(`SELECT date, balance as value FROM account_history ORDER BY date DESC LIMIT 1`),
-    // balance_history(from?,to?) — all balance snapshots ordered by date
-    balance_history:(args={})=>{
-      const df=_sqlDf(args);
-      return _sql(`SELECT date as name, balance as value FROM account_history WHERE ${df} ORDER BY date`);
-    },
-
-    // ── Transactions (extended) ────────────────────────────────────────────────
-    // txns_by_category(category, month?|from?,to?) — all transactions in a category (includes vacation)
-    txns_by_category:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"''");
-      const df=_sqlDf(args);
-      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value, category FROM ${_allExp(df)} WHERE category='${cat}' ORDER BY date DESC`);
-    },
-    // txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant (includes vacation)
-    txns_by_merchant:(args={})=>{
-      const merch=(args.merchant||"").replace(/'/g,"''");
-      const df=_sqlDf(args);
-      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value FROM ${_allExp(df)} WHERE LOWER(merchant) LIKE LOWER('%${merch}%') ORDER BY date DESC`);
-    },
-    // largest_expenses(month?|from?,to?, limit?) — top N expenses (includes vacation)
-    largest_expenses:(args={})=>{
-      const df=_sqlDf(args);
-      const n=args.limit||10;
-      return _sql(`SELECT merchant||' ('||date||')' as name, amount as value, category FROM ${_allExp(df)} ORDER BY amount DESC LIMIT ${n}`);
-    },
-
-    // ── Math / Comparison tools ────────────────────────────────────────────────
-    // compare_expenses(month1, month2) — {month1,value1,month2,value2,change,changePercent}
-    compare_expenses:(args={})=>{
-      const m1=args.month1||new Date().toISOString().slice(0,7);
-      const m2=args.month2||new Date().toISOString().slice(0,7);
-      const src=_allExp(`strftime('%Y-%m',date) IN ('${m1}','${m2}')`);
-      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM ${src}) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
-    },
-    // compare_income(month1, month2) — same shape for income
-    compare_income:(args={})=>{
-      const m1=args.month1||new Date().toISOString().slice(0,7);
-      const m2=args.month2||new Date().toISOString().slice(0,7);
-      return _sql(`WITH v AS (SELECT ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m1}' THEN amount ELSE 0 END),2) as value1, ROUND(SUM(CASE WHEN strftime('%Y-%m',date)='${m2}' THEN amount ELSE 0 END),2) as value2 FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}')) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
-    },
-    // compare_net(month1, month2) — net position comparison (expenses include vacation)
-    compare_net:(args={})=>{
-      const m1=args.month1||new Date().toISOString().slice(0,7);
-      const m2=args.month2||new Date().toISOString().slice(0,7);
-      const src=_allExp(`strftime('%Y-%m',date) IN ('${m1}','${m2}')`);
-      return _sql(`WITH inc AS (SELECT strftime('%Y-%m',date) as mo, SUM(amount) as total FROM transactions WHERE type='income' AND strftime('%Y-%m',date) IN ('${m1}','${m2}') GROUP BY mo), exp AS (SELECT strftime('%Y-%m',date) as mo, SUM(amount) as total FROM ${src} GROUP BY mo), v AS (SELECT ROUND(COALESCE((SELECT total FROM inc WHERE mo='${m1}'),0)-COALESCE((SELECT total FROM exp WHERE mo='${m1}'),0),2) as value1, ROUND(COALESCE((SELECT total FROM inc WHERE mo='${m2}'),0)-COALESCE((SELECT total FROM exp WHERE mo='${m2}'),0),2) as value2) SELECT '${m1}' as month1, value1, '${m2}' as month2, value2, ROUND(value2-value1,2) as change, CASE WHEN value1!=0 THEN ROUND((value2-value1)*100.0/ABS(value1),1) ELSE NULL END as changePercent FROM v`);
-    },
-    // savings_rate(month?|from?,to?) — {period, income, expenses, saved, rate%} (expenses include vacation)
-    savings_rate:(args={})=>{
-      const df=_sqlDf(args);
-      const label=_label(args);
-      return _sql(`WITH inc AS (SELECT ROUND(COALESCE(SUM(amount),0),2) as v FROM transactions WHERE type='income' AND ${df}), exp AS (SELECT ROUND(COALESCE(SUM(amount),0),2) as v FROM ${_allExp(df)}) SELECT '${label}' as period, inc.v as income, exp.v as expenses, ROUND(inc.v-exp.v,2) as saved, CASE WHEN inc.v>0 THEN ROUND((inc.v-exp.v)*100.0/inc.v,1) ELSE NULL END as rate FROM inc, exp`);
-    },
-    // expense_share(category, month?|from?,to?) — what % of spending is one category (includes vacation)
-    expense_share:(args={})=>{
-      const cat=(args.category||"").replace(/'/g,"''");
-      const df=_sqlDf(args);
-      return _sql(`SELECT '${cat}' as category, ROUND(COALESCE(SUM(CASE WHEN category='${cat}' THEN amount ELSE 0 END),0),2) as amount, ROUND(COALESCE(SUM(amount),0),2) as total, CASE WHEN SUM(amount)>0 THEN ROUND(SUM(CASE WHEN category='${cat}' THEN amount ELSE 0 END)*100.0/SUM(amount),1) ELSE NULL END as percent FROM ${_allExp(df)}`);
-    },
-
-    // ── Raw SQL ────────────────────────────────────────────────────────────────
-    // sql_query(sql, params?) — execute any SELECT directly against SQLite
-    sql_query:(args={})=>_sql(args.sql||'SELECT 1', args.params||[]),
-  };
-
-  // Build compact system prompt — just tool names, no raw JS examples
+  // Build system prompt for GlobalChat
   const buildSystemPrompt=()=>{
     const curMonth=new Date().toISOString().slice(0,7);
-    return `You are CashHeap Assistant. Answer finance questions by calling the tools below. NEVER invent or estimate numbers — only state values returned by tools.
+    // Build schema view descriptions (each view's joins define what data it covers)
+    const schemaDefs=schema?.views?Object.entries(schema.views).map(([vk,v])=>{
+      const msrKeys=Object.keys(v.measures||{}).join('|');
+      const dimKeys=Object.keys(v.dimensions||{}).join('|');
+      const joinDesc=(v.joins||[]).filter(j=>j.type==='UNION ALL').map(j=>j.label);
+      const joinNote=joinDesc.length?` [UNION: ${joinDesc.join('+')}]`:'';
+      return `  ${vk}${joinNote}  measures:${msrKeys}  groupBy:${dimKeys}`;
+    }).join('\n'):'';
+
+    return `You are CashHeap Assistant (Jarvis). Answer finance questions by calling ONE tool. NEVER invent numbers.
 
 RULES:
 - Always call a tool before answering any financial question.
-- Never refuse. Never say "I can't" — just call the right tool.
-- After getting results, respond in 1-2 sentences using ONLY the returned values.
-
-DATE ARGS (apply to most tools):
-  month="YYYY-MM"          — single month
-  from="YYYY-MM",to="YYYY-MM" — sum over a range of months
-  (omit both for all-time)
-
-AVAILABLE TOOLS:
-
-SPENDING & INCOME:
-expenses(month?|from?,to?) — total expenses
-income(month?|from?,to?) — total income
-net(month?|from?,to?) — income minus expenses
-categories(month?|from?,to?) — expenses by category
-top_category(month?|from?,to?) — highest-spend category
-monthly(months?|from?,to?) — income & expenses per month
-merchants(month?|from?,to?, limit?) — top merchants by spend
-transactions(month?|from?,to?, limit?) — recent transactions
-txns_by_category(category, month?|from?,to?) — all transactions in a category
-txns_by_merchant(merchant, month?|from?,to?) — all transactions from a merchant
-largest_expenses(month?|from?,to?, limit?) — top N expenses by amount
-
-BUDGETS:
-budgets() — all category budgets
-budget_vs_actual(month?|from?,to?) — each category: budget, spent, remaining, % used
-budget_remaining(category, month?|from?,to?) — remaining budget for one category
-over_budget(month?) — categories exceeding their budget
-
-EXPECTED INCOME:
-pending_income(month?|from?,to?) — unconfirmed expected income: {total, items[]}
-confirmed_income(month?|from?,to?) — confirmed expected income: {total, items[]}
-all_expected_income(month?|from?,to?) — all expected income with status
-
-BILLS:
-bills(type?) — "total"=sum; default=list [{name,value}]
-bills_due(month?) — unpaid bills this month
-bills_paid(month?) — paid bills this month
-
-PORTFOLIO:
-portfolio(type?) — "total"=value; default=holdings [{name,value}]
-holdings_detail() — each holding with cost, market value, gain/loss
-portfolio_gain() — total unrealised gain/loss: {marketValue, totalCost, gain, gainPercent}
-holding(ticker) — detail for one ticker
-
-VACATIONS:
-vacations() — all vacations with dates and budgets
-vacation_spending(name) — actual spend vs budget for a vacation
-
-ACCOUNT:
-account_balance() — most recent balance snapshot
-balance_history() — all balance snapshots over time
-
-ACCOUNT:
-account_balance() — most recent balance snapshot
-balance_history(from?,to?) — balance snapshots over time
-
-MATH (never do arithmetic yourself — always call these):
-compare_expenses(month1, month2) — {value1, value2, change, changePercent}
-compare_income(month1, month2) — same for income
-compare_net(month1, month2) — net position comparison
-savings_rate(month?|from?,to?) — {income, expenses, saved, rate%}
-expense_share(category, month?|from?,to?) — what % of spending is one category
-
-SQL:
-sql_query(sql, params?) — execute any SELECT against SQLite for custom analysis
-
-NAVIGATION:
-navigate(tab) — home/bills/history/stocks/budget/networth/settings
-
-RULES:
-- NEVER do arithmetic. Use a math tool instead.
 - Call exactly ONE tool per response.
-- Report returned values directly in 1-2 sentences only.
+- Report returned values in 1-2 sentences using ONLY the numbers returned.
+- For spending/income/goals/bills/accounts: the system dispatches schema-driven queries automatically.
+  Only emit a <tool> block for complex queries (budget, vacations, trend, compare, portfolio, debts, etc.)
 
-HOW TO CALL: <tool>{"name":"TOOL_NAME","args":{"param":"value"}}</tool>
+═══ DATA MODEL VIEWS (schema-driven — dispatched automatically) ══════════════
+${schemaDefs}
 
-EXAMPLES:
-User: what did I spend in ${curMonth}
-<tool>{"name":"expenses","args":{"month":"${curMonth}"}}</tool>
+Each view's SQL is built from its baseSQL + UNION ALL joins as defined in the Data Model.
+The "expenses" view includes vacation_txns via UNION ALL — totals always include vacation spending.
 
-User: show unconfirmed expected income this month
-<tool>{"name":"pending_income","args":{"month":"${curMonth}"}}</tool>
+═══ COMPLEX TOOLS (emit <tool> block for these) ═════════════════════════════
+
+net(filter?,groupBy?)         Income minus all expenses. groupBy: month | year
+budget(filter?,metric?)       metric: summary|proximity|over|remaining|utilization|targets
+vacations(name?,metric?)      metric: list|spending|txns|biggest|merchants
+trend(metric,months?)         metric: expenses|income|net|net_worth|savings_rate
+compare(metric,month1,month2) metric: expenses|income|net
+debts(metric?)                metric: summary|interest|total
+subscriptions(metric?)        metric: total
+portfolio(metric?,ticker?)    metric: summary|detail|gain
+expected_income(filter?,metric?) metric: pending|confirmed|recurring|all|total
+tax(year?,metric?)            metric: deductible|summary|rrsp|compare
+savings_rate(filter?)
+runway()
+spending_anomalies(filter?)
+health_score()
+cashflow_projection(days?)
+sql_query(sql)                Raw SELECT — escape hatch
+navigate(tab)                 home|bills|history|stocks|cashflow|networth|goals|debt|settings
+
+═══ ROUTING ════════════════════════════════════════════════════════════════
+
+- "how much spent / total spending" → handled by schema expenses view (auto)
+- "income this month / total earned" → handled by schema income view (auto)
+- "how much do I pay in bills" → handled by schema bills view (auto)
+- "net worth / total assets" → handled by schema accounts view (auto)
+- "goal progress / how close to goal" → handled by schema goals view (auto)
+- "over budget / budget remaining" → budget(metric=over|remaining)
+- "what did I spend on [vacation]" → vacations(name=X,metric=spending)
+- "trend / over time / month by month" → trend(metric=expenses)
+- "compare month X vs Y" → compare(metric=expenses,month1=X,month2=Y)
+- "runway / how long can I last" → runway()
+- "unusual / anomalous charges" → spending_anomalies()
+- "health score" → health_score()
+
+═══ EXAMPLES ═══════════════════════════════════════════════════════════════
 
 User: am I over budget anywhere this month
-<tool>{"name":"over_budget","args":{"month":"${curMonth}"}}</tool>
+<tool>{"name":"budget","args":{"filter":"month=${curMonth}","metric":"over"}}</tool>
 
-User: how did expenses change from 2026-05 to 2026-06
-<tool>{"name":"compare_expenses","args":{"month1":"2026-05","month2":"2026-06"}}</tool>
-
-User: show my portfolio gain/loss
-<tool>{"name":"portfolio_gain","args":{}}</tool>
+User: spending trend last 6 months
+<tool>{"name":"trend","args":{"metric":"expenses","months":6}}</tool>
 
 User: how much did I spend on my Montreal vacation
-<tool>{"name":"vacation_spending","args":{"name":"Montreal"}}</tool>
-
-User: total expenses from January to March 2026
-<tool>{"name":"expenses","args":{"from":"2026-01","to":"2026-03"}}</tool>
+<tool>{"name":"vacations","args":{"name":"Montreal","metric":"spending"}}</tool>
 
 User: what was my savings rate for Q1 2026
-<tool>{"name":"savings_rate","args":{"from":"2026-01","to":"2026-03"}}</tool>
+<tool>{"name":"savings_rate","args":{"filter":"from=2026-01 AND to=2026-03"}}</tool>
 
-SQL TOOL — use when no named tool fits:
-sql_query(sql, params?) — run any SELECT against SQLite.
-${Object.entries((schema&&schema.views)||{}).map(([,v])=>{
-  const tbl=v.table||v.source||'?';
-  const fields=Object.entries(v.dimensions||{}).filter(([,d])=>d.sql).map(([dk,d])=>`${dk}:${d.sql.replace(/\$\{TABLE\}/g,tbl)}`);
-  return `${tbl}: ${fields.join(', ')}`;
-}).join('\n')}
-Example:
-User: expenses by category in 2026-05
-<tool>{"name":"sql_query","args":{"sql":"SELECT category, ROUND(SUM(amount),2) as total FROM transactions WHERE type='expense' AND strftime('%Y-%m',date)='2026-05' GROUP BY category ORDER BY total DESC"}}</tool>
+User: how long could I survive on my savings
+<tool>{"name":"runway","args":{}}}</tool>
 
 Current month: ${curMonth}`;
+  };
+
+  // LLM caller for Insights — routes through the selected model (Gemini / DeepSeek / Ollama)
+  const callInsightsLLM=async(msgs)=>{
+    const model=settings?.globalChatModel||"openrouter";
+    const systemMsg=msgs.find(m=>m.role==="system");
+    const chatMsgs=msgs.filter(m=>m.role!=="system");
+    const sysContent=systemMsg?.content||"";
+    try{
+      if(model==="gemini"){
+        const r=await fetch("/api/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:sysContent}]},contents:chatMsgs.map(m=>({role:m.role==="assistant"?"model":m.role,parts:[{text:m.content}]})),generationConfig:{maxOutputTokens:256}})});
+        const d=await r.json();
+        return d.candidates?.[0]?.content?.parts?.[0]?.text||"";
+      } else if(model==="deepseek"){
+        const dsModel=settings?.deepseekModel||"deepseek-r1:8b";
+        const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:dsModel,messages:msgs,stream:false})});
+        const d=await r.json();
+        const raw=d.message?.content||"";
+        return raw.replace(/<think>[\s\S]*?<\/think>/gi,"").trim();
+      } else {
+        const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:msgs,options:{num_predict:200,temperature:0.1}})});
+        const d=await r.json();
+        return d.message?.content||"";
+      }
+    }catch(e){return "";}
   };
 
   const executeTool=async(tool)=>{
@@ -6022,16 +7514,26 @@ Current month: ${curMonth}`;
       onNavigate(args.tab);
       return{success:true,navigatedTo:args.tab};
     }
-    // Named library tool — all tools now return __SQL__: markers
+    // Named library tool
     if(TOOL_LIBRARY[name]){
       try{
         const marker=TOOL_LIBRARY[name](args||{});
+        // JS-only special markers
+        if(marker==='__HEALTH_SCORE__'){
+          // Handled separately — fall through to health score logic below
+          return{id:name,result:'__HEALTH_SCORE__'};
+        }
+        if(typeof marker==='string'&&marker.startsWith('__CASHFLOW__:')){
+          return{id:name,result:'__CASHFLOW__',days:+marker.split(':')[1]||30};
+        }
+        if(typeof marker!=='string'||!marker.startsWith('__SQL__:'))
+          return{id:name,error:'Tool returned unexpected value'};
         const{sql,params}=JSON.parse(marker.slice(8));
         const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
         const d=await r.json();
         if(d.error)return{id:name,error:d.error};
-        // Normalize: 1 row × 1 column → scalar value (e.g. expenses → 1234.56)
-        if(d.rows.length===1&&d.columns.length===1)return{id:name,result:d.rows[0][d.columns[0]]};
+        // Normalize: 1 row × 1 column → scalar value
+        if(d.rows&&d.rows.length===1&&d.columns&&d.columns.length===1)return{id:name,result:d.rows[0][d.columns[0]]};
         return{id:name,result:d.rows,columns:d.columns,count:d.count};
       }catch(e){return{id:name,error:e.message};}
     }
@@ -6073,7 +7575,7 @@ Current month: ${curMonth}`;
       test:msg=>/(how much|total).*(spent|spend|spending)|spent.*(this month|month)/i.test(msg),
       queries:[{
         label:"Spent This Month",chartType:null,
-        js:()=>TOOL_LIBRARY.expenses({month:new Date().toISOString().slice(0,7)}),
+        js:()=>TOOL_LIBRARY.expenses({filter:`month=${new Date().toISOString().slice(0,7)}`}),
       }]
     },
     // Monthly income vs expenses (bar) — check before generic "income" or "bar"
@@ -6081,7 +7583,7 @@ Current month: ${curMonth}`;
       test:msg=>/monthly.*(income|expense)|income.*vs.*expense|expense.*vs.*income|income.*expense.*bar|monthly.*bar/i.test(msg),
       queries:[{
         label:"Monthly Income vs Expenses",chartType:"bar",multiSeries:true,
-        js:()=>TOOL_LIBRARY.monthly({months:8}),
+        js:()=>TOOL_LIBRARY.trend({metric:"expenses",months:8}),
         buildWidget:(result)=>({id:uid(),type:"bar",title:"Monthly Income vs Expenses",data:result,xKey:"name",multiKeys:["Income","Expenses"],format:"currency"})
       }]
     },
@@ -6090,7 +7592,7 @@ Current month: ${curMonth}`;
       test:msg=>/categor|pie chart|breakdown/i.test(msg),
       queries:[{
         label:"Spending by Category",chartType:"pie",
-        js:()=>TOOL_LIBRARY.categories({}),
+        js:()=>TOOL_LIBRARY.expenses({filter:`month=${new Date().toISOString().slice(0,7)}`,groupBy:"category"}),
       }]
     },
     // Net position this month
@@ -6098,13 +7600,13 @@ Current month: ${curMonth}`;
       test:msg=>/net.*(position|worth|this month)|what.*net/i.test(msg),
       queries:[
         {label:"Income This Month",chartType:null,
-          js:()=>TOOL_LIBRARY.income({month:new Date().toISOString().slice(0,7)}),
+          js:()=>TOOL_LIBRARY.income({filter:`month=${new Date().toISOString().slice(0,7)}`}),
         },
         {label:"Expenses This Month",chartType:null,
-          js:()=>TOOL_LIBRARY.expenses({month:new Date().toISOString().slice(0,7)}),
+          js:()=>TOOL_LIBRARY.expenses({filter:`month=${new Date().toISOString().slice(0,7)}`}),
         },
-        {label:"Net Position This Month",chartType:null,
-          js:()=>TOOL_LIBRARY.net({month:new Date().toISOString().slice(0,7)}),
+        {label:"Net This Month",chartType:null,
+          js:()=>TOOL_LIBRARY.net({filter:`month=${new Date().toISOString().slice(0,7)}`}),
         },
       ]
     },
@@ -6112,30 +7614,24 @@ Current month: ${curMonth}`;
     {
       test:msg=>/bill/i.test(msg),
       queries:[
-        {label:"Monthly Bills Total",chartType:null,js:()=>TOOL_LIBRARY.bills({type:"total"})},
-        {label:"Bills Breakdown",chartType:"bar",js:()=>TOOL_LIBRARY.bills({})},
+        {label:"Bills Due",chartType:null,js:()=>TOOL_LIBRARY.bills({status:"due"})},
+        {label:"Bills Breakdown",chartType:"bar",js:()=>TOOL_LIBRARY.bills({status:"all"})},
       ]
     },
     // Pending / unconfirmed expected income
     {
       test:msg=>/(income|pay|salary).*(pending|unconfirmed|expected|not.*confirmed|hasn.?t.*confirmed)|(pending|unconfirmed|expected|hasn.?t.*confirmed).*(income|pay|salary)/i.test(msg),
       queries:[{
-        label:"Pending Income This Month",chartType:"bar",
-        js:()=>TOOL_LIBRARY.pending_income({month:new Date().toISOString().slice(0,7)}),
-        buildWidget:(result)=>{
-          const items=result?.items||[];
-          const total=result?.total||0;
-          if(items.length===0) return {id:uid(),type:"metric",title:"Pending Income This Month",value:0,format:"currency"};
-          return {id:uid(),type:"bar",title:`Pending Income This Month · $${total.toLocaleString()} total`,data:items,xKey:"name",yKey:"value",format:"currency"};
-        }
+        label:"Pending Income",chartType:"bar",
+        js:()=>TOOL_LIBRARY.expected_income({metric:"pending"}),
       }]
     },
     // Portfolio value
     {
       test:msg=>/portfolio|stock.*value|total.*stock/i.test(msg),
       queries:[
-        {label:"Total Portfolio Value",chartType:null,js:()=>TOOL_LIBRARY.portfolio({type:"total"})},
-        {label:"Holdings by Value",chartType:"bar",js:()=>TOOL_LIBRARY.portfolio({})},
+        {label:"Portfolio Summary",chartType:null,js:()=>TOOL_LIBRARY.portfolio({metric:"summary"})},
+        {label:"Holdings by Value",chartType:"bar",js:()=>TOOL_LIBRARY.portfolio({metric:"detail"})},
       ]
     },
   ];
@@ -6147,41 +7643,54 @@ Current month: ${curMonth}`;
 
     // ── Fast path: preloaded queries bypass the LLM entirely ──────────────────
     const preloaded=PRELOADED_QUERIES.find(p=>p.test(userMsg));
+    let skipLLM=false;
     if(preloaded){
       if(preloaded.action){
         preloaded.action();
-      } else {
-        const widgets=[];
-        for(const q of preloaded.queries){
-          try{
-            const marker=q.js();
-            let result;
-            if(typeof marker==="string"&&marker.startsWith("__SQL__:")){
-              const{sql,params}=JSON.parse(marker.slice(8));
-              const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
-              const d=await r.json();
-              if(d.error)continue;
-              // Normalize single-value result to scalar
-              result=d.rows.length===1&&d.columns.length===1?d.rows[0][d.columns[0]]:d.rows;
-            } else {
-              const r=await fetch("/api/llm/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:marker})});
-              const d=await r.json();
-              if(d.result===undefined||d.error)continue;
-              result=d.result;
-            }
-            const w=q.buildWidget?q.buildWidget(result):autoWidget(uid(),q.label,result,q.chartType);
-            if(w) widgets.push(w);
-          }catch(e){}
-        }
-        if(widgets.length>0){
-          setMessages(prev=>[...prev,{role:"assistant",display:null,content:"",widgets}]);
-        }
+        setLoading(false);
+        setTimeout(()=>inputRef.current?.focus(),50);
+        return;
       }
-      setLoading(false);
-      setTimeout(()=>inputRef.current?.focus(),50);
-      return;
+      const widgets=[];
+      const rawResults=[];
+      for(const q of preloaded.queries){
+        try{
+          const marker=q.js();
+          let result;
+          if(typeof marker==="string"&&marker.startsWith("__SQL__:")){
+            const{sql,params}=JSON.parse(marker.slice(8));
+            const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
+            const d=await r.json();
+            if(d.error){console.warn("Preloaded query error:",q.label,d.error);continue;}
+            result=d.rows?.length===1&&d.columns?.length===1?d.rows[0][d.columns[0]]:d.rows;
+          } else if(typeof marker==="string"&&marker.startsWith("__HEALTH_SCORE__")){
+            continue;
+          } else {
+            continue;
+          }
+          rawResults.push({label:q.label,result});
+          const w=q.buildWidget?q.buildWidget(result):autoWidget(uid(),q.label,result,q.chartType);
+          if(w) widgets.push(w);
+        }catch(e){console.warn("Preloaded query exception:",q.label,e.message);}
+      }
+      if(widgets.length>0){
+        // Show widgets immediately, then synthesize answer
+        setMessages(prev=>[...prev,{role:"assistant",display:null,content:"",widgets,_pending:true}]);
+        const dataText=rawResults.map(({label,result})=>`${label}: ${JSON.stringify(result).slice(0,400)}`).join("\n");
+        let reply;
+        try{
+          reply=await callInsightsLLM([
+            {role:"system",content:"You are Jarvis. Answer the user's question in 1-2 sentences using ONLY the data provided. Be direct, no preamble, no sign-off. Never invent numbers."},
+            {role:"user",content:`Question: "${userMsg}"\n\nData:\n${dataText}`},
+          ]);
+        }catch(e){ reply=null; }
+        setMessages(prev=>prev.map(m=>m._pending?{...m,display:reply||null,content:reply,_pending:false}:m));
+        skipLLM=true;
+      }
+      // If widgets.length===0, fall through to LLM path below
     }
     // ── End fast path ──────────────────────────────────────────────────────────
+    if(skipLLM){setLoading(false);setTimeout(()=>inputRef.current?.focus(),50);return;}
 
     const systemPrompt=buildSystemPrompt();
     const histForLLM=[
@@ -6200,7 +7709,9 @@ Current month: ${curMonth}`;
     try{
       while(iter<MAX_ITER){
         iter++;
-        const res=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:llmMsgs,options:{num_predict:400,temperature:0.1}})});
+        const _insModel=settings?.globalChatModel||"openrouter";
+        const _insOllamaModel=_insModel==="deepseek"?(settings?.deepseekModel||"deepseek-r1:8b"):(settings?.ollamaModel||"phi3:mini");
+        const res=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:_insOllamaModel,messages:llmMsgs,options:{num_predict:400,temperature:0.1}})});
         if(!res.ok){const e=await res.json();throw new Error(e.error||"LLM error");}
         const llmData=await res.json();
         const assistantText=llmData.message?.content||"(no response)";
@@ -6429,6 +7940,8 @@ Current month: ${curMonth}`;
 
   const hasMsgs=messages.length>0;
 
+  if(blocked) return <DiscreteModeBlockedCard />;
+
   return(
     <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 120px)",minHeight:500}}>
       {/* Header */}
@@ -6464,7 +7977,7 @@ Current month: ${curMonth}`;
             <div style={{fontSize:13,color:"#64748b",marginBottom:20}}>Runs locally — your data stays on your machine.</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"}}>
               {SUGGESTIONS.map(s=>(
-                <button key={s} onClick={()=>{setInput(s);inputRef.current?.focus();}} style={{padding:"7px 14px",borderRadius:20,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:500}}>
+                <button key={s} onClick={()=>runAgent(s)} style={{padding:"7px 14px",borderRadius:20,border:"1.5px solid #bae6fd",background:"#f0f9ff",color:"#0284C7",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:500}}>
                   {s}
                 </button>
               ))}
@@ -6546,8 +8059,14 @@ Current month: ${curMonth}`;
 
 // NAV_ITEMS imported from ./constants/index.js
 
+// ── In-depth mode context — lets any component make itself selectable ─────────
+const DepthCtx=React.createContext({inDepthMode:false,onSelectItem:()=>{}});
+
 // ── SelectableWrapper ─────────────────────────────────────────────────────────
-function SelectableWrapper({item,inDepthMode,onSelectItem,children}){
+// Reads from DepthCtx so no prop-drilling needed. Wrap any card/widget with this.
+// item: {label, llmContext} — llmContext is the text appended to the Jarvis message.
+function SelectableWrapper({item,children}){
+  const {inDepthMode,onSelectItem}=React.useContext(DepthCtx);
   if(!inDepthMode) return children;
   return (
     <div
@@ -6562,64 +8081,22 @@ function SelectableWrapper({item,inDepthMode,onSelectItem,children}){
   );
 }
 
-// ── Global Chat FAB + slide-up panel ─────────────────────────────────────────
-function GlobalChat({view,onNavigate,settings,inDepthMode,onSetInDepthMode,selectedItems,onSetSelectedItems,open,onSetOpen}){
-  const [input,setInput]=useState("");
-  const [messages,setMessages]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [listening,setListening]=useState(false);
-  const [speaking,setSpeaking]=useState(false);
-  const msgsEndRef=useRef(null);
-  const inputRef=useRef(null);
-
-  useEffect(()=>{msgsEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
-  useEffect(()=>{if(open) setTimeout(()=>inputRef.current?.focus(),100);},[open]);
-
-  const TODAY=new Date().toISOString().slice(0,10);
-  const sysPrompt=`You are Jarvis, a sharp financial AI. Speak like Jarvis from Iron Man: concise, precise, no pleasantries.
-RULES: Call one tool before answering any data question. NEVER invent numbers. Reply in ONE short sentence using only the returned values. No preamble, no sign-off.
-TODAY: ${TODAY}
-Tool call format: <tool>{"name":"expenses","args":{"month":"2026-06"}}</tool>
-DATE ARGS: month="YYYY-MM" or from/to="YYYY-MM"
-TOOLS: expenses, income, net, categories, top_category, monthly, merchants, transactions, txns_by_category(category), txns_by_merchant(merchant), largest_expenses, budgets, budget_vs_actual, budget_remaining(category), over_budget, pending_income, confirmed_income, all_expected_income, bills, bills_due, bills_paid, portfolio, holdings_detail, portfolio_gain, holding(ticker), vacations, vacation_spending(name), account_balance, balance_history, compare_expenses(month1,month2), compare_income, compare_net, savings_rate, expense_share(category), navigate(tab)
-TABS: dashboard, history, bills, stocks, networth, settings, expected, categories, vacations, goals`;
-
-  const callLLM=async(msgs)=>{
-    const model=settings?.globalChatModel||"gemini";
-    if(model==="gemini"){
-      const r=await fetch("/api/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:sysPrompt}]},contents:msgs.map(m=>({role:m.role==="assistant"?"model":m.role,parts:[{text:m.content}]})),generationConfig:{maxOutputTokens:512}})});
-      const d=await r.json();
-      if(!r.ok) throw new Error(d.error?.message||"Gemini error");
-      return d.candidates?.[0]?.content?.parts?.[0]?.text||"No response.";
-    } else {
-      const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:[{role:"system",content:sysPrompt},...msgs],stream:false})});
-      const d=await r.json();
-      return d.message?.content||"No response.";
-    }
-  };
-
-  const execTool=async(name,args={})=>{
-    const fn=TOOL_LIBRARY[name];
-    if(!fn) return null;
-    try{
-      const marker=fn(args);
-      const{sql,params}=JSON.parse(marker.slice(8));
-      const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
-      const d=await r.json();
-      if(d.error) return null;
-      if(d.rows.length===1&&d.columns.length===1) return d.rows[0][d.columns[0]];
-      return d.rows;
-    }catch(e){return null;}
-  };
+// ── Message bubble with tool pills ───────────────────────────────────────────
+function MsgBubble({m,T}){
+  const [pillsOpen,setPillsOpen]=useState(false);
+  const isUser=m.role==="user";
+  const hasCalls=m.toolCalls&&m.toolCalls.length>0;
+  const hasWidgets=m.widgets&&m.widgets.length>0;
 
   const fmtCurrency=v=>"$"+Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-
   const renderWidget=(w)=>{
     if(!w) return null;
     if(w.type==="metric") return (
-      <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"10px 14px",marginTop:6}}>
-        <div style={{fontSize:10,color:"#64748b",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>{w.title}</div>
-        <div style={{fontSize:20,fontWeight:800,color:"#0284C7",marginTop:2}}>{w.format==="currency"?fmtCurrency(w.value):w.value}</div>
+      <div style={{background:T.accentBg,border:"1px solid "+T.accentMid+"44",borderRadius:T.rCard,padding:"14px 18px",marginTop:6}}>
+        <div style={{fontSize:11,color:T.tx3,fontWeight:500,marginBottom:4}}>{w.title}</div>
+        <div style={{fontSize:28,fontWeight:700,color:T.accent,lineHeight:1,letterSpacing:"-0.5px"}}>{w.format==="currency"?fmtCurrency(w.value):w.value}</div>
+        {w.subtitle&&<div style={{fontSize:11,color:T.tx3,marginTop:5}}>{w.subtitle}</div>}
+        {w.label&&<div style={{fontSize:11,color:T.tx3,marginTop:4}}>{w.label}</div>}
       </div>
     );
     const rows=w.rows||(w.data?.map(d=>[d.name,d.value]))||[];
@@ -6635,94 +8112,310 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
     );
   };
 
-  const buildToolSummary=(name,args,result)=>{
-    const fmt=v=>typeof v==='number'?'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):String(v??'');
-    const period=args.month?` for ${args.month}`:args.from?` from ${args.from} to ${args.to||'now'}`:'';
-    if(result===null||result===undefined) return 'No data found.';
-    if(typeof result==='number') return `${name==='expenses'?'Total spending':name==='income'?'Total income':name==='net'?'Net position':name==='bills'?'Bills total':'Result'}${period}: ${fmt(result)}.`;
-    if(name==='savings_rate') return `Savings rate${period}: ${result.rate??'N/A'}% — saved ${fmt(result.saved)} of ${fmt(result.income)} income.`;
-    if(name==='compare_expenses'||name==='compare_income'||name==='compare_net') return `${result.month1}: ${fmt(result.value1)} → ${result.month2}: ${fmt(result.value2)} (${result.change>=0?'+':''}${fmt(result.change)}, ${result.changePercent!=null?result.changePercent+'%':'N/A'}).`;
-    if(name==='expense_share') return `${result.category} is ${result.percent??'N/A'}% of total spending${period} (${fmt(result.amount)} of ${fmt(result.total)}).`;
-    if(name==='budget_remaining') return `${result.category}: spent ${fmt(result.spent)} of ${fmt(result.budget)} budget, ${fmt(result.remaining)} remaining (${result.percentUsed??0}% used).`;
-    if(name==='account_balance') return result?`Account balance as of ${result.date}: ${fmt(result.balance)}.`:'No balance data found.';
-    if(name==='portfolio_gain') return `Portfolio: ${fmt(result.marketValue)} market value, ${result.gain>=0?'+':''}${fmt(result.gain)} gain (${result.gainPercent!=null?result.gainPercent+'%':'N/A'}).`;
-    if(name==='holding') return result?`${result.ticker}: ${result.shares} shares, market value ${fmt(result.marketValue)}, gain ${result.gain>=0?'+':''}${fmt(result.gain)}.`:'Ticker not found.';
-    if(name==='top_category') return result?`Top spending category${period}: ${result.name} at ${fmt(result.value)}.`:'No spending data found.';
-    if((name==='pending_income'||name==='confirmed_income'||name==='all_expected_income')&&typeof result?.total==='number'){
-      const label=name==='pending_income'?'Pending':name==='confirmed_income'?'Confirmed':'Total expected';
-      return `${label} income${period}: ${fmt(result.total)} across ${result.items?.length??0} item(s).`;
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:isUser?"flex-end":"flex-start",gap:4}}>
+      {m.items?.length>0&&(
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,justifyContent:isUser?"flex-end":"flex-start"}}>
+          {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
+        </div>
+      )}
+      <div style={{maxWidth:"88%",background:isUser?T.accent:T.overlay,color:isUser?"#fff":T.tx1,padding:"9px 13px",borderRadius:isUser?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
+        {m.text}
+        {hasCalls&&(
+          <div style={{marginTop:6}}>
+            <button onClick={()=>setPillsOpen(p=>!p)} style={{background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:4,color:isUser?"rgba(255,255,255,0.7)":T.tx3,fontSize:10,fontFamily:"inherit"}}>
+              <span>{pillsOpen?"▲":"▼"}</span>
+              <span>{m.toolCalls.map(t=>t.name).join(", ")}</span>
+            </button>
+          </div>
+        )}
+      </div>
+      {hasCalls&&pillsOpen&&(
+        <div style={{maxWidth:"88%",display:"flex",gap:4,flexWrap:"wrap",paddingLeft:4}}>
+          {m.toolCalls.map((t,i)=>(
+            <span key={i} style={{fontSize:10,fontWeight:600,background:T.accentBg,color:T.accent,padding:"2px 8px",borderRadius:99,border:"1px solid "+T.accentMid}}>{t.name}</span>
+          ))}
+        </div>
+      )}
+      {hasWidgets&&(
+        <div style={{maxWidth:"100%",width:"88%",alignSelf:isUser?"flex-end":"flex-start",display:"flex",flexDirection:"column",gap:6}}>
+          {m.widgets.map((w,i)=><div key={i}>{renderWidget(w)}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Global Chat FAB + slide-up panel ─────────────────────────────────────────
+function GlobalChat({view,onNavigate,settings,schema,inDepthMode,onSetInDepthMode,selectedItems,onSetSelectedItems,open,onSetOpen,discreteMode}){
+  const [input,setInput]=useState("");
+  const [messages,setMessages]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [toolsRunning,setToolsRunning]=useState([]);
+  const [listening,setListening]=useState(false);
+  const [speaking,setSpeaking]=useState(false);
+  const msgsEndRef=useRef(null);
+  const inputRef=useRef(null);
+
+  useEffect(()=>{msgsEndRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
+  useEffect(()=>{if(open) setTimeout(()=>inputRef.current?.focus(),100);},[open]);
+
+  const TODAY=new Date().toISOString().slice(0,10);
+
+  // ── Base system prompt ────────────────────────────────────────────────────
+  const sysPrompt=`You are Jarvis, a sharp financial AI. Speak like Jarvis from Iron Man: concise, precise, no pleasantries.
+RULES: Call tool(s) before answering any data question. NEVER invent numbers. No preamble, no sign-off.
+TODAY: ${TODAY}
+
+IMPORTANT — tool call format. You MUST use EXACTLY this format, nothing else:
+<tool>{"name":"TOOLNAME","args":{"param":"value"}}</tool>
+
+EXAMPLES:
+<tool>{"name":"expenses","args":{"filter":"thismonth"}}</tool>
+<tool>{"name":"expenses","args":{"filter":"thismonth","groupBy":"category"}}</tool>
+<tool>{"name":"bills","args":{"status":"due"}}</tool>
+
+TOOLS: expenses(filter?,groupBy?,aggregate?), income(filter?,groupBy?), net(filter?,groupBy?), budget(filter?,metric?)[metric:summary|proximity|over|remaining|utilization|targets], bills(filter?,status?,name?)[status:all|due|paid|overdue|history|total], goals(metric?,name?)[metric:progress|timeline|on_track|detail], net_worth(metric?,months?)[metric:current|trend|change|by_type|accounts], debts(metric?,type?)[metric:summary|interest|total], subscriptions(groupBy?,metric?), vacations(name?,metric?)[metric:list|spending|txns|biggest|merchants], portfolio(metric?,ticker?)[metric:summary|detail|gain], expected_income(filter?,metric?)[metric:pending|confirmed|recurring|all|total], tax(year?,metric?), wishlist(metric?), household(metric?), trend(metric,months?)[metric:expenses|income|net|savings_rate], compare(metric,month1,month2), savings_rate(filter?), runway(), spending_anomalies(filter?), health_score(), cashflow_projection(days?), sql_query(sql), navigate(tab)
+FILTER SYNTAX: thismonth | last30days | last3months | thisyear | month=YYYY-MM | year=YYYY | category=X | merchant=X | amount>N
+TABS: dashboard, history, bills, stocks, networth, settings, expected, categories, vacations, goals`;
+
+  // ── LLM call (accepts optional system prompt override) ────────────────────
+  const callLLM=async(msgs,sys)=>{
+    const prompt=sys||sysPrompt;
+    const model=settings?.globalChatModel||"openrouter";
+    if(model==="gemini"){
+      const r=await fetch("/api/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:prompt}]},contents:msgs.map(m=>({role:m.role==="assistant"?"model":m.role,parts:[{text:m.content}]})),generationConfig:{maxOutputTokens:512}})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error?.message||"Gemini error");
+      return d.candidates?.[0]?.content?.parts?.[0]?.text||"No response.";
+    } else if(model==="openrouter"){
+      const orKey=settings?.openrouterKey||"";
+      const orModel=settings?.openrouterModel||"moonshotai/kimi-k2";
+      if(!orKey) throw new Error("OpenRouter API key not set — add it in Settings → AI → OpenRouter");
+      const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+orKey,"HTTP-Referer":"https://cashheap.app","X-Title":"CashHeap Jarvis"},
+        body:JSON.stringify({model:orModel,messages:[{role:"system",content:prompt},...msgs],max_tokens:512})
+      });
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error?.message||"OpenRouter error");
+      const raw=d.choices?.[0]?.message?.content||"No response.";
+      // Strip any <think> blocks (some reasoning models on OpenRouter include them)
+      return raw.replace(/<think>[\s\S]*?<\/think>/gi,"").trim()||"No response.";
+    } else if(model==="deepseek"){
+      const dsModel=settings?.deepseekModel||"deepseek-r1:8b";
+      const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:dsModel,messages:[{role:"system",content:prompt},...msgs],stream:false})});
+      const d=await r.json();
+      if(d.error) throw new Error(d.error);
+      // Strip <think>...</think> reasoning blocks that DeepSeek R1 prepends
+      const raw=d.message?.content||"";
+      return raw.replace(/<think>[\s\S]*?<\/think>/gi,"").trim()||"No response.";
+    } else {
+      const r=await fetch("/api/llm/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:settings?.ollamaModel||"phi3:mini",messages:[{role:"system",content:prompt},...msgs],stream:false})});
+      const d=await r.json();
+      return d.message?.content||"No response.";
     }
-    if(Array.isArray(result)){
-      if(!result.length) return `No results found${period}.`;
-      const top=result[0];
-      if(name==='categories') return `Top spending categories${period}: ${result.slice(0,3).map(r=>`${r.name} (${fmt(r.value)})`).join(', ')}.`;
-      if(name==='over_budget') return `${result.length} categor${result.length===1?'y':'ies'} over budget: ${result.map(r=>r.name).join(', ')}.`;
-      if(name==='largest_expenses'||name==='txns_by_category'||name==='txns_by_merchant') return `Top result: ${top.name} — ${fmt(top.value)}.`;
-      if(name==='merchants') return `Top merchant${period}: ${top.name} (${fmt(top.value)}).`;
-      if(name==='bills') return `${result.length} active bill(s) totalling ${fmt(result.reduce((s,b)=>s+b.value,0))}.`;
-      if(name==='bills_due') return result.length?`${result.length} bill(s) due: ${result.map(b=>b.name).join(', ')}.`:'All bills paid this month.';
-      if(name==='bills_paid') return result.length?`${result.length} bill(s) paid: ${result.map(b=>b.name).join(', ')}.`:'No bills paid yet this month.';
-      if(name==='holdings_detail') return `${result.length} holding(s). Top: ${top.name} worth ${fmt(top.marketValue)}.`;
-      if(name==='transactions') return `${result.length} transaction(s). Latest: ${top.name} — ${fmt(top.value)}.`;
-      if(name==='budget_vs_actual') return `${result.length} budget categor${result.length===1?'y':'ies'}. Highest spend: ${top.name} — ${fmt(top.spent)} of ${fmt(top.budget)} budget.`;
-      if(name==='monthly') return `${result.length} month(s) of data. Latest: ${result[result.length-1]?.name} — income ${fmt(result[result.length-1]?.Income)}, expenses ${fmt(result[result.length-1]?.Expenses)}.`;
-      return `${result.length} result(s) found.`;
-    }
-    return 'Here is the data.';
   };
 
-  const parseToolCall=(text)=>{
-    const xmlM=text.match(/<tool>([\s\S]*?)<\/tool>/);
-    if(xmlM){try{const d=JSON.parse(xmlM[1]);if(d?.name)return d;}catch{}}
-    const blockMs=[...text.matchAll(/```[a-z]*\s*(\{[\s\S]*?\})\s*```/g)];
-    for(const bm of blockMs){
-      try{
-        const d=JSON.parse(bm[1]);
-        if(d?.name) return {name:d.name,args:d.args||d.arguments||d.parameters||{}};
-        if(d?.tool?.name) return {name:d.tool.name,args:d.tool.args||d.tool.arguments||d.tool.parameters||{}};
-      }catch{}
+  // ── Execute a single named tool ───────────────────────────────────────────
+  // execTool — runs a named TOOL_LIBRARY function or a pre-built __SQL__: marker.
+  // Pass prebuiltMarker to skip TOOL_LIBRARY lookup (used by schema-driven dispatch).
+  const execTool=async(name,args={},prebuiltMarker=null)=>{
+    try{
+      const fn=TOOL_LIBRARY[name];
+      const marker=prebuiltMarker||(fn?fn(args):null);
+      if(!marker||typeof marker!=="string") return null;
+      // JS-computed special markers — return as-is for synthesis to describe
+      if(marker==="__HEALTH_SCORE__"||marker.startsWith("__CASHFLOW__:")) return marker;
+      if(!marker.startsWith("__SQL__:")) return null;
+      const{sql,params}=JSON.parse(marker.slice(8));
+      const r=await fetch("/api/db/sql",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sql,params})});
+      const d=await r.json();
+      if(d.error) return null;
+      // Single scalar: {value, count} → return the scalar
+      if(d.rows?.length===1&&d.columns?.length===1) return d.rows[0][d.columns[0]];
+      return d.rows;
+    }catch(e){return null;}
+  };
+
+  // ── Domain classifier — detects single vs multi-tool questions ────────────
+  const DOMAIN_PATTERNS={
+    expenses:      /\b(spend|spent|expense|expenses|spending|cost|costs|purchase|bought|transaction|charged?)\b/i,
+    income:        /\b(income|earn|earned|salary|paycheck|revenue|received|deposit|pay(ment)?)\b/i,
+    bills:         /\b(bill|bills|utilities|rent|due|overdue|monthly payment)\b/i,
+    budget:        /\b(budget|budgets|over budget|allowance|spending limit)\b/i,
+    goals:         /\b(goal|goals|saving for|savings goal|target amount|milestone)\b/i,
+    debt:          /\b(debt|debts|loan|loans|credit card|owe|owed|interest rate|borrow)\b/i,
+    subscriptions: /\b(subscription|subscriptions|recurring charge|netflix|spotify)\b/i,
+    vacations:     /\b(vacation|vacations|trip|trips|travel|holiday)\b/i,
+    portfolio:     /\b(portfolio|stock|stocks|holding|holdings|investment|investments|ticker|shares|etf)\b/i,
+    net_worth:     /\b(net worth|assets|liabilities|total accounts?|balance sheet)\b/i,
+    tax:           /\b(tax|taxes|deductible|rrsp|tfsa|write.?off)\b/i,
+    wishlist:      /\b(wishlist|wish list|want to buy|planning to buy)\b/i,
+    cashflow:      /\b(cash flow|cashflow|upcoming|forecast|next \d+ days?|runway)\b/i,
+    household:     /\b(household|house members?|splits?|who owes|settle up)\b/i,
+  };
+  // Domain pairs that look multi but map cleanly to one tool
+  const SINGLE_OVERRIDES=[
+    new Set(["expenses","budget"]),  // "am I over budget" → budget tool
+    new Set(["income","expenses"]),  // "income vs expenses" → net tool
+  ];
+  const CONJUNCTION_RE=/\b(and|also|as well|plus|alongside|both|in addition|while also|together with)\b/i;
+
+  const classifyQuery=(text)=>{
+    const domains=[...new Set(
+      Object.entries(DOMAIN_PATTERNS)
+        .filter(([,re])=>re.test(text))
+        .map(([k])=>k)
+    )];
+    if(domains.length<=1) return{multi:false,domains};
+    const hasConj=CONJUNCTION_RE.test(text);
+    if(domains.length>=3) return{multi:true,domains};
+    if(domains.length===2){
+      const pair=new Set(domains);
+      const isOverride=SINGLE_OVERRIDES.some(ov=>[...ov].every(d=>pair.has(d)));
+      if(isOverride&&!hasConj) return{multi:false,domains};
+      if(hasConj) return{multi:true,domains};
     }
-    const allJson=[...text.matchAll(/(\{[^{}]*"name"\s*:[^{}]*\})/g)];
-    for(const jm of allJson){
-      try{const d=JSON.parse(jm[1]);if(d?.name&&TOOL_LIBRARY[d.name])return{name:d.name,args:d.args||d.arguments||{}};}catch{}
+    return{multi:false,domains};
+  };
+
+  // ── Parse all <tool> tags from LLM response (returns array, capped at 3) ──
+  // Try to parse JSON even if the model hallucinated extra closing braces
+  const tryParseJSON=(raw)=>{
+    const s=raw.trim();
+    try{return JSON.parse(s);}catch{}
+    // Strip trailing extra } or ] one at a time until it parses
+    let t=s;
+    for(let i=0;i<5;i++){
+      if(t.endsWith("}")) t=t.slice(0,-1).trimEnd(); else if(t.endsWith("]")) t=t.slice(0,-1).trimEnd(); else break;
+      try{return JSON.parse(t);}catch{}
     }
-    const nestedM=text.match(/"tool"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/);
-    if(nestedM){const name=nestedM[1];if(TOOL_LIBRARY[name])return{name,args:{}};}
     return null;
   };
 
-  const curMonth=new Date().toISOString().slice(0,7);
+  const parseToolCalls=(text)=>{
+    const results=[];
 
-  const QUICK=[
-    {test:/main contributors?|top categor|spending categor|categor.*breakdown|breakdown.*categor|where.*spending|what.*spending on|spending by categor/i,
-     name:'categories',args:()=>({month:curMonth}),
-     reply:r=>r?.length?`Your top spending categories this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No spending data yet this month."},
-    {test:/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i,
-     name:'txns_by_category',
-     args:(t)=>{const m=(t||"").match(/most expensive in (.+)|top (?:expense|spend) in (.+)|highest.+in (.+)/i);const cat=(m?.[1]||m?.[2]||m?.[3]||"").replace(/[?.!]/g,"").trim();return {category:cat,month:curMonth};},
-     reply:r=>{if(!r?.length)return "No transactions found for that category this month.";const top=r.sort((a,b)=>b.value-a.value)[0];return `The most expensive transaction in that category is ${top.name} at $${top.value.toFixed(2)}.`;}},
-    {test:/top merchant|largest expense|biggest expense|biggest spend|top expense/i,
-     name:'largest_expenses',args:()=>({month:curMonth,limit:8}),
-     reply:r=>r?.length?`Your largest expenses this month are ${r.slice(0,3).map(x=>`${x.name} ($${x.value.toFixed(2)})`).join(', ')}.`:"No expenses found."},
-    {test:/pending income|unconfirmed income|income.*pending|income.*not confirmed/i,
-     name:'pending_income',args:()=>({month:curMonth}),
-     reply:r=>`You have $${Number(r?.total||0).toLocaleString('en-US',{minimumFractionDigits:2})} in pending income this month across ${r?.items?.length||0} item(s).`},
-    {test:/net position|what.*my net|net this month/i,
-     name:'net',args:()=>({month:curMonth}),
-     reply:r=>`Your net position this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-    {test:/how much.*spent|total.*spent|how much.*spending|spent this month|spending this month/i,
-     name:'expenses',args:()=>({month:curMonth}),
-     reply:r=>`You've spent $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})} this month.`},
-    {test:/income this month|how much.*income|total.*income/i,
-     name:'income',args:()=>({month:curMonth}),
-     reply:r=>`Your income this month is $${Number(r).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-    {test:/\bbills?\b.*due|due.*\bbills?\b|monthly bills?|show.*bills?/i,
-     name:'bills',args:()=>({}),
-     reply:r=>r?.length?`Your active bills total $${r.reduce((s,b)=>s+b.value,0).toFixed(2)} across ${r.length} bills.`:"No bills found."},
-    {test:/portfolio.*worth|stock.*value|holdings? value|portfolio total/i,
-     name:'portfolio',args:()=>({type:'total'}),
-     reply:r=>`Your portfolio is currently worth $${Number(r||0).toLocaleString('en-US',{minimumFractionDigits:2})}.`},
-  ];
+    // Format 1: <tool>{"name":"...","args":{...}}</tool>
+    for(const m of [...text.matchAll(/<tool>([\s\S]*?)<\/tool>/g)]){
+      const d=tryParseJSON(m[1]);
+      if(d?.name) results.push({name:d.name,args:d.args||d.arguments||{}});
+    }
+    if(results.length) return results.slice(0,3);
+
+    // Format 2: <toolname><args><param>val</param>...</args></toolname>  (some small models)
+    for(const toolName of Object.keys(TOOL_LIBRARY)){
+      const re=new RegExp(`<${toolName}[^>]*>([\\s\\S]*?)<\\/${toolName}>|<${toolName}\\s*\\/>`,'gi');
+      for(const m of [...text.matchAll(re)]){
+        const inner=m[1]||'';
+        const args={};
+        for(const p of [...inner.matchAll(/<(\w+)>([\s\S]*?)<\/\1>/g)]){
+          const v=p[2].trim();
+          args[p[1]]=isNaN(v)?v:Number(v);
+        }
+        // also parse nested <args> wrapper
+        const argsInner=inner.match(/<args>([\s\S]*?)<\/args>/i)?.[1]||inner;
+        for(const p of [...argsInner.matchAll(/<(\w+)>([\s\S]*?)<\/\1>/g)]){
+          const v=p[2].trim();
+          args[p[1]]=isNaN(v)?v:Number(v);
+        }
+        results.push({name:toolName,args});
+      }
+    }
+    if(results.length) return results.slice(0,3);
+
+    // Format 3: ```json {...} ```
+    for(const bm of [...text.matchAll(/```[a-z]*\s*(\{[\s\S]*?\})\s*```/g)]){
+      const d=tryParseJSON(bm[1]);if(d?.name) results.push({name:d.name,args:d.args||{}});
+    }
+    if(results.length) return results.slice(0,3);
+
+    // Format 4: bare inline JSON with "name" key
+    for(const jm of [...text.matchAll(/(\{[^{}]*"name"\s*:[^{}]*\})/g)]){
+      const d=tryParseJSON(jm[1]);if(d?.name&&TOOL_LIBRARY[d.name]) results.push({name:d.name,args:d.args||{}});
+    }
+    return results.slice(0,3);
+  };
+
+  // ── Synthesis — turns raw tool results into a natural answer ─────────────
+  // Extract a flat list of {key, value} facts from tool results so the LLM
+  // can only quote numbers that are literally present — no arithmetic, no inference.
+  const extractFacts=(toolResults)=>{
+    const facts=[];
+    for(const {name,result} of toolResults){
+      if(result===null||result===undefined) continue;
+      if(typeof result==="number"||typeof result==="string"){
+        facts.push({key:name, value:result});
+      } else if(Array.isArray(result)){
+        // Grouped rows: each row is a {name, value, count} object
+        result.slice(0,20).forEach(row=>{
+          if(row&&row.name!=null&&row.value!=null)
+            facts.push({key:`${name}[${row.name}]`, value:row.value, count:row.count});
+        });
+        // Also add total
+        const total=result.reduce((s,r)=>s+(typeof r?.value==="number"?r.value:0),0);
+        if(total) facts.push({key:`${name}[TOTAL]`, value:+total.toFixed(2)});
+      } else if(typeof result==="object"){
+        // Single-row object like {value:722.68, count:17}
+        Object.entries(result).forEach(([k,v])=>{
+          if(typeof v==="number"||typeof v==="string") facts.push({key:`${name}.${k}`, value:v});
+        });
+      }
+    }
+    return facts;
+  };
+
+  const callSynthesis=async(question,toolResults)=>{
+    const facts=extractFacts(toolResults);
+    if(!facts.length) return null; // no data → don't synthesize
+    const factLines=facts.map(f=>`  ${f.key} = ${f.value}`).join("\n");
+    const synthPrompt=`You are Jarvis. Answer ONLY using the exact values listed below — do NOT compute, round, add, or infer any number not explicitly listed.
+
+FACTS FROM DATABASE:
+${factLines}
+
+User asked: "${question}"
+
+Rules:
+- Quote numbers verbatim from FACTS. If a fact says 722.68 you say 722.68, not ~$720 or $700.
+- 1-2 sentences max. No preamble, no sign-off.
+- If the FACTS don't contain enough info to answer, say "I don't have that data."`;
+    // Build a set of known numeric values for post-validation
+    const knownValues=new Set(facts.filter(f=>typeof f.value==="number").map(f=>f.value));
+    // Helper: extract all numeric tokens from a string
+    const extractNums=(s)=>[...s.matchAll(/[\d,]+(?:\.\d+)?/g)].map(m=>parseFloat(m[0].replace(/,/g,""))).filter(n=>!isNaN(n)&&n>0);
+
+    let reply=null;
+    try{ reply=await callLLM([{role:"user",content:"_"}],synthPrompt); }catch(e){ reply=null; }
+
+    if(reply){
+      // Validate: every number in the reply must appear in our known facts (within 0.01)
+      const replyNums=extractNums(reply);
+      const hasInvented=replyNums.some(n=>{
+        // Allow small integers (counts, ordinals like "1" or "2")
+        if(n<100&&Number.isInteger(n)) return false;
+        return![...knownValues].some(kv=>Math.abs(kv-n)<0.02);
+      });
+      if(hasInvented){
+        // LLM made up a number — use deterministic fallback built from facts
+        const mainFact=facts.find(f=>typeof f.value==="number"&&f.value>100)
+          ||facts.find(f=>typeof f.value==="number");
+        if(mainFact) return `${mainFact.key.replace(/[\[\]]/g,' ').trim()}: $${mainFact.value}`;
+        return null;
+      }
+    }
+
+    if(!reply){
+      // LLM unavailable (no key, network error) — deterministic fallback from facts
+      const keyFact=facts.find(f=>f.value!=null&&typeof f.value==="number");
+      if(keyFact) return `${keyFact.key.replace(/[\[\]]/g,' ').trim()}: $${keyFact.value}`;
+      return null;
+    }
+    return reply;
+  };
+
+  const curMonth=new Date().toISOString().slice(0,7);
 
   const NAV_TABS={
     dashboard:'dashboard',home:'dashboard',
@@ -6780,10 +8473,13 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
     setInput("");
     onSetSelectedItems([]);
     setLoading(true);
+    setToolsRunning([]);
 
     const reply_=(replyTxt)=>{ speakAndResume(replyTxt); };
+    const cleanLLM=(s)=>s.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim();
 
     try{
+      // 1. Quick nav shortcut (no LLM needed)
       const navMatch=text.match(/\bnavigate\s+to\s+([a-z\s]+)/i)||text.match(/\bgo\s+to\s+([a-z\s]+)/i)||text.match(/\bopen\s+([a-z\s]+)/i);
       if(navMatch){
         const dest=navMatch[1].trim().toLowerCase();
@@ -6791,48 +8487,165 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
         if(tab){onNavigate(tab);const navTxt=`Navigating to ${dest}.`;setMessages(p=>[...p,{role:"assistant",text:navTxt}]);reply_(navTxt);setLoading(false);return;}
       }
 
-      const quick=QUICK.find(q=>q.test.test(text)&&selectedItems.length===0);
-      if(quick){
-        const result=await execTool(quick.name,quick.args(text));
-        const widget=autoWidget(uid(),quick.name,result,null);
-        const quickTxt=quick.reply(result);
-        setMessages(p=>[...p,{role:"assistant",text:quickTxt,widget}]);
-        reply_(quickTxt);
-        setLoading(false);setTimeout(()=>inputRef.current?.focus(),50);return;
+      // 2. Deterministic tool dispatch — JS picks tools, no LLM needed for routing
+      const {domains}=classifyQuery(text);
+      const t_lower=text.toLowerCase();
+
+      const inferFilter=()=>{
+        if(/last\s*month/i.test(text)) return"lastmonth";
+        if(/this\s*(year|yr)/i.test(text)) return"thisyear";
+        if(/last\s*(year|yr)/i.test(text)) return`year=${new Date().getFullYear()-1}`;
+        if(/last\s*3\s*months?/i.test(text)) return"last3months";
+        if(/last\s*6\s*months?/i.test(text)) return"last6months";
+        if(/last\s*12\s*months?/i.test(text)) return"last12months";
+        if(/last\s*30\s*days?/i.test(text)) return"last30days";
+        const mYM=text.match(/\b(20\d\d)[- /](0?[1-9]|1[0-2])\b/);
+        if(mYM) return`month=${mYM[1]}-${String(mYM[2]).padStart(2,"0")}`;
+        const mMonth=t_lower.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/);
+        if(mMonth){const mi=["january","february","march","april","may","june","july","august","september","october","november","december"].indexOf(mMonth[1]);if(mi>=0)return`month=${new Date().getFullYear()}-${String(mi+1).padStart(2,"0")}`;}
+        const mYear=text.match(/\b(20\d\d)\b/);
+        if(mYear) return`year=${mYear[1]}`;
+        return"thismonth";
+      };
+      const inferGroupBy=()=>{
+        if(/by\s*categor|per\s*categor|categor(y|ies)/i.test(text)) return"category";
+        if(/by\s*merchant|per\s*merchant|by\s*store|by\s*shop/i.test(text)) return"merchant";
+        if(/by\s*month|monthly|month\s*by\s*month/i.test(text)) return"month";
+        return undefined;
+      };
+      const filter=inferFilter();
+      const groupBy=inferGroupBy();
+
+      // ── Schema-driven domain → view mapping ─────────────────────────────────────
+      // Domains that map to a schema view (use buildSchemaQuery)
+      const DOMAIN_SCHEMA_MAP={
+        expenses:{viewKey:'expenses', defaultMeasure:'total'},
+        income:  {viewKey:'income',   defaultMeasure:'total'},
+        bills:   {viewKey:'bills',    defaultMeasure:'total_monthly'},
+        goals:   {viewKey:'goals',    defaultMeasure:'avg_progress'},
+        net_worth:{viewKey:'accounts',defaultMeasure:'net_worth'},
+      };
+      // Infer measure from question text (overrides the defaultMeasure)
+      const inferMeasure=(viewKey,defaultKey)=>{
+        if(/how many|count|number of/i.test(text)) return'count';
+        if(/average|avg/i.test(text)) return'avg';
+        if(viewKey==='bills'&&/yearly|annual|year/i.test(text)) return'total_yearly';
+        if(viewKey==='goals'&&/remaining|left|still need/i.test(text)) return'total_remaining';
+        if(viewKey==='goals'&&/saved|deposited/i.test(text)) return'total_saved';
+        if(viewKey==='net_worth'&&/asset/i.test(text)) return'total_assets';
+        if(viewKey==='net_worth'&&/liabilit|debt|owe/i.test(text)) return'total_liabilities';
+        return defaultKey;
+      };
+      // Map inferred groupBy keyword → schema dimension key for a view
+      const mapGroupByDim=(gby,view)=>{
+        if(!gby||!view?.dimensions) return undefined;
+        if(view.dimensions[gby]) return gby; // direct match
+        const aliases={category:'category',merchant:'merchant',month:'month',source:'source',type:'type'};
+        const k=aliases[gby];
+        return k&&view.dimensions[k]?k:undefined;
+      };
+
+      // Fallback DOMAIN_TOOL for domains not in schema (complex multi-step)
+      const DOMAIN_TOOL={
+        budget:      ()=>({name:"budget",      args:{filter,metric:/over/i.test(text)?"over":/remain/i.test(text)?"remaining":/proximity|close|near/i.test(text)?"proximity":"summary"}}),
+        debt:        ()=>({name:"debts",       args:{metric:/interest/i.test(text)?"interest":"summary"}}),
+        subscriptions:()=>({name:"subscriptions",args:{}}),
+        vacations:   ()=>({name:"vacations",   args:{metric:/spend/i.test(text)?"spending":/txn|transaction|buy/i.test(text)?"txns":"list"}}),
+        portfolio:   ()=>({name:"portfolio",   args:{metric:/gain|profit|loss/i.test(text)?"gain":/detail|holding/i.test(text)?"detail":"summary"}}),
+        tax:         ()=>({name:"tax",         args:{}}),
+        wishlist:    ()=>({name:"wishlist",     args:{}}),
+        cashflow:    ()=>(/runway/i.test(text)?{name:"runway",args:{}}:{name:"cashflow_projection",args:{days:+(text.match(/(\d+)\s*days?/i)||[])[1]||30}}),
+        household:   ()=>({name:"household",   args:{}}),
+      };
+
+      const wantsNet     =/\bnet\b.*(position|this month|month|total)|net\s*(income|position)/i.test(text);
+      const wantsTrend   =/\btrend\b|over time|month.?by.?month|histor/i.test(text);
+      const wantsAnomaly =/unusual|anomal|suspicious|weird|unexpected/i.test(text);
+      const wantsHealth  =/health\s*score|financial\s*health/i.test(text);
+      const wantsSavings =/savings?\s*rate/i.test(text);
+
+      let dataCalls=[];
+      if(wantsHealth)       dataCalls=[{name:"health_score",args:{}}];
+      else if(wantsAnomaly) dataCalls=[{name:"spending_anomalies",args:{filter}}];
+      else if(wantsSavings) dataCalls=[{name:"savings_rate",args:{filter}}];
+      else if(wantsTrend)   dataCalls=[{name:"trend",args:{metric:domains.includes("income")?"income":"expenses",months:6}}];
+      else if(wantsNet)     dataCalls=[{name:"net",args:{filter}}];
+      else{
+        dataCalls=domains.slice(0,3).map(d=>{
+          // Try schema-driven first
+          const ref=DOMAIN_SCHEMA_MAP[d];
+          if(ref&&schema?.views?.[ref.viewKey]){
+            const view=schema.views[ref.viewKey];
+            const mKey=inferMeasure(ref.viewKey,ref.defaultMeasure);
+            const gbDim=mapGroupByDim(groupBy,view);
+            const prebuiltMarker=buildSchemaQuery(view,mKey,{filter,groupByDim:gbDim});
+            if(prebuiltMarker) return{name:d,args:{filter,groupBy,measure:mKey},_prebuiltMarker:prebuiltMarker};
+          }
+          // Fall back to TOOL_LIBRARY for complex domains
+          return DOMAIN_TOOL[d]?.();
+        }).filter(Boolean);
       }
 
-      const callMsgs=[...history,{role:"user",content:userContent}];
-      let llmReply=await callLLM(callMsgs);
-      const toolData=parseToolCall(llmReply);
-
-      if(toolData){
-        if(toolData.name==="navigate"){
-          const tab=toolData.args?.tab||"dashboard";
-          onNavigate(tab);
-          const cleanText=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||`Navigating to ${tab}…`;
-          setMessages(p=>[...p,{role:"assistant",text:cleanText,fullText:llmReply}]);
-          reply_(cleanText);
-        } else if(TOOL_LIBRARY[toolData.name]){
-          const result=await execTool(toolData.name,toolData.args||{});
-          const widget=autoWidget(uid(),toolData.name,result,null);
-          const summary=buildToolSummary(toolData.name,toolData.args||{},result);
-          setMessages(p=>[...p,{role:"assistant",text:summary,widget}]);
-          reply_(summary);
-        } else {
-          const fallbackTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim();
-          setMessages(p=>[...p,{role:"assistant",text:fallbackTxt,fullText:llmReply}]);
-          reply_(fallbackTxt);
+      // Fallback: nothing matched → ask LLM to generate the tool call
+      if(!dataCalls.length){
+        let llmFallback;
+        try{ llmFallback=await callLLM([...history,{role:"user",content:userContent}]); }
+        catch(e){ llmFallback=""; }
+        if(!llmFallback){
+          const noKeyMsg=settings?.globalChatModel==="openrouter"&&!settings?.openrouterKey
+            ?"To activate Jarvis, add your OpenRouter API key in Settings → AI → OpenRouter."
+            :"I couldn't process that request. Please check your AI model settings.";
+          setMessages(p=>[...p,{role:"assistant",text:noKeyMsg,toolCalls:[],widgets:[]}]);
+          reply_(noKeyMsg);setLoading(false);setToolsRunning([]);
+          if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
+          return;
         }
-      } else {
-        const plainTxt=llmReply.replace(/<tool>[\s\S]*?<\/tool>/g,"").replace(/```[\s\S]*?```/g,"").trim()||llmReply;
-        setMessages(p=>[...p,{role:"assistant",text:plainTxt,fullText:llmReply}]);
-        reply_(plainTxt);
+        const navTool=parseToolCalls(llmFallback).find(t=>t.name==="navigate");
+        if(navTool){
+          const tab=navTool.args?.tab||"dashboard";
+          onNavigate(tab);
+          const msg=`Navigating to ${tab}.`;
+          setMessages(p=>[...p,{role:"assistant",text:msg,fullText:llmFallback,toolCalls:[],widgets:[]}]);
+          reply_(msg);setLoading(false);setToolsRunning([]);
+          if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
+          return;
+        }
+        const llmCalls=parseToolCalls(llmFallback).filter(t=>TOOL_LIBRARY[t.name]);
+        if(!llmCalls.length){
+          // Strip any invented numbers — if the LLM answered without a tool it can't be trusted for data
+          const plain=cleanLLM(llmFallback)||llmFallback;
+          const hasNumbers=/\$[\d,]+|\b\d+(\.\d+)?%|\b\d{3,}/.test(plain);
+          const safeReply=hasNumbers
+            ?"I need to look that up. Could you rephrase so I can find the right data for you?"
+            :plain;
+          setMessages(p=>[...p,{role:"assistant",text:safeReply,fullText:llmFallback,toolCalls:[],widgets:[]}]);
+          reply_(safeReply);setLoading(false);setToolsRunning([]);
+          if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
+          return;
+        }
+        dataCalls=llmCalls;
       }
+
+      // Execute tools in parallel — schema-driven calls pass _prebuiltMarker to skip TOOL_LIBRARY
+      setToolsRunning(dataCalls.map(t=>t.name));
+      const toolResults=await Promise.all(dataCalls.map(async t=>({name:t.name,args:t.args||{},result:await execTool(t.name,t.args||{},t._prebuiltMarker||null)})));
+      setToolsRunning([]);
+
+      // Build widgets
+      const widgets=toolResults.map(({name,result})=>autoWidget(uid(),name,result,null)).filter(Boolean);
+
+      // Synthesis — LLM only needs to explain data in plain English
+      const synthText=await callSynthesis(text,toolResults);
+      const finalText=synthText||"Here is your data.";
+
+      setMessages(p=>[...p,{role:"assistant",text:finalText,fullText:"",toolCalls:toolResults,widgets}]);
+      reply_(finalText);
     }catch(e){
-      setMessages(p=>[...p,{role:"assistant",text:"Error: "+e.message}]);
+      setMessages(p=>[...p,{role:"assistant",text:"Error: "+e.message,toolCalls:[],widgets:[]}]);
       if(voiceModeRef.current) setTimeout(startVoice,400);
     }
     setLoading(false);
+    setToolsRunning([]);
     if(!voiceModeRef.current) setTimeout(()=>inputRef.current?.focus(),50);
   };
 
@@ -6871,6 +8684,26 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
     rec.start();
   };
 
+  if(discreteMode){
+    return(
+      <>
+        <style>{`@keyframes gcSlideUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes gcDot{0%,80%,100%{transform:scale(0.7);opacity:0.4}40%{transform:scale(1.1);opacity:1}}`}</style>
+        <button
+          onClick={()=>onSetOpen(!open)}
+          title="AI blocked in discrete mode"
+          style={{position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:T.overlay,border:"1px solid "+T.border,cursor:"pointer",color:T.tx2,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:T.shadow,zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
+        >
+          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="M4 19h16"/><path d="M6 17V7a2 2 0 012-2h4l6 6v6"/><path d="M12 5v6h6"/></svg>
+        </button>
+        {open&&(
+          <div style={{position:"fixed",bottom:84,right:24,width:390,maxHeight:550,borderRadius:T.rCard,background:T.surface,boxShadow:T.shadowMd,zIndex:9998,display:"flex",flexDirection:"column",overflow:"hidden",animation:"gcSlideUp .22s ease",padding:20}}>
+            <DiscreteModeBlockedCard />
+          </div>
+        )}
+      </>
+    );
+  }
+
   if(view==="insights") return null;
 
   return(
@@ -6881,6 +8714,7 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
       <button
         onClick={()=>onSetOpen(!open)}
         title={open?"Close Jarvis":"Open Jarvis"}
+        data-tutorial="jarvis"
         style={{position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:open?T.overlay:T.accent,border:open?"1px solid "+T.border:"none",cursor:"pointer",color:open?T.tx2:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:open?T.shadow:T.shadowMd,zIndex:9999,transition:"background .2s,transform .15s",fontFamily:"inherit"}}
         onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
         onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
@@ -6914,30 +8748,30 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
 
           {/* Header */}
           <div style={{display:"flex",alignItems:"center",gap:9,padding:"12px 16px 10px",borderBottom:"1px solid "+T.border,background:T.surface,flexShrink:0}}>
-            <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#0284C7,#6366f1)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:T.overlay,border:"1px solid "+T.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <svg width={18} height={18} viewBox="0 0 32 32" fill="none">
-                <circle cx={16} cy={16} r={5} fill="rgba(255,255,255,0.95)"/>
-                <circle cx={16} cy={5} r={2.2} fill="rgba(255,255,255,0.7)"/>
-                <circle cx={16} cy={27} r={2.2} fill="rgba(255,255,255,0.7)"/>
-                <circle cx={5} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
-                <circle cx={27} cy={16} r={2.2} fill="rgba(255,255,255,0.7)"/>
-                <circle cx={8.1} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
-                <circle cx={23.9} cy={8.1} r={2.2} fill="rgba(255,255,255,0.5)"/>
-                <circle cx={8.1} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
-                <circle cx={23.9} cy={23.9} r={2.2} fill="rgba(255,255,255,0.5)"/>
-                <line x1={16} y1={11} x2={16} y2={7.2} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
-                <line x1={16} y1={21} x2={16} y2={24.8} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
-                <line x1={11} y1={16} x2={7.2} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
-                <line x1={21} y1={16} x2={24.8} y2={16} stroke="rgba(255,255,255,0.6)" strokeWidth={1.2}/>
-                <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
-                <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
-                <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
-                <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke="rgba(255,255,255,0.4)" strokeWidth={1.2}/>
+                <circle cx={16} cy={16} r={5} fill={T.tx1}/>
+                <circle cx={16} cy={5} r={2.2} fill={T.tx2}/>
+                <circle cx={16} cy={27} r={2.2} fill={T.tx2}/>
+                <circle cx={5} cy={16} r={2.2} fill={T.tx2}/>
+                <circle cx={27} cy={16} r={2.2} fill={T.tx2}/>
+                <circle cx={8.1} cy={8.1} r={2.2} fill={T.tx3}/>
+                <circle cx={23.9} cy={8.1} r={2.2} fill={T.tx3}/>
+                <circle cx={8.1} cy={23.9} r={2.2} fill={T.tx3}/>
+                <circle cx={23.9} cy={23.9} r={2.2} fill={T.tx3}/>
+                <line x1={16} y1={11} x2={16} y2={7.2} stroke={T.tx3} strokeWidth={1.2}/>
+                <line x1={16} y1={21} x2={16} y2={24.8} stroke={T.tx3} strokeWidth={1.2}/>
+                <line x1={11} y1={16} x2={7.2} y2={16} stroke={T.tx3} strokeWidth={1.2}/>
+                <line x1={21} y1={16} x2={24.8} y2={16} stroke={T.tx3} strokeWidth={1.2}/>
+                <line x1={12.5} y1={12.5} x2={9.9} y2={9.9} stroke={T.border} strokeWidth={1.2}/>
+                <line x1={19.5} y1={12.5} x2={22.1} y2={9.9} stroke={T.border} strokeWidth={1.2}/>
+                <line x1={12.5} y1={19.5} x2={9.9} y2={22.1} stroke={T.border} strokeWidth={1.2}/>
+                <line x1={19.5} y1={19.5} x2={22.1} y2={22.1} stroke={T.border} strokeWidth={1.2}/>
               </svg>
             </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:13,fontWeight:700,color:"#1e293b",lineHeight:1}}>Jarvis</div>
-              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(settings?.globalChatModel||"ollama")==="gemini"?"Gemini":"Ollama · "+(settings?.ollamaModel||"phi3:mini")}</div>
+              <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{(()=>{const m=settings?.globalChatModel||"openrouter";if(m==="gemini")return "Gemini";if(m==="openrouter")return "OpenRouter · "+(settings?.openrouterModel||"moonshotai/kimi-k2");if(m==="deepseek")return "DeepSeek · "+(settings?.deepseekModel||"deepseek-r1:8b");return "Ollama · "+(settings?.ollamaModel||"phi3:mini");})()}</div>
             </div>
             <button
               onClick={()=>onSetInDepthMode(!inDepthMode)}
@@ -6956,21 +8790,21 @@ TABS: dashboard, history, bills, stocks, networth, settings, expected, categorie
               </div>
             )}
             {messages.map((m,i)=>(
-              <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",gap:4}}>
-                {m.items?.length>0&&(
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4,justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                    {m.items.map(it=><span key={it.id} style={{background:"#eff6ff",border:"1px solid #bae6fd",color:"#0369a1",fontSize:10,padding:"2px 8px",borderRadius:12,fontWeight:500}}>{it.label}</span>)}
-                  </div>
-                )}
-                <div style={{maxWidth:"88%",background:m.role==="user"?T.accent:T.overlay,color:m.role==="user"?"#fff":T.tx1,padding:"9px 13px",borderRadius:m.role==="user"?"14px 14px 2px 14px":"14px 14px 14px 2px",fontSize:12,lineHeight:1.55,wordBreak:"break-word"}}>
-                  {m.text}
-                </div>
-                {m.widget&&<div style={{maxWidth:"100%",width:"88%",alignSelf:m.role==="user"?"flex-end":"flex-start"}}>{renderWidget(m.widget)}</div>}
-              </div>
+              <MsgBubble key={i} m={m} T={T}/>
             ))}
             {loading&&(
-              <div style={{alignSelf:"flex-start",background:"#f1f5f9",padding:"10px 14px",borderRadius:"14px 14px 14px 2px",display:"flex",gap:5,alignItems:"center"}}>
-                {[0,1,2].map(i=><span key={i} style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8",display:"inline-block",animation:`gcDot 1.2s ${i*0.18}s infinite ease-in-out`}}/>)}
+              <div style={{alignSelf:"flex-start",background:T.overlay,padding:"10px 14px",borderRadius:"14px 14px 14px 2px",display:"flex",flexDirection:"column",gap:6}}>
+                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  {[0,1,2].map(i=><span key={i} style={{width:6,height:6,borderRadius:"50%",background:T.tx3,display:"inline-block",animation:`gcDot 1.2s ${i*0.18}s infinite ease-in-out`}}/>)}
+                  <span style={{fontSize:11,color:T.tx3,marginLeft:4}}>thinking…</span>
+                </div>
+                {toolsRunning.length>0&&(
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                    {toolsRunning.map(name=>(
+                      <span key={name} style={{fontSize:10,fontWeight:600,background:T.accentBg,color:T.accent,padding:"2px 7px",borderRadius:99,border:"1px solid "+T.accentMid}}>{name}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <div ref={msgsEndRef}/>
@@ -7037,18 +8871,40 @@ function DevUpdateButton(){
 }
 
 // ── Sidebar component ─────────────────────────────────────────────────────────
-function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount, unpaidBillCount, devMode, onShowWhatsNew, onSignOut }) {
+function Sidebar({ view, onNavigate, favourites, onToggleFavourite, onReorderFavourites, pendingCount, unpaidBillCount, devMode, onShowWhatsNew, onSignOut }) {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [hoveredApp, setHoveredApp] = useState(null);
   const [tooltip, setTooltip] = useState(null); // {label, y}
   const flyoutRef = useRef(null);
   const appsButtonRef = useRef(null);
   const flyoutTimer = useRef(null);
+  const dragItem = useRef(null);   // key being dragged
+  const dragOver = useRef(null);   // key currently hovered
+  const [dragKey, setDragKey] = useState(null); // for visual feedback
 
   const appItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom);
-  const devItems = devMode ? [{ k:"datamodel", l:"Data Model", icon:"DM", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true }] : [];
-  const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom), ...devItems];
-  const pinnedItems = NAV_ITEMS.filter(n => !n.alwaysShow && !n.isBottom && favourites.includes(n.k));
+  const devItems = devMode ? [
+    { k:"datamodel", l:"Data Model", icon:"DM", desc:"Directly edit the FinanceLookML schema used by the Insights agent.", isBottom:true },
+  ] : [];
+  const bottomItems = [...NAV_ITEMS.filter(n=>n.isBottom && (!n.devOnly || devMode)), ...devItems];
+  // Maintain favourites order from the prop array
+  const pinnedItems = favourites.map(k=>NAV_ITEMS.find(n=>n.k===k)).filter(Boolean);
+
+  // Drag handlers for the pinned section
+  const onDragStart=(k)=>{ dragItem.current=k; setDragKey(k); };
+  const onDragEnter=(k)=>{ dragOver.current=k; };
+  const onDragEnd=()=>{
+    setDragKey(null);
+    if(!dragItem.current||!dragOver.current||dragItem.current===dragOver.current) return;
+    const next=[...favourites];
+    const fromIdx=next.indexOf(dragItem.current);
+    const toIdx=next.indexOf(dragOver.current);
+    if(fromIdx===-1||toIdx===-1) return;
+    next.splice(fromIdx,1);
+    next.splice(toIdx,0,dragItem.current);
+    onReorderFavourites(next);
+    dragItem.current=null; dragOver.current=null;
+  };
 
   const [flyoutTop, setFlyoutTop] = useState(0);
   const openFlyout = () => {
@@ -7064,30 +8920,37 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
   // Render function (not a component) — avoids remount-on-rerender killing hover state
   const navBtn = (item) => {
     const active = view === item.k;
+    const badge = (item.k==="expected"&&pendingCount>0) ? pendingCount
+                : (item.k==="bills"&&unpaidBillCount>0) ? unpaidBillCount
+                : 0;
     return (
       <button
         key={item.k}
         onClick={() => { onNavigate(item.k); setFlyoutOpen(false); }}
         onMouseEnter={e => {
           const r = e.currentTarget.getBoundingClientRect();
-          setTooltip({ label: item.l, y: r.top + r.height / 2 });
+          setTooltip({ label: item.l + (badge ? ` (${badge})` : ""), y: r.top + r.height / 2 });
           if (!active) e.currentTarget.style.background = T.overlay;
         }}
         onMouseLeave={e => {
           setTooltip(null);
           if (!active) e.currentTarget.style.background = "transparent";
         }}
+          data-tutorial={item.k}
         style={{
           width:40, height:40, borderRadius:T.r, border:"none", cursor:"pointer",
           display:"flex", alignItems:"center", justifyContent:"center",
-          fontFamily:"inherit", fontSize:16,
+          fontFamily:"inherit", fontSize:16, position:"relative",
           background: active ? T.accentBg : "transparent",
           color: active ? T.accent : T.tx3,
           borderLeft: active ? "3px solid "+T.accent : "3px solid transparent",
           transition:"background 0.12s, color 0.12s",
           flexShrink:0,
         }}
-      >{item.icon}</button>
+      >
+        {item.icon}
+        {badge>0&&<span style={{position:"absolute",top:4,right:4,minWidth:14,height:14,borderRadius:7,background:T.red,color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",lineHeight:1,fontFamily:"inherit"}}>{badge>9?"9+":badge}</span>}
+      </button>
     );
   };
 
@@ -7113,7 +8976,24 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
 
           {pinnedItems.length > 0 && <>
             <div style={{ width:24, height:1, background:T.border, margin:"4px 0" }}/>
-            {pinnedItems.map(item=>navBtn(item))}
+            {pinnedItems.map(item=>(
+              <div key={item.k}
+                draggable
+                onDragStart={()=>onDragStart(item.k)}
+                onDragEnter={()=>onDragEnter(item.k)}
+                onDragEnd={onDragEnd}
+                onDragOver={e=>e.preventDefault()}
+                style={{
+                  opacity: dragKey===item.k ? 0.35 : 1,
+                  transition:"opacity 0.15s",
+                  borderRadius:T.r,
+                  outline: dragOver.current===item.k&&dragKey&&dragKey!==item.k ? "2px solid "+T.tx1 : "none",
+                  cursor:"grab",
+                }}
+              >
+                {navBtn(item)}
+              </div>
+            ))}
           </>}
 
           {/* Apps button */}
@@ -7165,7 +9045,36 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
           style={{ position:"fixed", left:58, top:flyoutTop, background:T.surface, borderRadius:T.rCard, boxShadow:T.shadowMd, width:260, padding:"8px 6px", zIndex:100, maxHeight:`calc(100vh - ${flyoutTop+16}px)`, overflowY:"auto" }}
         >
           <div style={{ fontSize:11, fontWeight:500, color:T.tx3, padding:"4px 10px 8px" }}>Applications</div>
-          {appItems.map(item => {
+          {/* Favourites (pinned) section — draggable to reorder */}
+          {pinnedItems.length>0&&<>
+            <div style={{fontSize:10,fontWeight:500,color:T.tx3,padding:"8px 10px 4px",borderTop:"1px solid "+T.border,marginTop:4}}>Pinned — drag to reorder</div>
+            {pinnedItems.map(item=>(
+              <div key={item.k}
+                draggable
+                onDragStart={()=>onDragStart(item.k)}
+                onDragEnter={()=>onDragEnter(item.k)}
+                onDragEnd={onDragEnd}
+                onDragOver={e=>e.preventDefault()}
+                onMouseEnter={()=>setHoveredApp(item.k)} onMouseLeave={()=>setHoveredApp(null)}
+                style={{display:"flex",alignItems:"center",gap:4,borderRadius:T.r,padding:"2px 4px 2px 6px",background:hoveredApp===item.k?T.overlay:"transparent",transition:"background 0.1s",opacity:dragKey===item.k?0.35:1,cursor:"grab",outline:dragOver.current===item.k&&dragKey&&dragKey!==item.k?"2px solid "+T.tx1:"none"}}
+              >
+                <span style={{color:T.tx3,fontSize:10,flexShrink:0,cursor:"grab",padding:"0 2px"}}>⠿</span>
+                <button onClick={()=>{onNavigate(item.k);setFlyoutOpen(false);}}
+                  style={{display:"flex",alignItems:"center",gap:9,flex:1,padding:"6px 4px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:view===item.k?600:400,color:view===item.k?T.accent:T.tx1,textAlign:"left",fontFamily:"inherit"}}>
+                  <span style={{fontSize:13,width:18,textAlign:"center",flexShrink:0,color:T.tx3}}>{item.icon}</span>
+                  <div style={{flex:1}}><div style={{lineHeight:1.3}}>{item.l}</div></div>
+                </button>
+                <button onClick={()=>onToggleFavourite(item.k)} title="Remove from sidebar"
+                  style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#f59e0b",padding:"4px",borderRadius:6,flexShrink:0,lineHeight:1}}
+                  onMouseEnter={e=>e.currentTarget.style.color="#d97706"}
+                  onMouseLeave={e=>e.currentTarget.style.color="#f59e0b"}
+                >★</button>
+              </div>
+            ))}
+            <div style={{height:1,background:T.border,margin:"6px 4px"}}/>
+            <div style={{fontSize:10,fontWeight:500,color:T.tx3,padding:"0 10px 4px"}}>All applications</div>
+          </>}
+          {appItems.filter(item=>!favourites.includes(item.k)).map(item => {
             const isFav = favourites.includes(item.k);
             return (
               <div key={item.k} onMouseEnter={()=>setHoveredApp(item.k)} onMouseLeave={()=>setHoveredApp(null)}
@@ -7183,7 +9092,7 @@ function Sidebar({ view, onNavigate, favourites, onToggleFavourite, pendingCount
                 </button>
                 <button
                   onClick={() => onToggleFavourite(item.k)}
-                  title={isFav ? "Remove from favourites" : "Add to favourites"}
+                  title={isFav ? "Remove from sidebar" : "Pin to sidebar"}
                   style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, color:isFav?"#f59e0b":T.border, padding:"4px", borderRadius:6, flexShrink:0, lineHeight:1, transition:"color 0.12s" }}
                   onMouseEnter={e=>e.currentTarget.style.color=isFav?"#d97706":"#a8a29e"}
                   onMouseLeave={e=>e.currentTarget.style.color=isFav?"#f59e0b":T.border}
@@ -7449,10 +9358,46 @@ function LockScreen({authConfig,onUnlock}){
     return()=>window.removeEventListener("keydown",onKey);
   },[phase,pin]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-trigger biometrics on mount if enrolled
+  // Trigger biometrics at most once per lock-screen mount, and then once more
+  // each time the user brings the window back into focus. Guard against the
+  // Electron pattern where both "focus" and "visibilitychange" fire within
+  // a few hundred ms of each other on the same app-activation event.
+  const bioDebounceRef = useRef(null);
+  const bioFiredRef = useRef(false);
   useEffect(()=>{
-    if(authConfig.webauthnCredId) tryBiometric();
-  },[]); // eslint-disable-line react-hooks/exhaustive-deps
+    if(!authConfig.webauthnCredId) return;
+    bioFiredRef.current=false;
+    const fire=()=>{
+      if(bioFiredRef.current) return;
+      bioFiredRef.current=true;
+      tryBiometric();
+    };
+    const trigger=()=>{
+      if(document.visibilityState!=="visible") return;
+      if(bioDebounceRef.current) clearTimeout(bioDebounceRef.current);
+      bioDebounceRef.current=setTimeout(()=>{
+        bioDebounceRef.current=null;
+        fire();
+      },400); // wide enough to swallow Electron's focus+visibilitychange burst
+    };
+    const onVisibility=()=>{
+      if(document.visibilityState==="hidden") bioFiredRef.current=false; // reset so next focus triggers again
+      else trigger();
+    };
+    // Auto-trigger once on mount after a short delay (app just opened / lock just shown)
+    const mountTimer=setTimeout(()=>{
+      if(document.visibilityState==="visible") fire();
+    },300);
+    document.addEventListener("visibilitychange",onVisibility);
+    window.addEventListener("focus",trigger);
+    return()=>{
+      clearTimeout(mountTimer);
+      document.removeEventListener("visibilitychange",onVisibility);
+      window.removeEventListener("focus",trigger);
+      if(bioDebounceRef.current) clearTimeout(bioDebounceRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[authConfig.webauthnCredId]);
 
   const pressKey=async(k)=>{
     if(phase==="totp") return;
@@ -7464,7 +9409,7 @@ function LockScreen({authConfig,onUnlock}){
   };
 
   const tryBiometric=async()=>{
-    if(!authConfig.webauthnCredId){return;}
+    if(!authConfig.webauthnCredId||bioBusy){return;}
     setBioBusy(true);setErr("");
     try{
       // macOS: native Touch ID via Electron IPC
@@ -7683,6 +9628,326 @@ function TermsOfServiceModal({onAccept,onDecline}){
   );
 }
 
+// ── Tutorial ─────────────────────────────────────────────────────────────────
+const TUTORIAL_STEPS=[
+  {
+    id:"welcome",
+    icon:"◈",
+    title:"Welcome to CashHeap",
+    body:"CashHeap is your private, local-first finance app. Everything lives on your device — no cloud, no subscriptions, no accounts required.\n\nThis quick tour covers the most important features. You can skip it at any time or replay it from Settings.",
+    narration:"Hi, I'm Jarvis — your personal finance assistant. I live right here in CashHeap and I'm here to help you understand your money. Everything stays on your device, completely private. Let me walk you through what I can help you with.",
+    tip:null,
+    target:null,
+    nav:"dashboard",
+  },
+  {
+    id:"dashboard",
+    narration:"This is your Dashboard — the nerve centre of your finances. At a glance you can see how much you've spent and earned this month, which budgets are running hot, upcoming bills, and your progress toward your savings goals.",
+    icon:"⊞",
+    title:"Dashboard",
+    body:"The Dashboard gives you a live snapshot of your finances: total spending vs income this month, budget progress per category, upcoming bills, and your savings goals.\n\nThe health score at the bottom summarises how well you're tracking across all areas.",
+    tip:"Change the month with the ← → arrows in the top-right of the Dashboard.",
+    target:"main-content",
+    nav:"dashboard",
+  },
+  {
+    id:"transactions",
+    narration:"Here's where you log what you spend and earn. Tap Add Expense or Add Income, fill in the date and amount, pick a category, and you're done. Your full transaction history lives in the History tab where you can search, filter, and bulk edit.",
+    icon:"≡",
+    title:"Adding Transactions",
+    body:"Use Add Expense or Add Income in the sidebar to log a transaction manually. Every entry needs a date, amount, and category — everything else is optional.\n\nThe History tab shows all past transactions with search, filters, and bulk editing.",
+    tip:"You can also import transactions in bulk using CSV Import.",
+    target:"manual",
+    nav:"manual",
+  },
+  {
+    id:"bills",
+    narration:"Bills are your recurring expenses — rent, subscriptions, utilities. Add them once and every month CashHeap will remind you what's due. Tick them off as you pay them and I'll make sure nothing slips through the cracks.",
+    icon:"◷",
+    title:"Bills & Recurring Expenses",
+    body:"Add your regular bills under Bills. Each month CashHeap shows which are paid and which are still outstanding. Tick them off as you pay them.\n\nUnpaid bills show a badge on the sidebar icon so you never miss one.",
+    tip:"Bills feed directly into the Cash Flow forecast so you can see future balance projections.",
+    target:"bills",
+    nav:"bills",
+  },
+  {
+    id:"budgets",
+    narration:"Categories let you slice your spending into buckets — groceries, dining, transport, whatever makes sense for you. Set a monthly cap on any category and I'll alert you on the Dashboard before you go over.",
+    icon:"▦",
+    title:"Categories & Budgets",
+    body:"Under Categories you can create custom spending categories and set a monthly budget cap for each one. Colour-coded progress bars show how close you are to your limit.\n\nAlerts fire on the Dashboard when you're approaching or over budget.",
+    tip:"Categories you create here are available when logging any transaction.",
+    target:"categories",
+    nav:"categories",
+  },
+  {
+    id:"goals",
+    narration:"What are you saving towards? A holiday, an emergency fund, a new laptop? Set a target amount and a deadline and I'll calculate exactly how much you need to set aside each month to get there.",
+    icon:"◎",
+    title:"Savings Goals",
+    body:"Goals lets you set a target amount and deadline — a holiday, emergency fund, new laptop, whatever you're saving towards. CashHeap calculates the required monthly saving and tracks your progress over time.",
+    tip:"Goals also appear in the Cash Flow forecast so you can see the impact on your projected balance.",
+    target:"goals",
+    nav:"goals",
+  },
+  {
+    id:"networth",
+    narration:"Net Worth is the big picture. Add your bank accounts, investments, and any debts, and CashHeap will calculate where you really stand. Watch the number grow over time — that's the whole point.",
+    icon:"◈",
+    title:"Net Worth",
+    body:"Add your bank accounts, investments, and any debts under Net Worth. CashHeap calculates your overall position and charts it over time so you can watch it grow.\n\nStocks lets you track a share portfolio with live CAD/USD prices.",
+    tip:"Account balances feed into the Cash Flow 90-day forecast.",
+    target:"networth",
+    nav:"networth",
+  },
+  {
+    id:"jarvis",
+    narration:"That button in the corner — that's me. Tap it any time and ask me anything about your finances. How much did you spend on dining last month? Which budget is closest to its limit? I'll pull the answer straight from your data. I'm powered by Kimi K2 through OpenRouter — a fast, intelligent model that works for everyone right out of the box.",
+    icon:"✦",
+    title:"Jarvis AI Assistant",
+    body:'Tap the floating button in the bottom-right corner to open Jarvis — your personal finance AI. Ask anything in plain English:\n\n• "How much did I spend on dining last month?"\n• "Which category is closest to its budget?"\n• "Show me my biggest expenses this year"\n\nJarvis runs on Kimi K2 via OpenRouter by default — no local GPU required. You can also switch to a local Ollama model for fully private, offline inference.',
+    tip:"Jarvis never invents numbers — every figure comes directly from your data.",
+    target:"jarvis",
+    nav:"dashboard",
+  },
+  {
+    id:"jarvis-setup",
+    narration:"Getting me set up takes about thirty seconds. Head to Settings, find the AI section, and you'll see the OpenRouter panel. Grab a free API key from openrouter.ai, paste it in, and you're talking to Kimi K2. If you'd rather keep everything offline, the Ollama option runs entirely on your machine — no internet needed.",
+    icon:"⚙",
+    title:"Connect Jarvis in 30 seconds",
+    body:'To activate Jarvis:\n\n1. Go to Settings → AI\n2. Select OpenRouter (default)\n3. Paste your API key from openrouter.ai/keys\n4. The model is already set to moonshotai/kimi-k2\n\nFree-tier keys from OpenRouter are enough for daily use. If you prefer local, private inference, switch to the Ollama option and run any model on your own machine.',
+    tip:"openrouter.ai offers a free tier — no credit card needed to get started.",
+    target:"settings",
+    nav:"settings",
+  },
+  {
+    id:"receipts",
+    narration:"Got a receipt? Just take a photo or drop the PDF here and I'll read the merchant, date, amount, and items for you. No more manual typing. You can also point me at a whole folder of receipts and I'll import them all at once.",
+    icon:"↑",
+    title:"Receipt Scanning",
+    body:"Photograph a receipt or drag a PDF onto Upload Receipts. Jarvis reads the merchant, date, amount, and items automatically and creates a transaction draft for you to review.\n\nUse Folder Sync to bulk-import a whole folder of receipts at once.",
+    tip:"Receipt scanning requires a Gemini API key (free at aistudio.google.com/apikey).",
+    target:"upload",
+    nav:"upload",
+  },
+  {
+    id:"security",
+    narration:"Settings is where you lock things down. You can set a PIN, enable Touch ID or Windows Hello, and configure how long before the app locks itself. You can also connect your AI model here and customise the look of the app.",
+    icon:"⚙",
+    title:"Security & Settings",
+    body:"Head to Settings to:\n\n• Set a PIN to protect the app at launch\n• Enable Touch ID or Windows Hello for one-touch unlock\n• Set up two-factor authentication\n• Configure auto-lock after idle\n• Choose dark mode or a colour-blind filter\n• Connect your AI model",
+    tip:"You can replay this tutorial any time from Settings → App → Start Tutorial.",
+    target:"settings",
+    nav:"settings",
+  },
+  {
+    id:"done",
+    narration:"And that's the tour. You're all set. Remember, I'm always here in the corner if you need me. Just tap that button and ask away. Welcome to CashHeap.",
+    icon:"◉",
+    title:"You're all set",
+    body:"That's the core of CashHeap. Explore at your own pace — every section has inline help and sensible defaults to get you started.\n\nIf you ever want to revisit this tour, find it in Settings → App.",
+    tip:null,
+    target:null,
+    nav:null,
+  },
+];
+
+function TutorialModal({onClose,onNavigate}){
+  const [step,setStep]=useState(0);
+  const [minimized,setMinimized]=useState(false);
+  const [spotRect,setSpotRect]=useState(null);
+  const [voiceOn,setVoiceOn]=useState(true);
+  const [speaking,setSpeaking]=useState(false);
+  const total=TUTORIAL_STEPS.length;
+  const s=TUTORIAL_STEPS[step];
+  const isLast=step===total-1;
+  const hasSpot=!!spotRect;
+
+  // Speak narration via Web Speech API
+  const speak=(text)=>{
+    if(!window.speechSynthesis||!text) return;
+    window.speechSynthesis.cancel();
+    const utt=new SpeechSynthesisUtterance(text);
+    utt.rate=0.95; utt.pitch=1.0; utt.volume=1;
+    // Prefer a natural-sounding voice
+    const voices=window.speechSynthesis.getVoices();
+    const preferred=voices.find(v=>/samantha|karen|daniel|alex|google us|google uk/i.test(v.name))
+      ||voices.find(v=>v.lang==="en-US"&&v.localService)
+      ||voices.find(v=>v.lang.startsWith("en"));
+    if(preferred) utt.voice=preferred;
+    utt.onstart=()=>setSpeaking(true);
+    utt.onend=()=>setSpeaking(false);
+    utt.onerror=()=>setSpeaking(false);
+    window.speechSynthesis.speak(utt);
+  };
+
+  const stopSpeech=()=>{ window.speechSynthesis&&window.speechSynthesis.cancel(); setSpeaking(false); };
+
+  // Auto-navigate + speak whenever step changes
+  useEffect(()=>{
+    if(s.nav&&onNavigate) onNavigate(s.nav);
+    if(voiceOn&&s.narration) speak(s.narration);
+    else stopSpeech();
+  },[step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle voice on/off
+  const toggleVoice=()=>{
+    setVoiceOn(v=>{
+      if(v){ stopSpeech(); return false; }
+      else { if(s.narration) speak(s.narration); return true; }
+    });
+  };
+
+  // Stop speech on unmount
+  useEffect(()=>()=>stopSpeech(),[]);
+
+  // Measure the target element after navigation settles
+  useEffect(()=>{
+    if(!s.target){ setSpotRect(null); return; }
+    let tries=0;
+    const measure=()=>{
+      const el=document.querySelector(`[data-tutorial="${s.target}"]`);
+      if(el){
+        const r=el.getBoundingClientRect();
+        if(r.width>0) { setSpotRect({top:r.top,left:r.left,width:r.width,height:r.height}); return; }
+      }
+      if(++tries<15) setTimeout(measure,80);
+    };
+    setTimeout(measure,120);
+    return()=>{ tries=99; };
+  },[step,s.target]);
+
+  const goToStep=(i)=>{stopSpeech();setStep(i);setSpotRect(null);};
+  const next=()=>{ stopSpeech(); if(isLast){onClose();}else{setSpotRect(null);setStep(p=>p+1);} };
+  const prev=()=>{ stopSpeech(); setSpotRect(null);setStep(p=>Math.max(0,p-1)); };
+
+  // Card layout: centred when no spotlight, bottom-anchored when spotlighting
+  const cardStyle=hasSpot
+    ? {position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",zIndex:10002,width:420,maxWidth:"calc(100vw - 48px)"}
+    : {position:"relative",zIndex:10002,width:480,maxWidth:"calc(100vw - 40px)"};
+
+  const PAD=8; // spotlight padding around target
+
+  // Minimized pill
+  if(minimized) return(
+    <button onClick={()=>{setMinimized(false);if(voiceOn&&s.narration)speak(s.narration);}}
+      style={{position:"fixed",top:16,right:16,zIndex:10000,background:T.tx1,color:"#fff",border:"none",borderRadius:99,padding:"8px 14px",display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",fontSize:12,fontWeight:500,boxShadow:"0 4px 16px rgba(0,0,0,0.18)",transition:"opacity .15s"}}
+      onMouseEnter={e=>e.currentTarget.style.opacity="0.85"}
+      onMouseLeave={e=>e.currentTarget.style.opacity="1"}
+    >
+      <svg width="18" height="18" viewBox="0 0 18 18" style={{flexShrink:0}}>
+        <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2"/>
+        <circle cx="9" cy="9" r="7" fill="none" stroke="#fff" strokeWidth="2"
+          strokeDasharray={`${2*Math.PI*7}`}
+          strokeDashoffset={`${2*Math.PI*7*(1-(step+1)/total)}`}
+          strokeLinecap="round" transform="rotate(-90 9 9)"/>
+      </svg>
+      Tutorial · Step {step+1}/{total}
+    </button>
+  );
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:10000,fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      ...(hasSpot?{}:{background:"rgba(0,0,0,0.45)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center"})
+    }}>
+
+      {/* Spotlight overlay — four dark panels around the target */}
+      {hasSpot&&<>
+        {/* top */}
+        <div style={{position:"fixed",top:0,left:0,right:0,height:spotRect.top-PAD,background:"rgba(0,0,0,0.55)",zIndex:10001,pointerEvents:"none"}}/>
+        {/* bottom */}
+        <div style={{position:"fixed",top:spotRect.top+spotRect.height+PAD,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.55)",zIndex:10001,pointerEvents:"none"}}/>
+        {/* left */}
+        <div style={{position:"fixed",top:spotRect.top-PAD,left:0,width:spotRect.left-PAD,height:spotRect.height+PAD*2,background:"rgba(0,0,0,0.55)",zIndex:10001,pointerEvents:"none"}}/>
+        {/* right */}
+        <div style={{position:"fixed",top:spotRect.top-PAD,left:spotRect.left+spotRect.width+PAD,right:0,height:spotRect.height+PAD*2,background:"rgba(0,0,0,0.55)",zIndex:10001,pointerEvents:"none"}}/>
+        {/* highlight border ring */}
+        <div style={{position:"fixed",top:spotRect.top-PAD,left:spotRect.left-PAD,width:spotRect.width+PAD*2,height:spotRect.height+PAD*2,borderRadius:T.rCard+4,border:"2px solid rgba(255,255,255,0.6)",zIndex:10001,pointerEvents:"none",boxShadow:"0 0 0 1px rgba(255,255,255,0.15)"}}/>
+      </>}
+
+      {/* Tutorial card */}
+      <div style={cardStyle}>
+        <div style={{background:T.surface,borderRadius:20,boxShadow:"0 32px 80px rgba(0,0,0,0.28)",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+
+          {/* Progress bar */}
+          <div style={{height:3,background:T.border}}>
+            <div style={{height:3,background:T.tx1,width:`${((step+1)/total)*100}%`,transition:"width 0.3s ease",borderRadius:2}}/>
+          </div>
+
+          {/* Header */}
+          <div style={{padding:"22px 24px 0"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div style={{display:"flex",gap:5}}>
+                {TUTORIAL_STEPS.map((_,i)=>(
+                  <button key={i} onClick={()=>goToStep(i)}
+                    style={{width:i===step?20:6,height:6,borderRadius:3,background:i===step?T.tx1:i<step?T.tx2:T.border,border:"none",cursor:"pointer",padding:0,transition:"all 0.2s"}}
+                  />
+                ))}
+              </div>
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                {/* Voice toggle */}
+                <button onClick={toggleVoice} title={voiceOn?"Mute Jarvis":"Unmute Jarvis"}
+                  style={{background:voiceOn?T.tx1:T.overlay,border:"1px solid "+T.border,borderRadius:99,cursor:"pointer",color:voiceOn?"#fff":T.tx3,fontSize:11,fontWeight:500,padding:"3px 9px",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5,transition:"background .15s"}}>
+                  {/* Speaker icon */}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                    {voiceOn
+                      ?<><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16.5 12A4.5 4.5 0 0014 7.97v8.05A4.5 4.5 0 0016.5 12z" opacity=".7"/><path d="M14 3.23v2.06A7 7 0 0114 20.77v2.06A9 9 0 0014 3.23z" opacity=".4"/></>
+                      :<><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.14l2.45 2.45c.03-.18.05-.37.05-.56zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.22 19l2 2L20.73 20l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></>
+                    }
+                  </svg>
+                  {voiceOn
+                    ? speaking
+                      ? <span style={{display:"flex",gap:2,alignItems:"flex-end",height:10}}>
+                          {[0,1,2].map(i=><span key={i} style={{width:2,background:"#fff",borderRadius:1,animation:`tbar 0.7s ${i*0.15}s ease-in-out infinite alternate`,display:"inline-block",height:i===1?10:6}}/>)}
+                          <style>{`@keyframes tbar{from{height:3px}to{height:10px}}`}</style>
+                        </span>
+                      : "Jarvis"
+                    : "Jarvis"
+                  }
+                </button>
+                <button onClick={()=>{stopSpeech();setMinimized(true);}} title="Minimise"
+                  style={{background:"none",border:"none",cursor:"pointer",color:T.tx3,fontSize:16,lineHeight:1,padding:"0 6px",fontFamily:"inherit"}}>—</button>
+                <button onClick={()=>{stopSpeech();onClose();}} title="End tutorial"
+                  style={{background:"none",border:"none",cursor:"pointer",color:T.tx3,fontSize:18,lineHeight:1,padding:"0 0 0 4px",fontFamily:"inherit"}}>×</button>
+              </div>
+            </div>
+
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+              <div style={{width:40,height:40,borderRadius:10,background:T.overlay,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,color:T.tx1}}>
+                {s.icon}
+              </div>
+              <div style={{fontSize:16,fontWeight:600,color:T.tx1,lineHeight:1.2}}>{s.title}</div>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div style={{padding:"0 24px 16px"}}>
+            <div style={{fontSize:13,color:T.tx2,lineHeight:1.65,whiteSpace:"pre-line"}}>{s.body}</div>
+            {s.tip&&(
+              <div style={{marginTop:12,padding:"9px 12px",background:T.overlay,borderRadius:T.r,borderLeft:"3px solid "+T.tx1,display:"flex",gap:8,alignItems:"flex-start"}}>
+                <span style={{fontSize:10,fontWeight:700,color:T.tx1,flexShrink:0,marginTop:2,letterSpacing:"0.05em"}}>TIP</span>
+                <span style={{fontSize:12,color:T.tx2,lineHeight:1.55}}>{s.tip}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div style={{padding:"12px 24px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",borderTop:"1px solid "+T.border}}>
+            <button onClick={prev} disabled={step===0}
+              style={{background:"none",border:"none",cursor:step===0?"default":"pointer",color:T.tx1,fontSize:13,fontWeight:500,fontFamily:"inherit",opacity:step===0?0:1,transition:"opacity .15s",padding:0}}
+            >← Back</button>
+            <button onClick={next}
+              style={{padding:"8px 20px",borderRadius:T.r,border:"none",background:T.tx1,color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",transition:"opacity .15s"}}
+              onMouseEnter={e=>e.currentTarget.style.opacity="0.85"}
+              onMouseLeave={e=>e.currentTarget.style.opacity="1"}
+            >{isLast?"Done":"Next →"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WhatsNewModal({onClose}){
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"flex-start",padding:"66px 0 0 20px",backdropFilter:"blur(2px)"}}>
@@ -7727,12 +9992,28 @@ function UpdateBanner() {
   );
 }
 
+class ErrorBoundary extends React.Component{
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err) return(
+      <div style={{padding:40,fontFamily:"monospace",color:"#dc2626",background:"#fff",height:"100vh",overflow:"auto"}}>
+        <div style={{fontSize:18,fontWeight:700,marginBottom:16}}>⚠ App crashed — {this.state.err.message}</div>
+        <pre style={{fontSize:12,whiteSpace:"pre-wrap",color:"#555"}}>{this.state.err.stack}</pre>
+        <button onClick={()=>this.setState({err:null})} style={{marginTop:20,padding:"8px 16px",background:"#111",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:13}}>Retry</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 export default function App(){
   const [view,setView]=useState("dashboard");
   const [txns,setTxns]=useState([]);
   const [cats,setCats]=useState(DEFAULT_CATS);
   const [expected,setExpected]=useState([]);
   const [catBudgets,setCatBudgets]=useState({});
+  const [catIcons,setCatIcons]=useState({});
   const [vacations,setVacations]=useState([]);
   const [vacationTxns,setVacationTxns]=useState([]);
   const [receiptFPs,setReceiptFPs]=useState(new Set());
@@ -7755,16 +10036,21 @@ export default function App(){
   const [schema,setSchema]=useState(DEFAULT_SCHEMA);
   const [insightWidgets,setInsightWidgets]=useState([]);
   const [insightMessages,setInsightMessages]=useState([]);
-  const [favourites,setFavourites]=useState(["bills","history","stocks"]);
+  const [favourites,setFavourites]=useState(["bills","expected","history","stocks"]);
   const toggleFavourite=k=>setFavourites(prev=>{const next=prev.includes(k)?prev.filter(x=>x!==k):[...prev,k];saveServerData({favourites:next});return next;});
   const [inDepthMode,setInDepthMode]=useState(false);
   const [selectedItems,setSelectedItems]=useState([]);
   const [globalChatOpen,setGlobalChatOpen]=useState(false);
+  const [discreteMode,setDiscreteMode]=useState(false);
+  const [discreteAuth,setDiscreteAuth]=useState({open:false,next:false,pin:"",error:"",busy:false});
   const [ready,setReady]=useState(false);
   const [month,setMonth]=useState(()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");});
   const [historyMonth,setHistoryMonth]=useState(today().slice(0,7));
   const [showWhatsNew,setShowWhatsNew]=useState(false);
+  const [dismissedAlerts,setDismissedAlerts]=useState(new Set());
   const [tosAccepted,setTosAccepted]=useState(false);
+  const [tutorialSeen,setTutorialSeen]=useState(false);
+  const [showTutorial,setShowTutorial]=useState(false);
   const [authConfig,setAuthConfig]=useState({});
   const [isUnlocked,setIsUnlocked]=useState(true); // becomes false once authConfig.enabled is confirmed
   const [idleBlur,setIdleBlur]=useState(false); // pixelation overlay shown before full lock
@@ -7807,6 +10093,7 @@ export default function App(){
       if(d.cats) setCats(d.cats);
       if(d.expected) setExpected(d.expected);
       if(d.catBudgets) setCatBudgets(d.catBudgets);
+      if(d.catIcons) setCatIcons(d.catIcons);
       if(d.vacations) setVacations(d.vacations);
       if(d.vacationTxns) setVacationTxns(d.vacationTxns);
       if(d.receiptFPs) setReceiptFPs(new Set(d.receiptFPs));
@@ -7829,18 +10116,30 @@ export default function App(){
       if(d.splits) setSplits(d.splits);
       if(d.settlements) setSettlements(d.settlements);
       if(d.tosAccepted) setTosAccepted(true);
+      if(d.tutorialSeen){ setTutorialSeen(true); } else { setShowTutorial(true); }
       if(d.authConfig&&typeof d.authConfig==="object"){
         setAuthConfig(d.authConfig);
         if(d.authConfig.enabled) setIsUnlocked(false);
       }
       setReady(true);
-    });
+    }).catch(()=>setReady(true));
   },[]);
+
+  useEffect(()=>{
+    if(typeof settings.discreteMode!=="boolean") return;
+    setDiscreteMode(settings.discreteMode);
+    window.__discreteMode=settings.discreteMode;
+  },[settings.discreteMode]);
+
+  useEffect(()=>{
+    if(!settings.devMode && view==="toolcoverage") setView("dashboard");
+  },[settings.devMode,view]);
 
   const saveTxns=t=>{setTxns(t);saveServerData({txns:t});};
   const saveCats=c=>{setCats(c);saveServerData({cats:c});};
   const saveExpected=e=>{setExpected(e);saveServerData({expected:e});};
   const saveCatBudgets=b=>{setCatBudgets(b);saveServerData({catBudgets:b})};
+  const saveCatIcons=ic=>{setCatIcons(ic);saveServerData({catIcons:ic})};
   const saveVacations=v=>{setVacations(v);saveServerData({vacations:v})};
   const saveVacationTxns=t=>{setVacationTxns(t);saveServerData({vacationTxns:t})};
   const saveReceiptFPs=fps=>{setReceiptFPs(fps);saveServerData({receiptFPs:[...fps]})};
@@ -7859,7 +10158,71 @@ export default function App(){
   const saveSettlements=s=>{setSettlements(s);saveServerData({settlements:s})};
   const saveAuthConfig=c=>{setAuthConfig(c);saveServerData({authConfig:c});if(!c.enabled)setIsUnlocked(true);};
   const saveSettings=s=>{setSettings(s);saveServerData({settings:s})};
+  const setDiscreteModeAndPersist=next=>{
+    setDiscreteMode(next);
+    window.__discreteMode=next;
+    saveSettings({...settings,discreteMode:next});
+  };
+  const closeDiscreteAuth=()=>setDiscreteAuth({open:false,next:false,pin:"",error:"",busy:false});
+  const useBiometricForDiscreteMode=async()=>{
+    if(!authConfig.webauthnCredId) return false;
+    try{
+      if(authConfig.bioMethod==="touchid"&&window.electronBiometrics){
+        await window.electronBiometrics.prompt("verify your identity to change discrete mode");
+        return true;
+      }
+      if(window.PublicKeyCredential&&navigator.credentials?.get){
+        const credId=_b64ud(authConfig.webauthnCredId);
+        await navigator.credentials.get({publicKey:{
+          challenge:crypto.getRandomValues(new Uint8Array(32)),
+          allowCredentials:[{type:"public-key",id:credId}],
+          userVerification:"required",
+          timeout:60000,
+          rpId:window.location.hostname||"localhost",
+        }});
+        return true;
+      }
+    }catch(_e){
+      return false;
+    }
+    return false;
+  };
+  const requestDiscreteModeChange=async(next)=>{
+    if(next===discreteMode) return;
+    if(!authConfig?.pinHash){
+      setDiscreteModeAndPersist(next);
+      return;
+    }
+    if(await useBiometricForDiscreteMode()){
+      setDiscreteModeAndPersist(next);
+      return;
+    }
+    setDiscreteAuth({open:true,next,pin:"",error:"",busy:false});
+  };
+  const submitDiscreteAuth=async()=>{
+    if(discreteAuth.busy) return;
+    if((discreteAuth.pin||"").length<4){
+      setDiscreteAuth(p=>({...p,error:"Enter your current PIN to continue"}));
+      return;
+    }
+    setDiscreteAuth(p=>({...p,busy:true,error:""}));
+    try{
+      const candidateHash=await hashPin(discreteAuth.pin,authConfig.pinSalt);
+      if(candidateHash===authConfig.pinHash){
+        setDiscreteModeAndPersist(discreteAuth.next);
+        closeDiscreteAuth();
+      }else{
+        setDiscreteAuth(p=>({...p,busy:false,error:"Incorrect PIN"}));
+      }
+    }catch(e){
+      setDiscreteAuth(p=>({...p,busy:false,error:e.message||"Could not verify PIN"}));
+    }
+  };
   const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
+  const enableAlerts=()=>saveSettings({...settings,alertsEnabled:true});
+  const disableAlerts=()=>{saveSettings({...settings,alertsEnabled:false});setDismissedAlerts(new Set());};
+  const dismissAlert=id=>setDismissedAlerts(p=>new Set([...p,id]));
+  const dismissAllAlerts=()=>setDismissedAlerts(new Set(appAlerts.map(a=>a.id)));
   // Auto-persist insight chat & widgets whenever they change (skip initial empty load)
   const insightMsgsReady=useRef(false);
   useEffect(()=>{if(!insightMsgsReady.current){insightMsgsReady.current=true;return;}saveServerData({insightMessages});},[insightMessages]);
@@ -7883,14 +10246,16 @@ export default function App(){
     saveExpected(expected.map(e=>e.id===id?{...e,confirmed:false,confirmedDate:null,confirmedTxnId:null}:e));
   };
 
+  // Hooks must all be called unconditionally before any early returns
+  const appAlerts=useAlerts({txns,bills,billPayments,catBudgets,goals,month,settings});
+  const pendingCount=expected.filter(e=>!e.confirmed).length;
+  const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
+
   if(!ready) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#9ca3af",fontSize:13}}>Loading...</div>;
   // First launch: no account exists yet → show setup wizard
   if(!authConfig.pinHash) return <AccountSetup onComplete={cfg=>{saveAuthConfig(cfg);setIsUnlocked(true);}}/>;
   // Locked → show lock screen
   if(!isUnlocked) return <LockScreen authConfig={authConfig} onUnlock={()=>{setIsUnlocked(true);setIdleBlur(false);lastActivityRef.current=Date.now();}}/>;
-
-  const pendingCount=expected.filter(e=>!e.confirmed).length;
-  const unpaidBillCount=bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===month)).length;
 
   // Build CSS filter string from settings
   const cbFilters={
@@ -7906,7 +10271,10 @@ export default function App(){
   ].filter(Boolean).join(" ")||undefined;
 
   return (
+    <DiscreteModeCtx.Provider value={discreteMode}>
+    <ErrorBoundary>
     <>
+    {discreteMode&&<style>{`.recharts-tooltip-wrapper{display:none!important}.recharts-cartesian-axis-tick-value{opacity:0!important}`}</style>}
     {/* SVG colorblind filter definitions (hidden) */}
     <svg style={{position:"absolute",width:0,height:0,overflow:"hidden"}} aria-hidden="true">
       <defs>
@@ -7927,8 +10295,10 @@ export default function App(){
       </div>
     )}
     {!tosAccepted&&<TermsOfServiceModal onAccept={()=>{setTosAccepted(true);saveServerData({tosAccepted:true});}} onDecline={()=>{ if(window.electronApp?.quit) window.electronApp.quit(); else window.close(); }}/>}
+    <DepthCtx.Provider value={{inDepthMode,onSelectItem:item=>setSelectedItems(p=>{const already=p.some(x=>x.label===item.label);return already?p:[...p,item];})}}>
     <div style={{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",color:T.tx1,background:T.bg,filter:rootFilter}}>
       {showWhatsNew&&<WhatsNewModal onClose={()=>setShowWhatsNew(false)}/>}
+      {showTutorial&&<TutorialModal onClose={()=>{setShowTutorial(false);if(!tutorialSeen){setTutorialSeen(true);saveServerData({tutorialSeen:true});}}} onNavigate={v=>{setView(v);}}/>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
 
       {/* Left sidebar */}
@@ -7937,6 +10307,7 @@ export default function App(){
         onNavigate={setView}
         favourites={favourites}
         onToggleFavourite={toggleFavourite}
+        onReorderFavourites={next=>{setFavourites(next);saveServerData({favourites:next});}}
         pendingCount={pendingCount}
         unpaidBillCount={unpaidBillCount}
         devMode={settings.devMode}
@@ -7945,25 +10316,57 @@ export default function App(){
       />
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
+      <div data-tutorial="main-content" style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
+        {/* Top bar with bell + discrete toggle */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"16px 36px 0",gap:8,flexShrink:0}}>
+          {/* Discrete Mode toggle */}
+          <button
+            onClick={()=>requestDiscreteModeChange(!discreteMode)}
+            title={discreteMode?"Discrete Mode ON — click to show real numbers":"Discrete Mode — hide all numbers for demos"}
+            style={{display:"flex",alignItems:"center",gap:6,padding:"5px 11px",borderRadius:20,border:"1.5px solid",borderColor:discreteMode?T.accent:T.border,background:discreteMode?T.accent:"transparent",color:discreteMode?"#fff":T.tx3,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}
+          >
+            <span style={{fontSize:14}}>◫</span>
+            <span>{discreteMode?"Discrete ON":"Discrete"}</span>
+          </button>
+          {settings.alertsEnabled===true&&(
+            <AlertsBell alerts={appAlerts} dismissed={dismissedAlerts} onDismiss={dismissAlert} onDismissAll={dismissAllAlerts} settings={settings} onUpdateSettings={saveSettings} onEnable={enableAlerts} onDisable={disableAlerts}/>
+          )}
+        </div>
+        {/* Opt-in prompt */}
+        {settings.alertsEnabled===null&&(
+          <div style={{margin:"12px 36px 0",background:T.surface,border:"1px solid "+T.border,borderRadius:T.rCard,padding:"14px 18px",display:"flex",alignItems:"center",gap:14,boxShadow:T.shadow}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:T.overlay,border:"1px solid "+T.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={T.tx2} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:600,color:T.tx1}}>Would you like budget &amp; bill alerts?</div>
+              <div style={{fontSize:12,color:T.tx3,marginTop:2}}>Get notified when bills are due, budgets are close, or large transactions occur.</div>
+            </div>
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              <button onClick={enableAlerts} style={{padding:"7px 16px",borderRadius:T.r,border:"none",background:T.accent,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Enable</button>
+              <button onClick={()=>saveSettings({...settings,alertsEnabled:false})} style={{padding:"7px 12px",borderRadius:T.r,border:"1px solid "+T.border,background:"transparent",color:T.tx2,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>No thanks</button>
+            </div>
+          </div>
+        )}
+        <div style={{flex:1,padding:"20px 36px 28px"}}>
         {(()=>{const visibleTxns=txns.filter(t=>t.date&&t.date<=today());return(<>
-        {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/><div style={{marginTop:24}}><HealthScore txns={visibleTxns} accounts={accounts} holdings={holdings} catBudgets={catBudgets} goals={goals} bills={bills} billPayments={billPayments} month={month} fxRate={fxRate} stockPrices={stockPrices}/></div><div style={{marginTop:8}}><SpendingAnomalies txns={visibleTxns} cats={cats} month={month}/></div><div style={{marginTop:8}}><AlertsPanel txns={visibleTxns} bills={bills} billPayments={billPayments} catBudgets={catBudgets} goals={goals} month={month} settings={settings} onUpdateSettings={saveSettings}/></div></>}
+        {view==="dashboard"&&<><Dashboard txns={visibleTxns} expected={expected} cats={cats} catBudgets={catBudgets} catIcons={catIcons} month={month} setMonth={setMonth} onConfirm={confirmPayment} onRevert={revertPayment} vacations={vacations} vacationTxns={vacationTxns} bills={bills} billPayments={billPayments} onToggleBill={toggleBill} goals={goals} accounts={accounts} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate} settings={settings}/><div style={{marginTop:24}}><HealthScore txns={visibleTxns} accounts={accounts} holdings={holdings} catBudgets={catBudgets} goals={goals} bills={bills} billPayments={billPayments} month={month} fxRate={fxRate} stockPrices={stockPrices}/></div><div style={{marginTop:8}}><SpendingAnomalies txns={visibleTxns} cats={cats} month={month}/></div></>}
         {view==="expected"&&<ExpectedIncome expected={expected} onUpdate={saveExpected} onConfirm={confirmPayment}/>}
-        {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
-        {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
+        {view==="folder"&&<LocalFolderSync cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}} discreteMode={discreteMode}/>} 
+        {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}} discreteMode={discreteMode}/>} 
         {view==="manual"&&<RecurringForm title="Add Expense" type="expense" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="income"&&<RecurringForm title="Add Income" type="income" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast}/>}
         {view==="bills"&&<Bills bills={bills} billPayments={billPayments} onSaveBills={saveBills} onSaveBillPayments={saveBillPayments} cats={cats}/>}
         {view==="goals"&&<Goals goals={goals} onSaveGoals={saveGoals}/>}
         {view==="networth"&&<NetWorth accounts={accounts} accountHistory={accountHistory} onSaveAccounts={saveAccounts} onSaveAccountHistory={saveAccountHistory} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
-        {view==="stocks"&&<Stocks holdings={holdings} onSaveHoldings={saveHoldings} onPricesUpdate={setStockPrices} onFxRateUpdate={setFxRate}/>}
+        {view==="stocks"&&<Stocks holdings={holdings} onSaveHoldings={saveHoldings} onPricesUpdate={prices=>{setStockPrices(prices);const flat=Object.fromEntries(Object.entries(prices).map(([t,v])=>[t,v.price??v]));fetch("/api/holdings/prices",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({prices:flat})}).catch(()=>{});}} onFxRateUpdate={setFxRate}/>}
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
-        {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets}/>}
+        {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets} catIcons={catIcons} onUpdateCatIcons={saveCatIcons}/>}
         {view==="import"&&<CSVImport txns={txns} cats={cats} onImport={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));}}/>}
         {view==="reports"&&<Reports txns={txns} bills={bills} billPayments={billPayments} cats={cats} catBudgets={catBudgets} goals={goals} vacations={vacations} vacationTxns={vacationTxns} settings={settings}/>}
-        {view==="cashflow"&&<CashFlowForecast txns={txns} bills={bills} billPayments={billPayments} expected={expected} accounts={accounts} settings={settings}/>}
+        {view==="cashflow"&&<CashFlowForecast txns={txns} bills={bills} billPayments={billPayments} expected={expected} accounts={accounts} settings={settings} catBudgets={catBudgets} cats={cats}/>}
         {view==="debt"&&<DebtTracker debts={debts} onSaveDebts={saveDebts}/>}
         {view==="subscriptions"&&<SubscriptionManager subscriptions={subscriptions} onSave={saveSubscriptions} txns={txns}/>}
         {view==="tax"&&<TaxTracker txns={txns} taxItems={taxItems} onSaveTaxItems={saveTaxItems} settings={settings}/>}
@@ -7972,12 +10375,40 @@ export default function App(){
         {view==="wishlist"&&<WishlistPage wishlist={wishlist} onSave={saveWishlist} txns={txns} goals={goals} onSaveGoals={saveGoals}/>}
         {view==="mortgage"&&<MortgageCalculator accounts={accounts} onSaveAccounts={saveAccounts}/>}
         {view==="household"&&<Household members={members} onSaveMembers={saveMembers} txns={txns} onSaveTxns={saveTxns} splits={splits} onSaveSplits={saveSplits} settlements={settlements} onSaveSettlements={saveSettlements}/>}
-        {view==="settings"&&<Settings settings={settings} onSave={saveSettings} authConfig={authConfig} onSaveAuthConfig={saveAuthConfig}/>}
+        {view==="settings"&&<Settings settings={settings} onSave={saveSettings} authConfig={authConfig} onSaveAuthConfig={saveAuthConfig} onStartTutorial={()=>{setView("dashboard");setShowTutorial(true);}}/>}
         {view==="datamodel"&&settings.devMode&&<DataModel schema={schema} onSave={saveSchema}/>}
-        {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages}/>}
+        {view==="toolcoverage"&&settings.devMode&&<ToolCoveragePanel/>}
+        {view==="insights"&&<Insights schema={schema} settings={settings} onNavigate={setView} widgets={insightWidgets} onSetWidgets={setInsightWidgets} messages={insightMessages} onSetMessages={setInsightMessages} discreteMode={discreteMode}/>} 
+        </div>{/* end inner padding div */}
       </div>
-      <GlobalChat view={view} onNavigate={setView} settings={settings} inDepthMode={inDepthMode} onSetInDepthMode={setInDepthMode} selectedItems={selectedItems} onSetSelectedItems={setSelectedItems} open={globalChatOpen} onSetOpen={setGlobalChatOpen}/>
+      <GlobalChat view={view} onNavigate={setView} settings={settings} schema={schema} inDepthMode={inDepthMode} onSetInDepthMode={setInDepthMode} selectedItems={selectedItems} onSetSelectedItems={setSelectedItems} open={globalChatOpen} onSetOpen={setGlobalChatOpen} discreteMode={discreteMode}/>
+      {discreteAuth.open&&(
+        <div style={{position:"fixed",inset:0,zIndex:10000,background:"rgba(15,23,42,0.45)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{width:"100%",maxWidth:420,background:T.surface,borderRadius:18,boxShadow:T.shadowMd,border:"1px solid "+T.border,padding:"22px 22px 18px"}}>
+            <div style={{fontSize:16,fontWeight:800,color:T.tx1,marginBottom:8}}>Confirm discrete mode change</div>
+            <div style={{fontSize:13,color:T.tx3,lineHeight:1.6,marginBottom:14}}>Use Touch ID / fingerprint if available, or enter your current PIN.</div>
+            <input
+              type="password"
+              inputMode="numeric"
+              value={discreteAuth.pin}
+              onChange={e=>setDiscreteAuth(p=>({...p,pin:e.target.value.replace(/\D/g,"").slice(0,6),error:""}))}
+              placeholder="Current PIN"
+              style={{...IS,marginBottom:8,textAlign:"center",letterSpacing:6,fontFamily:"monospace"}}
+              onKeyDown={e=>{if(e.key==="Enter") submitDiscreteAuth(); if(e.key==="Escape") closeDiscreteAuth();}}
+              autoFocus
+            />
+            {discreteAuth.error&&<div style={{fontSize:12,color:T.red,background:T.redBg,border:"1px solid #fecaca",borderRadius:8,padding:"8px 10px",marginBottom:10}}>{discreteAuth.error}</div>}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={submitDiscreteAuth} disabled={discreteAuth.busy} style={{flex:1,padding:"9px 12px",borderRadius:10,border:"none",background:T.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:discreteAuth.busy?"not-allowed":"pointer",fontFamily:"inherit",opacity:discreteAuth.busy?0.7:1}}>{discreteAuth.busy?"Verifying...":"Continue"}</button>
+              <button onClick={closeDiscreteAuth} style={{padding:"9px 14px",borderRadius:10,border:"1px solid "+T.border,background:"transparent",color:T.tx2,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+    </DepthCtx.Provider>
     </>
+    </ErrorBoundary>
+    </DiscreteModeCtx.Provider>
   );
 }

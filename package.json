@@ -4,7 +4,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "dev": "concurrently \"vite\" \"nodemon --watch server --ext js server/index.js\"",
+    "dev": "npm rebuild better-sqlite3 --silent && concurrently \"vite\" \"nodemon --watch server --ext js server/index.js\"",
     "build": "vite build",
     "start": "node server/index.js",
     "test": "vitest run",
@@ -17,7 +17,7 @@
     "electron:build:linux": "vite build && electron-builder --linux --x64",
     "electron:build:all": "vite build && electron-builder --mac --win --linux",
     "update:local": "bash scripts/local-update.sh",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps && npm rebuild better-sqlite3"
   },
   "build": {
     "appId": "com.cashheap.app",
