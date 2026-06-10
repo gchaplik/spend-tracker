@@ -1,7 +1,6 @@
 # CashHeap
 
-A local-first personal finance app for macOS, Windows, and Linux. All your data stays on your machine — no cloud sync, no subscriptions, no accounts.
-
+A local-first personal finance app for macOS, Windows, and Linux. 
 ---
 
 ## Features
