@@ -50,4 +50,7 @@ export const DEFAULT_SETTINGS = {
   viewShortcuts:{},
   pinnedQueries:[],
   catRules:[],
+  catRollover:{},
+  merchantNorms:[],
+  zeroBudget:false,
 };

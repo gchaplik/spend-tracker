@@ -1,10 +1,12 @@
-# CashHeap — Claude Context
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this app is
 
-CashHeap is a local-first personal finance desktop app built with Electron. All data lives in a local SQLite database (`spend.db`). There is no backend cloud service — the Express server runs as a child process inside Electron.
+CashHeap is a local-first personal finance desktop app built with Electron. All data lives in a local SQLite database (`spend.db`). There is no backend cloud service — the Next.js server runs inside Electron on port 3000.
 
-The React UI is split across `src/SpendTracker.jsx` (root app shell, ~400 lines) plus 44 feature files in `src/views/`, `src/components/`, `src/auth/`, and `src/utils/`. Heavy views are lazy-loaded with React.lazy.
+The React UI is split across `src/SpendTracker.jsx` (root app shell) plus feature files in `src/views/`, `src/components/`, `src/auth/`, and `src/utils/`. Heavy views are lazy-loaded with React.lazy.
 
 ---
 
@@ -14,8 +16,8 @@ The React UI is split across `src/SpendTracker.jsx` (root app shell, ~400 lines)
 |---|---|
 | UI | React 19, Recharts, all inline styles using design tokens (`T` object) |
 | Desktop shell | Electron 32 — `electron/main.mjs` |
-| Web framework | Next.js 16 (App Router) on port 3000 — replaces Vite + Express |
-| API routes | `app/api/` — Next.js route handlers (replaces `server/routes/`) |
+| Web framework | Next.js 16 (App Router) on port 3000 |
+| API routes | `app/api/` — Next.js route handlers |
 | Database | SQLite via better-sqlite3 — `server/db/index.js` |
 | DB init | `instrumentation.js` — runs `migrate()` + seed once on server start |
 | DAL | `server/dal/` — one file per entity (holdings, etc.) |
@@ -23,84 +25,70 @@ The React UI is split across `src/SpendTracker.jsx` (root app shell, ~400 lines)
 
 ### Key files
 
-- `src/SpendTracker.jsx` — entire React app
+- `src/SpendTracker.jsx` — root app shell, all state, all navigation
 - `src/constants/index.js` — NAV_ITEMS, DEFAULT_CATS, DEFAULT_SETTINGS, COLORS, CADENCES
 - `src/utils/formatters.js` — fmt, fmtUSD, today, uid, etc.
 - `src/utils/dateUtils.js` — buildDates, _df, _label, _sqlDf
+- `src/utils/catLearn.js` — merchant→category learning (localStorage, threshold 3)
 - `src/api/client.js` — fetchData, patchData
 - `server/db/index.js` — migrate(), seedFromJson()
-- `server/dal/holdings.js` — upsertHolding, replaceAllHoldings, etc.
-- `server/routes/data.js` — GET/POST /api/data, PATCH /api/holdings/prices
-- `server/routes/sql.js` — POST /api/db/sql (Jarvis query endpoint)
+- `app/api/pdf-parse/route.js` — PDF bank statement parser (PDFParse class from pdf-parse)
 
 ### Design tokens
 
-All styles reference a `T` object defined near the top of `SpendTracker.jsx`:
+All styles reference a `T` object from `src/theme/tokens.jsx`:
 
 ```js
 const T = {
   bg, surface, overlay, border,
   tx1, tx2, tx3,           // stone-900 / 600 / 400
-  accent, accentBg, accentMid,  // indigo
+  accent, accentBg, accentMid,
   green, greenBg, red, redBg, amber, amberBg,
   shadow, shadowMd,
   r: 8, rCard: 12,
 };
 ```
 
-Shared style helpers: `CA` (card), `IS` (input), `Btn` (button variants), `Fld` (field label).
+Shared helpers: `CA` (card style), `IS` (input style), `Btn` (button variants), `Fld` (field label).
 
 ---
 
 ## Jarvis AI
 
-Jarvis is a GlobalChat FAB component. It uses a schema-driven SQL tool library to query the local database and synthesise plain-English answers.
-
-### Key internals
-
-- `TOOL_LIBRARY` — named functions that return `__SQL__: <query>` markers
-- `buildSchemaQuery(view, measureKey, opts)` — schema-driven SQL builder using `DEFAULT_SCHEMA`
-- `_expUnion(df, cf)` — UNION ALL of `transactions WHERE type='expense'` and `vacation_txns`
-- `execTool(name, args)` — runs `__SQL__:` markers against `/api/db/sql`
-- `extractFacts(toolResults)` — flattens results into `{key, value}` pairs
-- `callSynthesis(question, toolResults)` — LLM synthesis with number validation
-- `callLLM(msgs, sys)` — routes to OpenRouter / Gemini / DeepSeek / Ollama
-- `autoWidget(id, label, result, preferredType)` — renders tool results as metric/bar/pie/table widgets
-- `DOMAIN_PATTERNS` + `classifyQuery` — keyword-based domain routing
-- `SelectableWrapper` + `DepthCtx` — in-depth mode: clicking dashboard cards attaches data to queries
-
-### LLM number validation
-
-After synthesis, numbers in the LLM reply are checked against the set of values returned by tools. Any response containing an invented number (not within $0.02 of a known value) is replaced with the raw fact value. This prevents hallucinated totals.
-
-### Error handling
-
-Three try/catch boundaries ensure a missing or broken API key degrades gracefully:
-1. Around `callSynthesis` — falls back to raw fact string
-2. Around the LLM fallback routing path — shows a "check your settings" message
-3. Around `callInsightsLLM` — insights panel fails silently
+- `TOOL_LIBRARY` — named functions returning `__SQL__:` markers
+- `callLLM(msgs, sys, onChunk)` — routes to OpenRouter/Gemini/DeepSeek/Ollama; streams when onChunk provided
+- `callSynthesis(question, toolResults, onChunk, history)` — synthesis with last-10-turn context
+- `autoWidget` — renders results as metric/bar/pie/table widgets
+- Persistent chat: `localStorage["ch_jarvis_msgs"]` (last 50 messages)
+- Pinned queries: `settings.pinnedQueries` — auto-run on first open per session
 
 ---
 
 ## Database
 
-SQLite file: `spend.db` (project root in dev, OS user-data dir in production).
+SQLite: `spend.db`. Tables: `transactions`, `bills`, `bill_payments`, `vacations`, `vacation_txns`, `holdings`, `account_history`, `expected_income`, `cat_budgets`, `goals`, `settings`, `accounts`
 
-### Tables
-
-`transactions`, `bills`, `bill_payments`, `vacations`, `vacation_txns`, `holdings`, `account_history`, `expected_income`, `cat_budgets`, `goals`, `settings`, `accounts`
-
-### Migrations
-
-`server/db/index.js` exports `migrate()`, which runs a numbered `MIGRATIONS` array against a `schema_migrations` table (version INTEGER PRIMARY KEY). Each migration runs exactly once in order. New migrations go in the array; SQLite doesn't support `ADD COLUMN IF NOT EXISTS`, so use `PRAGMA table_info` checks inside migration functions.
+Migrations: numbered `MIGRATIONS` array in `server/db/index.js`, tracked in `schema_migrations`. New migrations append to the array. Use `PRAGMA table_info` checks since SQLite doesn't support `ADD COLUMN IF NOT EXISTS`.
 
 ---
 
-## Known issues / decisions
+## Known decisions
 
-- `paidBillsTotal` was removed from the dashboard spending formula — bill payments are already captured as expense transactions, so including it caused double-counting.
-- Portfolio `currentPrice` is persisted to DB on every Stocks tab load via `PATCH /api/holdings/prices`. Jarvis uses `COALESCE(currentPrice, costBasis)` in portfolio SQL so queries work even when prices haven't been fetched yet.
-- `_expUnion` must not reference columns that don't exist in `vacation_txns` (e.g. `taxDeductible`, `originalAmountUSD`). Only use columns present in both tables.
+- Bill payments are already captured as expense transactions — don't double-count them in spending totals.
+- `_expUnion` unions `transactions` and `vacation_txns` — only reference columns present in both tables.
+- `nfmt(v)` is the discrete-mode-aware formatter. Never use `fmt()` directly in views. In `useAlerts`, read `settings.discreteMode` synchronously (not `window.__discreteMode`) since `useMemo` runs before effects.
+- Category rules (`settings.catRules`) and learned categories (`ch_cat_learn` localStorage) are both applied in `applyAutoCategory()` in CSVImport during preview.
+- Bill auto-matching runs after CSV import via `autoMatchBills()` in SpendTracker.
+- Confirming expected income with a cadence auto-generates the next instance in `confirmPayment()`.
+- `settings.catRollover` (`{cat: bool}`) — per-category rollover flags; Dashboard computes effective budgets with carryover.
+- `settings.merchantNorms` (`[{id, pattern, replacement}]`) — display-layer name normalization applied in History rows.
+- `settings.zeroBudget` (`bool`) — zero-based budget mode shown in Categories with unallocated remainder.
+- `History` accepts `subscriptions` (for ↻ badge) and `merchantNorms` (for display normalization) props.
+- Split transaction: `SplitModal` in History removes original and inserts multiple transactions.
+- Duplicate manager in History: O(n²) scan over last 600 singles; dismissedDupes stored in component state.
+- RRSP/TFSA tracker in Reports: `RrspTfsaTracker` component backed by `ch_rrsp_tfsa` localStorage.
+- Net worth milestones: `prevNetWorthRef` in SpendTracker fires toast + Notification when crossing $10k/$25k/$50k etc.
+- Web Notifications fired on app launch (bills ≤3 days, budget ≥80%/100%, weekly digest Sundays) and on saveTxns for large amounts.
 
 ---
 
@@ -108,107 +96,51 @@ SQLite file: `spend.db` (project root in dev, OS user-data dir in production).
 
 ```bash
 npm run dev           # Next.js at localhost:3000
-npm run electron:dev  # native Electron window (loads localhost:3000)
+npm run electron:dev  # native Electron window
 npm test              # Vitest unit + integration tests
+npm run electron:build # production build
 ```
 
 ---
 
 ## Roadmap
 
-Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
+Status: `[ ]` not started · `[~]` in progress · `[x]` done
 
-### Phase 1 — Foundation (Jul 2026)
+### Phase A — Cleanup & Quick Wins
 
-- [x] Split `SpendTracker.jsx` into feature modules — 44 files in `src/views/`, `src/components/`, `src/auth/`, `src/utils/`
-- [x] Lazy-load heavy views with React.lazy (cuts initial bundle ~80%)
-- [x] Move shared design tokens to `src/theme/tokens.jsx`
-- [x] **Migrate from Vite to Next.js** — `app/` directory with API routes replacing Express; `instrumentation.js` handles DB init; Electron loads port 3000.
-- [x] Automated SQLite backup on launch (keep last 7 copies)
-- [x] Data export / import v2 — JSON backup/restore in Reports with merge-by-ID strategy
-- [x] DB schema versioning — numbered `MIGRATIONS` array in `server/db/index.js`, tracked in `schema_migrations` table
-- [x] Vitest unit tests for all TOOL_LIBRARY functions (`src/__tests__/utils/toolLibrary.test.js`)
-- [x] API integration tests with Supertest (`src/__tests__/server/api.test.js`)
-- [x] E2E smoke test with Playwright — `e2e/smoke.spec.js`; run with `npm run test:e2e` (requires `npx playwright install chromium` once)
-- [x] Settings keyword search — `show(...keywords)` helper in `src/views/Settings.jsx`
-- [x] ⌘K command palette — `src/components/CommandPalette.jsx`; ⌘K/Ctrl+K global shortcut
+- [x] Delete stale `src/views/* 2.jsx` backup files
+- [x] Dashboard: month-over-month spending delta cards (% change vs last month per category)
+- [x] Dashboard: spending velocity indicator (on-pace / over-pace / under-pace for the month)
+- [x] Quick-add transaction (Cmd+N) — minimal inline form, auto-saves and stays on current view
+- [x] History: bulk category reassign — select multiple transactions, set category in one action
+- [x] History: inline transaction tags (free-form, searchable, stored in `note` field with `#tag` syntax)
 
-### Phase 2 — Jarvis 2.0 (Aug 2026)
+### Phase B — Smart Budgets
 
-- [x] Streaming responses from OpenRouter/DeepSeek (eliminates 3s spinner)
-- [x] True multi-turn context — keep last 10 turns in synthesis prompt
-- [x] Tool retry with clarification when SQL returns 0 rows
-- [x] Pinned / favourite queries — auto-run on Dashboard load
-- [x] Proactive alerts on app open (budget limits, bills due, spending spikes)
-- [x] Persistent insight history — scroll back past session boundary
-- [x] Subscription detection tool
-- [x] Goal projection tool — project completion dates from savings rate
+- [x] Budget rollover — unused budget carries forward to next month (toggle per category, stored in `settings.catRollover`)
+- [x] Budget suggestions — analyse 3-month average spend, suggest budget amounts with one-click apply
+- [x] Overspend breakdown — when a category exceeds budget, show the top transactions that drove it
+- [x] Zero-based budget mode — allocate every dollar of expected income to categories; show unallocated remainder
 
-### Phase 3 — Data In (Sep 2026)
+### Phase C — Analytics & Reporting
 
-- [x] Persistent CSV column mappings per bank/source
-- [x] PDF bank statement parser (common Canadian bank formats)
-- [x] Duplicate detection on import (flag same date + amount ± 1 day)
-- [x] Merchant → category rules engine ("if merchant contains Sobeys → Groceries")
-- [x] LLM-assisted categorisation with user review step
-- [x] Category learning from edits (auto-suggest after 3 manual recategorisations)
-- [x] Auto-generate future instances from cadence field
-- [x] Bill → transaction auto-matching (mark bill paid when transaction matches)
+- [x] Year-over-year chart — bar chart comparing monthly spend/income current year vs prior year
+- [x] PDF monthly report — print-to-PDF via window.print() — Print/PDF button in Reports
+- [x] RRSP / TFSA room tracker — log contributions, compute remaining room, flag over-contributions
+- [x] Savings rate tracker — % of income saved each month, rolling 12-month chart
+- [x] Net worth milestones — toast when net worth crosses a round number ($10k, $25k, etc.)
 
-### Phase 4 — Mobile & Sync (Oct 2026)
+### Phase D — Transaction Intelligence
 
-- [ ] PWA manifest + service worker (offline reads, queued writes)
-- [ ] Mobile-responsive layout (bottom nav tab bar on narrow screens)
-- [ ] iOS Share Sheet extension (share receipt → CashHeap with OCR pre-filled)
-- [ ] Bill due reminders — native Electron OS toast 3 days before due date
-- [ ] Budget overage notifications (at 80% and 100% of monthly budget)
-- [ ] Weekly spending summary notification (Sunday)
-- [ ] iCloud Drive sync — save `spend.db` to Mobile Documents folder
-- [ ] Dropbox / custom path sync
-- [ ] Conflict resolution UI for offline-then-sync scenarios
+- [x] Split transaction — divide one transaction across multiple categories with individual amounts
+- [x] Merchant name normalizer — clean raw bank strings using a rules table in Categories; applied in History display
+- [x] Duplicate manager — scan for same-merchant/same-amount/±3-day dupes; dedupe UI in History header
+- [x] Subscription badge — transactions matching a known subscription (from SubscriptionManager) show a ↻ recurring icon
 
-### Phase 5 — Sharing & Export (Nov 2026)
+### Phase E — Notifications (Electron)
 
-- [ ] Shared budget spaces — separate transaction pool, both partners see totals
-- [ ] Partner read-only dashboard link (30-day expiry)
-- [ ] Split transaction tool — mark as shared with ratio, track who owes whom
-- [ ] PDF monthly report (income, spending by category, net, budget vs actual)
-- [ ] Tax summary export — transactions by deduction category, CSV for T1 filing
-- [ ] Accountant share package — zip of PDF + transactions CSV + receipts folder
-- [ ] Shared savings goals — both partners contribute, bar shows each share
-
-### Phase 6 — Advanced Analytics (Dec 2026)
-
-- [ ] What-if scenario builder — reruns projections with adjusted assumptions
-- [ ] Debt payoff simulator — avalanche vs snowball with extra payment sliders
-- [ ] Mortgage extra payment calculator
-- [ ] RRSP room tracker — contribution room from income, remaining room + tax impact
-- [ ] TFSA room tracker — cumulative limit by year, over-contribution alert
-- [ ] FHSA tracking — annual $8K / lifetime $40K limit, contribution log
-- [ ] Annual financial report auto-generated Dec 31
-- [ ] 12-month rolling category charts with year-over-year overlay
-- [ ] Net worth milestone tracker
-
----
-
-## Next.js migration notes
-
-### Why
-
-- Vite + Electron works but couples the app to the desktop. Next.js enables a hosted web version of CashHeap alongside the Electron build, which is needed for mobile access and the shared budget features in Phase 4–5.
-- Next.js API routes replace the current Express server cleanly. The SQLite DAL layer (`server/dal/`) can be imported directly into Next.js route handlers.
-- File-based routing replaces the current single-page view-switcher (`view` state in `SpendTracker.jsx`), which is one of the main reasons the file has grown to 10k lines.
-
-### Plan
-
-1. **Scaffold Next.js app** alongside the current Vite app (keep both runnable during migration)
-2. **Move API routes** — `server/routes/*.js` → `app/api/*/route.js`; DAL and DB layers import unchanged
-3. **Move views one at a time** — extract each view component from `SpendTracker.jsx` into `app/(views)/[view]/page.tsx`
-4. **Electron integration** — use `next build` + `next export` (static) for the Electron shell, or run the Next.js dev server as the Electron renderer in dev mode
-5. **Cut over** — remove Vite config and old Express server once all views are migrated
-
-### Risks
-
-- `better-sqlite3` is a native Node module — it cannot run in the browser. API routes must handle all DB access; client components must call the API. This is the same constraint as today (Express server), so the pattern is already established.
-- Electron + Next.js requires either static export (`output: 'export'`) or running a local Next.js server as the renderer. Static export loses API routes, so the recommended approach is to keep Next.js running as a local server inside Electron (same as Express today).
-- The existing single-file architecture means extraction will surface many implicit dependencies between components. Plan for 4–6 weeks of careful extraction before cutting over.
+- [x] Native OS toast for bill due in ≤3 days — fires on app launch via Web Notification API
+- [x] Budget overage toast — triggers at 80% and 100% of monthly category budget (on launch)
+- [x] Large transaction toast — fires when a new transaction exceeds `settings.largeTransactionAlert`
+- [x] Weekly digest — Sunday summary notification: top spending category, weekly total

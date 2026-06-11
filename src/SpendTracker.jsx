@@ -19,6 +19,7 @@ import { WhatsNewModal, UpdateBanner } from "./auth/WhatsNew.jsx";
 import { MountainLogo } from "./auth/MountainLogo.jsx";
 import { GlobalChat } from "./views/jarvis/GlobalChat.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
+import { QuickAdd } from "./components/QuickAdd.jsx";
 import { TabBar } from "./components/TabBar.jsx";
 import { matchesCombo } from "./utils/shortcuts.js";
 import { buildDates } from "./utils/dateUtils.js";
@@ -104,6 +105,7 @@ export default function App(){
   const [selectedItems,setSelectedItems]=useState([]);
   const [globalChatOpen,setGlobalChatOpen]=useState(false);
   const [cmdPaletteOpen,setCmdPaletteOpen]=useState(false);
+  const [quickAddOpen,setQuickAddOpen]=useState(false);
   const [tabs,setTabs]=useState(()=>{
     try{
       const s=JSON.parse(localStorage.getItem("ch_tabs")||"null");
@@ -268,6 +270,7 @@ export default function App(){
     const inInput=()=>{const t=document.activeElement?.tagName;return t==="INPUT"||t==="TEXTAREA"||t==="SELECT"||document.activeElement?.isContentEditable;};
     const onKey=(e)=>{
       if((e.metaKey||e.ctrlKey)&&e.key==="k"){e.preventDefault();setCmdPaletteOpen(o=>!o);return;}
+      if((e.metaKey||e.ctrlKey)&&e.key==="n"&&!e.shiftKey){e.preventDefault();setQuickAddOpen(true);return;}
       if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&e.key==="w"){e.preventDefault();closeTab(view);return;}
       if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key==="T"){e.preventDefault();reopenLastClosedTab();return;}
       if(e.key==="Tab"&&e.shiftKey&&!e.metaKey&&!e.ctrlKey&&!inInput()){
@@ -290,7 +293,16 @@ export default function App(){
     if(!settings.devMode && view==="toolcoverage") setView("dashboard");
   },[settings.devMode,view]);
 
-  const saveTxns=t=>{setTxns(t);saveServerData({txns:t});};
+  const saveTxns=t=>{
+    const threshold=settings.largeTransactionAlert||500;
+    if(Notification.permission==="granted"){
+      const newTxns=t.filter(x=>!txns.find(y=>y.id===x.id));
+      newTxns.filter(x=>x.type==="expense"&&x.amount>=threshold).forEach(x=>{
+        new Notification("Large Transaction",{body:`${x.merchant||x.source}: ${fmt(x.amount)}`});
+      });
+    }
+    setTxns(t);saveServerData({txns:t});
+  };
   const saveCats=c=>{setCats(c);saveServerData({cats:c});};
   const saveExpected=e=>{setExpected(e);saveServerData({expected:e});};
   const saveCatBudgets=b=>{setCatBudgets(b);saveServerData({catBudgets:b})};
@@ -357,6 +369,73 @@ export default function App(){
     }catch(e){setDiscreteAuth(p=>({...p,busy:false,error:e.message||"Could not verify PIN"}));}
   };
   const saveSchema=s=>{setSchema(s);saveServerData({schema:s})};
+
+  // Net worth milestones — toast when net worth crosses a round number
+  const MILESTONES=[10000,25000,50000,100000,250000,500000,1000000];
+  const prevNetWorthRef=useRef(null);
+  useEffect(()=>{
+    if(!ready||accounts.length===0) return;
+    const ASSET_TYPES=["chequing","savings","investment","other"];
+    const assets=accounts.filter(a=>ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+    const liab=accounts.filter(a=>!ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
+    const nw=assets-liab;
+    const prev=prevNetWorthRef.current;
+    if(prev!==null&&prev!==nw){
+      const crossed=MILESTONES.filter(m=>(prev<m&&nw>=m)||(prev>=-m&&nw<=-m));
+      if(crossed.length>0){
+        const m=crossed[0];
+        const sign=nw>=0?"+":"-";
+        showToast(`${sign} Net worth crossed ${fmt(Math.abs(m))}!`);
+        if(Notification.permission==="granted") new Notification("CashHeap",{body:`Net worth reached ${sign}${fmt(Math.abs(m))}`});
+      }
+    }
+    prevNetWorthRef.current=nw;
+  },[accounts,ready]);
+
+  // OS notifications on app launch
+  const notifFiredRef=useRef(false);
+  useEffect(()=>{
+    if(!ready||notifFiredRef.current) return;
+    notifFiredRef.current=true;
+    if(typeof Notification==="undefined") return;
+    const requestAndFire=()=>{
+      const curMonth=today().slice(0,7);
+      const msgs=[];
+      // Bills due ≤3 days
+      const todayMs=new Date().setHours(0,0,0,0);
+      const threeMs=3*86400000;
+      bills.filter(b=>b.active!==false&&!billPayments.some(p=>p.billId===b.id&&p.month===curMonth)).forEach(b=>{
+        if(!b.dueDay) return;
+        const due=new Date(new Date().getFullYear(),new Date().getMonth(),b.dueDay).setHours(0,0,0,0);
+        const diff=due-todayMs;
+        if(diff>=0&&diff<=threeMs) msgs.push({title:"Bill Due Soon",body:`${b.name} — ${fmt(b.amount)} due in ${Math.round(diff/86400000)} day${diff===0?"":"s"}`});
+      });
+      // Budget overage (80% and 100%)
+      const mt=txns.filter(t=>t.type==="expense"&&t.date?.startsWith(curMonth));
+      Object.entries(catBudgets).forEach(([cat,budget])=>{
+        if(!budget) return;
+        const spent=mt.filter(t=>t.category===cat).reduce((s,t)=>s+t.amount,0);
+        const pct=spent/budget;
+        if(pct>=1) msgs.push({title:"Budget Exceeded",body:`${cat}: ${fmt(spent)} of ${fmt(budget)} budget`});
+        else if(pct>=0.8) msgs.push({title:"Budget Warning",body:`${cat} is at ${Math.round(pct*100)}% of budget`});
+      });
+      // Weekly digest (Sundays)
+      if(new Date().getDay()===0){
+        const weekAgo=new Date();weekAgo.setDate(weekAgo.getDate()-7);
+        const weekStr=weekAgo.toISOString().split("T")[0];
+        const weekTxns=txns.filter(t=>t.type==="expense"&&t.date>=weekStr&&t.date<=today());
+        const weekTotal=weekTxns.reduce((s,t)=>s+t.amount,0);
+        if(weekTotal>0){
+          const topCat=Object.entries(weekTxns.reduce((m,t)=>{m[t.category||"Other"]=(m[t.category||"Other"]||0)+t.amount;return m;},{})).sort((a,b)=>b[1]-a[1])[0];
+          msgs.push({title:"Weekly Digest",body:`This week: ${fmt(weekTotal)} spent${topCat?` · Top: ${topCat[0]} (${fmt(topCat[1])})`:""}` });
+        }
+      }
+      msgs.forEach(({title,body})=>new Notification(title,{body}));
+    };
+    if(Notification.permission==="granted") requestAndFire();
+    else if(Notification.permission!=="denied") Notification.requestPermission().then(p=>{if(p==="granted")requestAndFire();});
+  },[ready]);
+
   const enableAlerts=()=>saveSettings({...settings,alertsEnabled:true});
   const disableAlerts=()=>{saveSettings({...settings,alertsEnabled:false});setDismissedAlerts(new Set());};
   const dismissAlert=id=>setDismissedAlerts(p=>new Set([...p,id]));
@@ -459,6 +538,7 @@ export default function App(){
       {showTutorial&&<Suspense fallback={null}><TutorialModal onClose={()=>{setShowTutorial(false);if(!tutorialSeen){setTutorialSeen(true);saveServerData({tutorialSeen:true});}}} onNavigate={v=>{setView(v);}}/></Suspense>}
       {toast&&<Toast msg={toast.msg} undoFn={toast.undoFn} onClose={dismissToast}/>}
       <CommandPalette open={cmdPaletteOpen} onClose={()=>setCmdPaletteOpen(false)} onNavigate={v=>{setView(v);}} devMode={settings.devMode}/>
+      {quickAddOpen&&<QuickAdd cats={cats} onSave={t=>{saveTxns([...txns,t]);setQuickAddOpen(false);showToast("Transaction added");}} onClose={()=>setQuickAddOpen(false)}/>}
 
       <Sidebar view={view} onNavigate={setView} favourites={favourites} onToggleFavourite={toggleFavourite} onReorderFavourites={next=>{setFavourites(next);saveServerData({favourites:next});}} pendingCount={pendingCount} unpaidBillCount={unpaidBillCount} devMode={settings.devMode} onShowWhatsNew={()=>setShowWhatsNew(v=>!v)} onSignOut={authConfig.pinHash?()=>{setIsUnlocked(false);setIdleBlur(false);}:undefined} shortcuts={settings.viewShortcuts||{}}/>
 
@@ -497,14 +577,14 @@ export default function App(){
         {view==="upload"&&<UploadReceipts cats={cats} receiptFPs={receiptFPs} onSaveFPs={saveReceiptFPs} onSave={t=>{saveTxns([...txns,...t]);setHistoryMonth(t[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}} discreteMode={discreteMode}/>}
         {view==="manual"&&<RecurringForm title="Add Expense" type="expense" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
         {view==="income"&&<RecurringForm title="Add Income" type="income" cats={cats} onSaveMultiple={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));setView("history");}}/>}
-        {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast}/>}
+        {view==="history"&&<History txns={visibleTxns} cats={cats} onUpdate={saveTxns} fMonth={historyMonth} setFMonth={setHistoryMonth} onToast={showToast} subscriptions={subscriptions} merchantNorms={settings.merchantNorms||[]}/>}
         {view==="bills"&&<Bills bills={bills} billPayments={billPayments} onSaveBills={saveBills} onSaveBillPayments={saveBillPayments} onTogglePaid={toggleBill} cats={cats}/>}
         {view==="goals"&&<Goals goals={goals} onSaveGoals={saveGoals}/>}
         {view==="networth"&&<NetWorth accounts={accounts} accountHistory={accountHistory} onSaveAccounts={saveAccounts} onSaveAccountHistory={saveAccountHistory} holdings={holdings} stockPrices={stockPrices} fxRate={fxRate}/>}
         {view==="stocks"&&<Stocks holdings={holdings} onSaveHoldings={saveHoldings} onPricesUpdate={prices=>{setStockPrices(prices);const flat=Object.fromEntries(Object.entries(prices).map(([t,v])=>[t,v.price??v]));fetch("/api/holdings/prices",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({prices:flat})}).catch(()=>{});}} onFxRateUpdate={setFxRate}/>}
         </>);})()}
         {view==="vacations"&&<Vacations vacations={vacations} vacationTxns={vacationTxns} onSaveVacations={saveVacations} onSaveTxns={saveVacationTxns}/>}
-        {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets} catIcons={catIcons} onUpdateCatIcons={saveCatIcons} catRules={settings.catRules||[]} onUpdateCatRules={r=>saveSettings({...settings,catRules:r})}/>}
+        {view==="categories"&&<Categories cats={cats} onUpdate={saveCats} catBudgets={catBudgets} onUpdateBudgets={saveCatBudgets} catIcons={catIcons} onUpdateCatIcons={saveCatIcons} catRules={settings.catRules||[]} onUpdateCatRules={r=>saveSettings({...settings,catRules:r})} catRollover={settings.catRollover||{}} onUpdateCatRollover={r=>saveSettings({...settings,catRollover:r})} merchantNorms={settings.merchantNorms||[]} onUpdateMerchantNorms={r=>saveSettings({...settings,merchantNorms:r})} txns={txns} expectedMonthlyIncome={expected.filter(e=>e.confirmed&&e.expectedDate&&e.expectedDate.startsWith(today().slice(0,7))).reduce((s,e)=>s+e.amount,0)} settings={settings}/>}
         {view==="import"&&<CSVImport txns={txns} cats={cats} catRules={settings.catRules||[]} onImport={arr=>{saveTxns([...txns,...arr]);setHistoryMonth(arr[0]?.date?.slice(0,7)||today().slice(0,7));autoMatchBills(arr,[...txns,...arr]);}}/>}
         {view==="reports"&&<Reports txns={txns} bills={bills} billPayments={billPayments} cats={cats} catBudgets={catBudgets} goals={goals} vacations={vacations} vacationTxns={vacationTxns} settings={settings}/>}
         {view==="cashflow"&&<CashFlowForecast txns={txns} bills={bills} billPayments={billPayments} expected={expected} accounts={accounts} settings={settings} catBudgets={catBudgets} cats={cats}/>}

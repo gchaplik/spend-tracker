@@ -114,11 +114,31 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
   const totalExp=mExp.reduce((s,e)=>s+e.amount,0);
   const projNet=(actualIncome+pendingExp)-spending;
   const actNet=actualIncome-spending;
+  // Month-over-month (include vacation in prev month too)
+  const prevMonth=(()=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-1);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
+  const ptxns=txns.filter(t=>t.date&&t.date.startsWith(prevMonth));
+  const prevIncome=ptxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+  const prevVacSpend=vacationTxns.filter(t=>t.date&&t.date.startsWith(prevMonth)).reduce((s,t)=>s+t.amount,0);
+  const prevSpending=ptxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)+prevVacSpend;
+  const prevActNet=prevIncome-prevSpending;
+  // Effective budgets: base + rollover carry-forward if enabled per category
+  const effectiveBudgets=(()=>{
+    const result={...catBudgets};
+    const rollover=settings?.catRollover||{};
+    cats.forEach(cat=>{
+      if(rollover[cat]&&catBudgets[cat]>0){
+        const prevSpend=ptxns.filter(t=>t.type==="expense"&&t.category===cat).reduce((s,t)=>s+t.amount,0);
+        const carryover=Math.max(0,catBudgets[cat]-prevSpend);
+        if(carryover>0) result[cat]=(result[cat]||0)+carryover;
+      }
+    });
+    return result;
+  })();
   // Category breakdown includes vacation txns (bucketed under their category)
   const vacBycat=vacationTxns.filter(t=>t.date&&t.date.startsWith(month)).reduce((m,t)=>{const c=t.category||"Vacation";m[c]=(m[c]||0)+t.amount;return m;},{});
-  const catData=cats.map(c=>({name:c,amount:mt.filter(t=>t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0)+(vacBycat[c]||0),budget:catBudgets[c]||0})).filter(d=>d.amount>0||d.budget>0).sort((a,b)=>b.amount-a.amount);
+  const catData=cats.map(c=>({name:c,amount:mt.filter(t=>t.type==="expense"&&t.category===c).reduce((s,t)=>s+t.amount,0)+(vacBycat[c]||0),budget:effectiveBudgets[c]||0,hasRollover:!!(settings?.catRollover?.[c]&&(effectiveBudgets[c]||0)>(catBudgets[c]||0))})).filter(d=>d.amount>0||d.budget>0).sort((a,b)=>b.amount-a.amount);
   // Add any vacation categories not in cats list (e.g. "Vacation")
-  Object.entries(vacBycat).forEach(([c,amt])=>{if(!cats.includes(c)&&!catData.find(d=>d.name===c))catData.push({name:c,amount:amt,budget:0});});
+  Object.entries(vacBycat).forEach(([c,amt])=>{if(!cats.includes(c)&&!catData.find(d=>d.name===c))catData.push({name:c,amount:amt,budget:0,hasRollover:false});});
   catData.sort((a,b)=>b.amount-a.amount);
   const trend=Array.from({length:6},(_,i)=>{
     const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-5+i);
@@ -131,16 +151,9 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
   const recent=[...mt].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
   const activeVacations=vacations.filter(v=>v.startDate&&v.startDate.slice(0,7)<=month&&v.endDate&&v.endDate.slice(0,7)>=month);
   const vacSpend=vacSpendMonth;
-  const budgetTotal=Object.values(catBudgets).reduce((s,v)=>s+(v||0),0);
+  const budgetTotal=Object.values(effectiveBudgets).reduce((s,v)=>s+(v||0),0);
   const budgetRemaining=budgetTotal-spending;
   const vacSpendLabel=activeVacations.length>0?activeVacations.map(v=>v.name).join(", "):null;
-  // Month-over-month (include vacation in prev month too)
-  const prevMonth=(()=>{const d=new Date(month+"-02");d.setMonth(d.getMonth()-1);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
-  const ptxns=txns.filter(t=>t.date&&t.date.startsWith(prevMonth));
-  const prevIncome=ptxns.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const prevVacSpend=vacationTxns.filter(t=>t.date&&t.date.startsWith(prevMonth)).reduce((s,t)=>s+t.amount,0);
-  const prevSpending=ptxns.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)+prevVacSpend;
-  const prevActNet=prevIncome-prevSpending;
   const delta=(cur,prev)=>{if(prev===0&&cur===0)return null;const d=cur-prev;const pct=prev!==0?Math.round(Math.abs(d)/Math.abs(prev)*100):null;const up=d>=0;return{d,pct,up};};
   const incomeDelta=delta(actualIncome,prevIncome);
   const spendDelta=delta(spending,prevSpending);
@@ -153,7 +166,22 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
   const yearIncome=yearData.reduce((s,d)=>s+d.Income,0);
   const yearExpenses=yearData.reduce((s,d)=>s+d.Expenses,0);
   const GREEN="#059669", RED="#dc2626", YELLOW="#d97706";
+  // Spending velocity — only meaningful on current month
+  const velocityInfo=(()=>{
+    const isCurrentMonth=month===opts[opts.length-1];
+    if(!isCurrentMonth||spending===0) return null;
+    const now=new Date();
+    const daysInMonth=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+    const pctDone=now.getDate()/daysInMonth;
+    const base=budgetTotal>0?budgetTotal:prevSpending;
+    if(base===0) return null;
+    const ratio=spending/(base*pctDone);
+    if(ratio>1.15) return{label:"Over pace",color:RED,tip:`${Math.round((ratio-1)*100)}% ahead of expected pace`};
+    if(ratio<0.85) return{label:"Under pace",color:GREEN,tip:`${Math.round((1-ratio)*100)}% below expected pace`};
+    return{label:"On pace",color:T.tx3,tip:"Spending on track for the month"};
+  })();
   const [chartTab,setChartTab]=useState("6mo");
+  const [expandedCat,setExpandedCat]=useState(null);
   // Net worth
   const ASSET_TYPES=["chequing","savings","investment","other"];
   const totalAssets=accounts.filter(a=>ASSET_TYPES.includes(a.type)).reduce((s,a)=>s+a.balance,0);
@@ -273,6 +301,7 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
           <div style={{fontSize:26,fontWeight:600,color:RED,lineHeight:1}}>{nfmt(spending)}</div>
           {budgetTotal>0&&<div style={{fontSize:11,marginTop:6,color:budgetRemaining>=0?GREEN:RED}}>{nfmt(Math.abs(budgetRemaining),budgetTotal)} {budgetRemaining>=0?"under budget":"over budget"}</div>}
           {spendDelta&&spendDelta.d!==0&&<div style={{fontSize:11,marginTop:budgetTotal>0?2:6,color:spendDelta.up?RED:GREEN}}>{spendDelta.up?"↑":"↓"} {nfmt(Math.abs(spendDelta.d),spending)} vs last month</div>}
+          {velocityInfo&&<div style={{fontSize:11,marginTop:3,color:velocityInfo.color}} title={velocityInfo.tip}>{velocityInfo.label}</div>}
           {vacSpend>0&&<div style={{fontSize:11,color:T.tx3,marginTop:3}}>+{nfmt(vacSpend,spending)} vacation</div>}
         </div>
         </SelectableWrapper>
@@ -331,14 +360,17 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
             const pct=d.budget>0?Math.min(d.amount/d.budget,1):0;
             const over=d.budget>0&&d.amount>d.budget;
             const warn=d.budget>0&&!over&&d.amount/d.budget>=0.8;
+            const isOpen=expandedCat===d.name;
+            const topTxns=over?[...mt.filter(t=>t.type==="expense"&&t.category===d.name)].sort((a,b)=>b.amount-a.amount).slice(0,3):[];
             return(
               <div key={d.name} style={{marginBottom:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <div onClick={()=>over&&setExpandedCat(isOpen?null:d.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,cursor:over?"pointer":"default"}}>
                   <div style={{display:"flex",alignItems:"center",gap:6}}>
                     <span style={{width:6,height:6,borderRadius:"50%",background:over?RED:COLORS[i%COLORS.length],display:"inline-block",flexShrink:0}}/>
                     <span style={{fontSize:12,color:T.tx2}}>{d.name}</span>
-                    {over&&<span style={{fontSize:10,color:RED,background:T.redBg,padding:"1px 6px",borderRadius:99}}>over</span>}
+                    {over&&<span style={{fontSize:10,color:RED,background:T.redBg,padding:"1px 6px",borderRadius:99}}>over {isOpen?"▲":"▼"}</span>}
                     {warn&&<span style={{fontSize:10,color:YELLOW,background:T.amberBg,padding:"1px 6px",borderRadius:99}}>near</span>}
+                    {d.hasRollover&&<span style={{fontSize:10,color:T.accent,background:T.accentBg,padding:"1px 5px",borderRadius:99}}>+rollover</span>}
                   </div>
                   <div style={{display:"flex",alignItems:"baseline",gap:4}}>
                     <span style={{fontSize:12,fontWeight:500,color:over?RED:T.tx1}}>{nfmt(d.amount,catData.reduce((s,x)=>s+x.amount,0))}</span>
@@ -350,6 +382,17 @@ function Dashboard({txns,expected,cats,catBudgets,catIcons={},month,setMonth,onC
                     ?<div style={{height:"100%",borderRadius:99,width:(pct*100)+"%",background:over?RED:warn?YELLOW:T.accent,transition:"width 0.4s ease"}}/>
                     :<div style={{height:"100%",borderRadius:99,width:"100%",background:T.accentMid+"66"}}/>}
                 </div>
+                {isOpen&&topTxns.length>0&&(
+                  <div style={{marginTop:6,background:T.redBg,borderRadius:T.r,padding:"6px 10px",display:"flex",flexDirection:"column",gap:3}}>
+                    <div style={{fontSize:10,fontWeight:600,color:RED,marginBottom:2}}>Top transactions</div>
+                    {topTxns.map(t=>(
+                      <div key={t.id} style={{display:"flex",justifyContent:"space-between",fontSize:11,color:T.tx2}}>
+                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"70%"}}>{t.merchant||t.source}</span>
+                        <span style={{fontWeight:500,color:RED,flexShrink:0}}>{nfmt(t.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
