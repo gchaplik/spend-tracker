@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 
 // Bank-specific regex patterns for Canadian banks.
 // Each pattern extracts: date, description, debit amount, credit amount.
@@ -121,8 +121,10 @@ export async function POST(request) {
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const parsed = await pdfParse(buffer, { max: 0 });
-    const text = parsed.text;
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    const text = result.text;
+    const pageCount = result.total;
 
     const bankKey = preferredBank && BANK_PATTERNS[preferredBank] ? preferredBank : detectBank(text);
     if (!bankKey) {
@@ -133,7 +135,7 @@ export async function POST(request) {
     }
 
     const transactions = extractTransactions(text, bankKey);
-    return NextResponse.json({ bank: BANK_PATTERNS[bankKey].name, bankKey, transactions, pageCount: parsed.numpages });
+    return NextResponse.json({ bank: BANK_PATTERNS[bankKey].name, bankKey, transactions, pageCount });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
