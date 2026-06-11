@@ -46,5 +46,8 @@ export const DEFAULT_SETTINGS = {
   darkMode:false, colorBlindMode:"none", largeTransactionAlert:500,
   alertsEnabled:null,
   discreteMode:false,
-  deepseekModel:"deepseek-r1:8b"
+  deepseekModel:"deepseek-r1:8b",
+  viewShortcuts:{},
+  pinnedQueries:[],
+  catRules:[],
 };

@@ -4,18 +4,19 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "dev": "npm rebuild better-sqlite3 --silent && concurrently \"vite\" \"nodemon --watch server --ext js server/index.js\"",
-    "build": "vite build",
-    "start": "node server/index.js",
+    "dev": "npm rebuild better-sqlite3 --silent && next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "electron:dev": "concurrently \"vite\" \"electron .\"",
-    "electron:build": "vite build && electron-builder",
-    "electron:build:mac": "vite build && electron-builder --mac",
-    "electron:build:win": "vite build && electron-builder --win --x64",
-    "electron:build:linux": "vite build && electron-builder --linux --x64",
-    "electron:build:all": "vite build && electron-builder --mac --win --linux",
+    "test:e2e": "playwright test",
+    "electron:dev": "npm rebuild better-sqlite3 --silent && concurrently \"next dev -p 3000\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "next build && node scripts/resolve-next-symlinks.cjs && electron-builder",
+    "electron:build:mac": "next build && node scripts/resolve-next-symlinks.cjs && electron-builder --mac",
+    "electron:build:win": "next build && node scripts/resolve-next-symlinks.cjs && electron-builder --win --x64",
+    "electron:build:linux": "next build && node scripts/resolve-next-symlinks.cjs && electron-builder --linux --x64",
+    "electron:build:all": "next build && node scripts/resolve-next-symlinks.cjs && electron-builder --mac --win --linux",
     "update:local": "bash scripts/local-update.sh",
     "postinstall": "electron-builder install-app-deps && npm rebuild better-sqlite3"
   },
@@ -24,19 +25,28 @@
     "productName": "CashHeap",
     "asar": true,
     "asarUnpack": [
-      "**/better-sqlite3/**"
+      "node_modules/**",
+      "server/**",
+      "instrumentation.js",
+      "package.json",
+      "next.config.mjs"
     ],
     "directories": {
       "output": "release"
     },
     "files": [
-      "dist/**",
       "server/**",
       "electron/**",
       "node_modules/**",
-      "package.json"
+      "package.json",
+      "next.config.mjs",
+      "instrumentation.js"
     ],
     "extraResources": [
+      {
+        "from": ".next",
+        "to": ".next"
+      },
       {
         "from": "spend.db",
         "to": "spend.db"
@@ -71,8 +81,18 @@
     },
     "linux": {
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb",      "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "electron/icons/png",
       "category": "Finance"
@@ -88,12 +108,15 @@
     "dotenv": "^16.4.5",
     "electron-updater": "^6.8.9",
     "express": "^4.19.2",
+    "next": "^16.2.9",
+    "pdf-parse": "^2.4.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
+    "@playwright/test": "^1.60.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

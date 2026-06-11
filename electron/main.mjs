@@ -1,7 +1,8 @@
 import { app, BrowserWindow, shell, ipcMain, systemPreferences } from 'electron'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, readdirSync, unlinkSync } from 'fs'
+import { createServer } from 'http'
 import { spawn } from 'child_process'
 import net from 'net'
 import pkg from 'electron-updater'
@@ -11,7 +12,14 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const isDev = !app.isPackaged
 
-// ── Port helpers ──────────────────────────────────────────────────────────────
+// Enforce single instance — second launch focuses the existing window
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+  process.exit(0)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -24,13 +32,10 @@ function getFreePort() {
   })
 }
 
-function waitForPort(port, retries = 60, delay = 150) {
+function waitForPort(port, retries = 80, delay = 200) {
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      const sock = net.connect(port, '127.0.0.1', () => {
-        sock.destroy()
-        resolve()
-      })
+      const sock = net.connect(port, '127.0.0.1', () => { sock.destroy(); resolve() })
       sock.on('error', () => {
         if (--retries === 0) return reject(new Error(`Server did not start on port ${port}`))
         setTimeout(attempt, delay)
@@ -40,83 +45,110 @@ function waitForPort(port, retries = 60, delay = 150) {
   })
 }
 
-// ── Server lifecycle ──────────────────────────────────────────────────────────
-// In dev:  spawn `node server/index.js` as a child process — restarts on crash.
-// In prod: import server/index.js directly into the Electron process.
+// ── Server ────────────────────────────────────────────────────────────────────
 
-let serverProc = null
-let isQuitting = false
-
-function spawnServer(port, env = {}) {
-  const fullEnv = { ...process.env, SERVER_PORT: String(port), ...env }
-  const cwd = join(__dirname, '..')
-
-  function doSpawn() {
-    console.log(`[main] Starting server on port ${port}…`)
-    serverProc = spawn(process.execPath, ['server/index.js'], { cwd, env: fullEnv, stdio: 'inherit' })
-
-    serverProc.on('exit', (code, signal) => {
-      if (isQuitting) return
-      if (signal === 'SIGTERM' || signal === 'SIGKILL') return
-      console.log(`[main] Server exited (code=${code}), restarting in 1 s…`)
-      setTimeout(doSpawn, 1000)
-    })
-  }
-
-  doSpawn()
-}
+let httpServer = null
+let mainWin = null
 
 function stopServer() {
-  isQuitting = true
-  if (serverProc && !serverProc.killed) {
-    serverProc.kill('SIGTERM')
-    serverProc = null
-  }
+  if (httpServer) { httpServer.close(); httpServer = null }
 }
+
+// In prod, run Next.js programmatically inside the main process.
+// This avoids spawning a child process, which can't read from the asar archive.
+async function startProdServer() {
+  const userDataPath = app.getPath('userData')
+  mkdirSync(userDataPath, { recursive: true })
+
+  const dbPath = join(userDataPath, 'spend.db')
+  if (!existsSync(dbPath)) {
+    const src = join(process.resourcesPath, 'spend.db')
+    if (existsSync(src)) copyFileSync(src, dbPath)
+  }
+
+  process.env.SPEND_DB_PATH = dbPath
+  process.env.SEED_DATA_PATH = join(process.resourcesPath, 'data.json')
+
+  // Rotate backups: keep the 7 most recent copies of spend.db
+  if (existsSync(dbPath)) {
+    const backupDir = join(userDataPath, 'backups')
+    mkdirSync(backupDir, { recursive: true })
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    copyFileSync(dbPath, join(backupDir, `spend-${ts}.db`))
+    const all = readdirSync(backupDir)
+      .filter(f => f.startsWith('spend-') && f.endsWith('.db'))
+      .sort()
+    for (const old of all.slice(0, Math.max(0, all.length - 7)))
+      unlinkSync(join(backupDir, old))
+  }
+
+  // .next/ is shipped as extraResource to process.resourcesPath/.next
+  // next() with dir=resourcesPath finds it at the default relative path
+  const { default: next } = await import('next')
+  const nextApp = next({
+    dev: false,
+    dir: process.resourcesPath,
+  })
+
+  const errorLog = join(userDataPath, 'error.log')
+
+  // Capture server-side errors (Next.js logs real exceptions to stderr, not the response body)
+  const origStderrWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = (chunk, ...args) => {
+    try { appendFileSync(errorLog, `[stderr] ${chunk}`) } catch {}
+    return origStderrWrite(chunk, ...args)
+  }
+  process.on('uncaughtException', err => {
+    try { appendFileSync(errorLog, `[uncaught] ${err.stack || err.message}\n`) } catch {}
+  })
+
+  await nextApp.prepare()
+  const handle = nextApp.getRequestHandler()
+
+  const port = await getFreePort()
+  await new Promise((resolve, reject) => {
+    httpServer = createServer((req, res) => {  // errorLog defined above
+      const chunks = []
+      const origEnd = res.end.bind(res)
+      res.end = (chunk, ...args) => {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        if (res.statusCode >= 500) {
+          const body = Buffer.concat(chunks).toString('utf8').slice(0, 4000)
+          writeFileSync(errorLog, `${req.method} ${req.url} → ${res.statusCode}\n\n${body}`)
+        }
+        return origEnd(chunk, ...args)
+      }
+      handle(req, res)
+    })
+    httpServer.listen(port, '127.0.0.1', resolve)
+    httpServer.on('error', reject)
+  })
+
+  return `http://127.0.0.1:${port}`
+}
+
+// Start the server immediately so it warms up before whenReady fires
+let serverStartError = null
+const serverUrlPromise = isDev ? null : startProdServer().catch(err => {
+  console.error('[main] Failed to start server:', err)
+  serverStartError = err
+  return null
+})
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  let url
+  const userDataPath = app.getPath('userData')
+  mkdirSync(userDataPath, { recursive: true })
 
-  if (isDev) {
-    // Save project root so the packaged app can find it for local updates
-    const userDataPath = app.getPath('userData')
-    mkdirSync(userDataPath, { recursive: true })
-    writeFileSync(join(userDataPath, '.project-root'), join(__dirname, '..'))
-
-    // Dev mode: spawn the Express server as a managed child process
-    const port = 3001
-    spawnServer(port)
-    await waitForPort(port)
-    url = 'http://localhost:5173'   // Vite HMR dev server
-  } else {
-    // Prod mode: set up user-data directory, then import the server directly
-    const userDataPath = app.getPath('userData')
-    mkdirSync(userDataPath, { recursive: true })
-
-    const dbPath = join(userDataPath, 'spend.db')
-    if (!existsSync(dbPath)) {
-      const src = join(process.resourcesPath, 'spend.db')
-      if (existsSync(src)) copyFileSync(src, dbPath)
-    }
-
-    process.env.SPEND_DB_PATH = dbPath
-    process.env.SEED_DATA_PATH = join(process.resourcesPath, 'data.json')
-
-    const port = await getFreePort()
-    process.env.SERVER_PORT = String(port)
-    await import('../server/index.js')
-    await waitForPort(port)
-    url = `http://localhost:${port}`
-  }
-
-  const win = new BrowserWindow({
+  const win = mainWin = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     title: 'CashHeap',
+    show: false,
+    backgroundColor: '#fafaf9',
     webPreferences: {
       preload: join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
@@ -125,21 +157,62 @@ app.whenReady().then(async () => {
     },
   })
 
-  win.loadURL(url)
+  let shown = false
+  const showWin = () => { if (!shown) { shown = true; win.show() } }
+  win.once('ready-to-show', showWin)
+  setTimeout(showWin, 15_000)
 
-  // ── Auto-updater (prod only) ──────────────────────────────────────────────
-  if (!isDev) {
-    autoUpdater.checkForUpdates()
+  win.webContents.on('did-fail-load', (_e, code, desc) => {
+    console.error(`[renderer] did-fail-load: ${code} ${desc}`)
+    showWin()
+  })
+
+  let url
+  if (isDev) {
+    writeFileSync(join(userDataPath, '.project-root'), join(__dirname, '..'))
+    await waitForPort(3000)
+    url = 'http://localhost:3000'
+  } else {
+    const serverUrl = await serverUrlPromise
+    if (serverUrl) {
+      url = serverUrl
+    } else {
+      const msg = serverStartError ? encodeURIComponent(serverStartError.stack || serverStartError.message) : 'Unknown+error'
+      url = `data:text/html,<html><body style="font-family:system-ui;padding:40px;color:%23dc2626;background:%23fafaf9"><h2>CashHeap failed to start</h2><pre style="font-size:12px;white-space:pre-wrap;color:%23333">${msg}</pre></body></html>`
+    }
   }
 
-  autoUpdater.on('update-available',     (info) => win.webContents.send('update-available', info))
-  autoUpdater.on('update-not-available', (info) => win.webContents.send('update-not-available', info))
-  autoUpdater.on('update-downloaded',    (info) => win.webContents.send('update-downloaded', info))
-  autoUpdater.on('error',                (err)  => win.webContents.send('update-error', err?.message || String(err)))
+  win.loadURL(url)
+  win.webContents.openDevTools({ mode: 'detach' })
+})
 
-  ipcMain.on('quit-app', () => { app.quit() })
+app.on('second-instance', () => {
+  if (mainWin) {
+    if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.show()
+    mainWin.focus()
+  }
+})
 
-  // ── Native biometrics (Touch ID on macOS) ─────────────────────────────────
+app.on('before-quit', stopServer)
+app.on('window-all-closed', () => { stopServer(); app.quit() })
+
+// ── IPC ───────────────────────────────────────────────────────────────────────
+
+app.whenReady().then(() => {
+  const w = () => mainWin
+
+  autoUpdater.on('update-available',     i => w()?.webContents.send('update-available', i))
+  autoUpdater.on('update-not-available', i => w()?.webContents.send('update-not-available', i))
+  autoUpdater.on('update-downloaded',    i => w()?.webContents.send('update-downloaded', i))
+  autoUpdater.on('error',                e => w()?.webContents.send('update-error', e?.message || String(e)))
+
+  if (!isDev) { try { autoUpdater.checkForUpdates() } catch {} }
+
+  ipcMain.on('quit-app', () => app.quit())
+  ipcMain.on('check-for-updates', () => { try { autoUpdater.checkForUpdates() } catch (e) { w()?.webContents.send('update-error', e.message) } })
+  ipcMain.on('restart-and-install', () => autoUpdater.quitAndInstall())
+
   ipcMain.handle('biometrics-available', () => {
     if (process.platform !== 'darwin') return false
     try { return systemPreferences.canPromptTouchID() } catch { return false }
@@ -151,60 +224,33 @@ app.whenReady().then(async () => {
     return true
   })
 
-  ipcMain.on('check-for-updates', () => { try { autoUpdater.checkForUpdates() } catch(e) { win.webContents.send('update-error', e.message) } })
-  ipcMain.on('restart-and-install', () => { autoUpdater.quitAndInstall() })
-
-  // ── Local update (build + reinstall from DMG) ─────────────────────────────
   ipcMain.on('local-update', () => {
     let projectRoot = isDev ? join(__dirname, '..') : null
     if (!projectRoot) {
-      // Packaged app — read saved project root written during last dev launch
       try {
         const saved = join(app.getPath('userData'), '.project-root')
         if (existsSync(saved)) projectRoot = readFileSync(saved, 'utf8').trim()
       } catch {}
     }
     if (!projectRoot || !existsSync(join(projectRoot, 'package.json'))) {
-      win.webContents.send('local-update-done', false, 'Project root not found. Open the app once from source (npm run electron:dev) to register the path.')
+      w()?.webContents.send('local-update-done', false, 'Project root not found.')
       return
     }
-
-    win.webContents.send('local-update-progress', 'Building...')
-
+    w()?.webContents.send('local-update-progress', 'Building...')
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-    const dmgName = arch === 'arm64'
-      ? 'CashHeap-1.0.0-arm64.dmg'
-      : 'CashHeap-1.0.0.dmg'
+    const dmgName = arch === 'arm64' ? 'CashHeap-1.0.0-arm64.dmg' : 'CashHeap-1.0.0.dmg'
     const dmgPath = join(projectRoot, 'release', dmgName)
-
-    // Resolve npm — load user's shell profile so PATH includes nvm/homebrew/volta etc.
     const buildScript = `
-      export NVM_DIR="$HOME/.nvm"
-      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+      export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
       export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$PATH"
       cd "${projectRoot}" && npm run electron:build
     `
-
-    // Step 1: build via bash so npm is always found
-    const build = spawn('bash', ['-c', buildScript], {
-      cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe']
-    })
-    build.stdout.on('data', d => {
-      const line = d.toString().trim()
-      if (line) win.webContents.send('local-update-progress', line)
-    })
-    build.stderr.on('data', d => {
-      const line = d.toString().trim()
-      if (line) win.webContents.send('local-update-progress', line)
-    })
-    build.on('exit', (code) => {
-      if (code !== 0) {
-        win.webContents.send('local-update-done', false, 'Build failed — check the log above.')
-        return
-      }
-      win.webContents.send('local-update-progress', 'Installing...')
-
-      // Step 2: mount DMG, copy .app, unmount, relaunch — as detached script so it survives app quit
+    const build = spawn('bash', ['-c', buildScript], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+    build.stdout.on('data', d => { const l = d.toString().trim(); if (l) w()?.webContents.send('local-update-progress', l) })
+    build.stderr.on('data', d => { const l = d.toString().trim(); if (l) w()?.webContents.send('local-update-progress', l) })
+    build.on('exit', code => {
+      if (code !== 0) { w()?.webContents.send('local-update-done', false, 'Build failed.'); return }
+      w()?.webContents.send('local-update-progress', 'Installing...')
       const installScript = `
         hdiutil info | grep -o '/Volumes/CashHeap[^\\t]*' | while read v; do hdiutil detach "$v" 2>/dev/null || true; done
         MOUNT=$(hdiutil attach "${dmgPath}" -nobrowse | grep '/Volumes/' | awk -F'\\t' '{print $NF}')
@@ -212,38 +258,18 @@ app.whenReady().then(async () => {
         cp -R "$MOUNT/CashHeap.app" /Applications/
         xattr -cr "/Applications/CashHeap.app"
         hdiutil detach "$MOUNT" -quiet
-        sleep 1
-        open "/Applications/CashHeap.app"
+        sleep 1; open "/Applications/CashHeap.app"
       `
-      const installer = spawn('bash', ['-c', installScript], {
-        detached: true, stdio: 'ignore'
-      })
+      const installer = spawn('bash', ['-c', installScript], { detached: true, stdio: 'ignore' })
       installer.unref()
-
-      // Quit so the installer can replace the .app
       setTimeout(() => app.quit(), 500)
     })
   })
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
-
-  win.webContents.on('will-navigate', (e, navUrl) => {
+  mainWin?.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
+  mainWin?.webContents.on('will-navigate', (e, navUrl) => {
     if (!navUrl.startsWith('http://127.0.0.1') && !navUrl.startsWith('http://localhost')) {
-      e.preventDefault()
-      shell.openExternal(navUrl)
+      e.preventDefault(); shell.openExternal(navUrl)
     }
   })
-})
-
-// Kill the server when the app is about to quit
-app.on('before-quit', () => {
-  stopServer()
-})
-
-app.on('window-all-closed', () => {
-  stopServer()
-  app.quit()
 })

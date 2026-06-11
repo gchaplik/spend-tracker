@@ -20,10 +20,10 @@ export const getPayments = (month) => {
 };
 
 export const addPayment = (payment) => {
-  db.prepare(`INSERT OR REPLACE INTO bill_payments (id,billId,month,amount,paidDate)
-    VALUES (@id,@billId,@month,@amount,@paidDate)`).run({
+  db.prepare(`INSERT OR REPLACE INTO bill_payments (id,billId,month,amount,paidDate,txnId)
+    VALUES (@id,@billId,@month,@amount,@paidDate,@txnId)`).run({
     id: payment.id, billId: payment.billId, month: payment.month,
-    amount: payment.amount, paidDate: payment.paidDate||null,
+    amount: payment.amount, paidDate: payment.paidDate||null, txnId: payment.txnId||null,
   });
 };
 
@@ -45,10 +45,10 @@ export const replaceAllBills = (bills) => {
 export const replaceAllPayments = (payments) => {
   db.transaction(() => {
     db.prepare("DELETE FROM bill_payments").run();
-    const stmt = db.prepare(`INSERT INTO bill_payments (id,billId,month,amount,paidDate)
-      VALUES (@id,@billId,@month,@amount,@paidDate)`);
+    const stmt = db.prepare(`INSERT INTO bill_payments (id,billId,month,amount,paidDate,txnId)
+      VALUES (@id,@billId,@month,@amount,@paidDate,@txnId)`);
     for (const p of payments) {
-      stmt.run({ id:p.id, billId:p.billId, month:p.month, amount:p.amount, paidDate:p.paidDate||null });
+      stmt.run({ id:p.id, billId:p.billId, month:p.month, amount:p.amount, paidDate:p.paidDate||null, txnId:p.txnId||null });
     }
   })();
 };
