@@ -250,7 +250,8 @@ The single-file architecture and missing test coverage need to be addressed befo
 | Item | Effort | Notes |
 |---|---|---|
 | Split `SpendTracker.jsx` into feature modules | L | Target: no file > 500 lines; extract views + hooks |
-| Lazy-load heavy views with React.lazy | M | Cuts initial bundle from ~2MB to ~400KB |
+| **Migrate from Vite to Next.js** | L | File-based routing, SSR, API routes — enables hosted web version alongside Electron; Express server replaced by Next.js route handlers |
+| Lazy-load heavy views with React.lazy | M | Cuts initial bundle from ~2MB to ~400KB; prerequisite for Next.js migration |
 | Shared design token file (`src/theme.js`) | S | Stop re-deriving `T{}` tokens inside every render |
 | Automated SQLite backup on launch | S | Keep last 7 copies in app-data directory |
 | Data export / import v2 | M | JSON or CSV zip; merge strategy skips duplicate IDs |
